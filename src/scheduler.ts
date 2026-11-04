@@ -10,6 +10,7 @@
  * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
 import { randomUUID } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -419,7 +420,10 @@ export class Scheduler {
     const checkName = (): void => {
       if (!/^[a-z][a-z0-9-]{0,39}$/u.test(args.name)) throw new Error('name must be lower-kebab-case, start with a letter, at most 40 characters')
       if (args.name === 'lead' || /^fork-\d+$/u.test(args.name)) throw new Error(`"${args.name}" is reserved`)
-      if (ledger.find(args.name) !== undefined) throw new Error(`"${args.name}" is already taken (names are never reused)`)
+      // A worker that failed to start never ran: its name is free again, and creating it anew
+      // replaces that member in the roster (see applyRoster). Archived names are never reused.
+      const holder = ledger.find(args.name)
+      if (holder !== undefined && !(holder.kind === 'worker' && holder.state === 'failed')) throw new Error(`"${args.name}" is already taken (names are never reused)`)
     }
     checkName()
     const source = args.from === undefined ? undefined : ledger.find(args.from)
@@ -440,6 +444,9 @@ export class Scheduler {
     const base = main.session.header.cwd ?? process.cwd()
     const cwd = args.cwd === undefined ? undefined : isAbsolute(args.cwd) ? args.cwd : resolve(base, args.cwd)
     if (cwd !== undefined) {
+      // Checked before anything is recorded, so a bad directory costs no roster entry.
+      if (!existsSync(cwd)) throw new Error(`working directory does not exist: ${cwd}; create it (or the worktree) first`)
+      if (!statSync(cwd).isDirectory()) throw new Error(`working directory is not a directory: ${cwd}`)
       const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
       if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
     }
@@ -554,7 +561,9 @@ export class Scheduler {
     // reach an agent that is no longer listening. Their requests fail below.
     const dropped = this.queue.filter(p => p.memberId === target.id)
     for (const pending of dropped) this.queue.splice(this.queue.indexOf(pending), 1)
-    const neverStarted = target.state === 'queued'
+    // Queued or failed to start: the runtime holds no session for it, so there is nothing to
+    // drain or settle (draining an unknown session throws "session ... not found").
+    const neverStarted = target.state === 'queued' || target.state === 'failed'
     const forLead: string[] = []
     if (!neverStarted) {
       await this.deps.subagents.drainChildren(main, [SessionId(target.id)])

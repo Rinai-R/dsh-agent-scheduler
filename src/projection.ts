@@ -122,9 +122,14 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const agent = R.agent(event)
   if (agent !== undefined) {
+    // A worker created under the name of one that failed to start replaces it: that one never
+    // ran, and its requests already failed.
+    const members = agent.action === 'created'
+      ? state.members.filter(m => !(m.kind === 'worker' && m.state === 'failed' && m.name === agent.name && m.id !== agent.id))
+      : state.members
     return {
       ...state,
-      members: upsert(state.members, agent.id, existing => compact({
+      members: upsert(members, agent.id, existing => compact({
         id: agent.id,
         name: agent.name,
         kind: 'worker' as const,
