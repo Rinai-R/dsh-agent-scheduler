@@ -122,7 +122,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'report',
-      description: 'Give the conclusion of this round explicitly. It replaces your final message as what goes to the lead.',
+      description: 'Give the conclusion of this round explicitly; it goes to the lead in place of your final message. In a round answering requests it is their answer; in a round with no request (the user spoke to you directly) only a report reaches the lead, so call it when the user asks you to tell the lead.',
       parameters: { summary: { type: 'string', required: true } },
       output: { schema: OK, render: json },
       // The call itself is the record: the scheduler reads the summary from this round's log.
@@ -145,7 +145,7 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   const lines = isWorker
     ? [
         '# Agent Scheduler: worker',
-        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically. You may delegate with agent_send; that answer also goes to the lead. Do not use send_message.',
+        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead. Do not use send_message.',
       ]
     : [
         '# Agent Scheduler',

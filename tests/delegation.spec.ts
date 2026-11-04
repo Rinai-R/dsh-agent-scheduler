@@ -112,6 +112,50 @@ describe('requests', () => {
     expect(adapter.requests.filter(r => r.sessionId === 'lead')).toHaveLength(0)
   })
 
+  it('a report in a round the user started directly reaches the lead once, and wakes no fork', async () => {
+    // "hello ops" is plain chat; "tell the lead" makes the worker call report once.
+    const { ctx, lead, adapter } = await setup(o => {
+      if (!isWorker('ops')(o)) return textResponse('LEAD')
+      if (last(o).includes('tell the lead') && !called(o, 'report')) return toolCallResponse('rp1', 'report', { summary: 'OPS REPORT: deploy is green' })
+      return textResponse(last(o).includes('hello ops') ? 'OPS CHAT' : 'ops closing words')
+    })
+    const scheduler = install(ctx)
+    await scheduler.createWorker(lead, { name: 'ops', role: 'deploys' })
+    const id = SessionId(scheduler.ledgerOf(lead).find('ops')!.id)
+    const ends = async () => (await stored(ctx, id)).events.filter(e => e.type === 'turn/end').length
+    await vi.waitFor(async () => { expect(await ends()).toBe(1) })
+    await ctx.subagents.sendMessage(lead, id, [{ type: 'text', text: 'hello ops' }], { signal: new AbortController().signal })
+    await vi.waitFor(async () => { expect(await ends()).toBe(2) })
+    await new Promise(r => setTimeout(r, 300))
+    await lead.whenIdle()
+    expect(leadSaw(lead, 'OPS CHAT')).toBe(0)
+    await ctx.subagents.sendMessage(lead, id, [{ type: 'text', text: 'please tell the lead' }], { signal: new AbortController().signal })
+    await until(lead, '[report from ops, not a request]')
+    await new Promise(r => setTimeout(r, 300))
+    await lead.whenIdle()
+    expect(leadSaw(lead, 'OPS REPORT: deploy is green')).toBe(1)
+    expect(leadSaw(lead, 'ops closing words')).toBe(0)
+    expect(leadSaw(lead, 'OPS CHAT')).toBe(0)
+    // No request was recorded for it, and no fork exists to wake.
+    expect(records(lead.session.snapshotEvents(), REQUEST_RECORD)).toEqual([])
+    expect(forksOf(lead)).toEqual([])
+    expect(adapter.requests.filter(r => r.sessionId !== 'lead' && r.sessionId !== id)).toHaveLength(0)
+  })
+
+  it('a report in a round that answers a request is that answer only, not also a separate report', async () => {
+    const { ctx, lead } = await setup(o => {
+      if (isWorker('ops')(o) && body(o).includes('[request r-1') && !called(o, 'report')) return toolCallResponse('rp1', 'report', { summary: 'OPS ANSWER' })
+      return textResponse(isWorker('ops')(o) ? 'ops words' : 'LEAD')
+    })
+    const scheduler = install(ctx)
+    await scheduler.createWorker(lead, { name: 'ops', role: 'deploys', task: 'status?' })
+    await until(lead, '[reply to r-1 from ops')
+    await new Promise(r => setTimeout(r, 300))
+    await lead.whenIdle()
+    expect(leadSaw(lead, 'OPS ANSWER')).toBe(1)
+    expect(leadSaw(lead, '[report from ops')).toBe(0)
+  })
+
   it('report replaces the final message as the answer', async () => {
     const script = delegatingScript()
     const { ctx, lead } = await setup(async o => {

@@ -21,6 +21,8 @@ export interface Round {
   readonly claimed: ReadonlySet<string>
   /** What it answers with. */
   readonly answer: string
+  /** The summary it gave `report`, when it called it. */
+  readonly report?: string | undefined
   /** Why it ended when not normally (`aborted`, `error`, …); then it answers nothing. */
   readonly stopped?: string | undefined
 }
@@ -45,10 +47,15 @@ function reportOf(events: readonly SessionEvent[]): string | undefined {
 function roundOf(events: readonly SessionEvent[], end: SessionEvent): Round {
   const claimed = new Set<string>()
   for (const event of events) if (event.type === 'user/message') claimed.add(event.data.id)
-  const closing = reportOf(events) ?? textOf(finalAssistantOutput(events) ?? [])
+  const report = reportOf(events)
+  const closing = report ?? textOf(finalAssistantOutput(events) ?? [])
   const reason = (end.data as { reason?: { kind?: unknown } }).reason?.kind
   const answer = closing.trim() === '' ? '(no closing message)' : closing
-  return { endSeq: end.seq, claimed, answer, ...(reason === undefined || reason === 'completed' ? {} : { stopped: String(reason) }) }
+  return {
+    endSeq: end.seq, claimed, answer,
+    ...(report === undefined ? {} : { report }),
+    ...(reason === undefined || reason === 'completed' ? {} : { stopped: String(reason) }),
+  }
 }
 
 /**

@@ -658,7 +658,10 @@ export class Scheduler {
       if (forLead.length === 0) continue
       // The runtime's row label says the child "will do no further work"; ours names what arrived.
       const concluded = forLead.some(text => text.startsWith('The user said: '))
-      const summary = boundContextSummary(concluded ? `${member.name} concluded` : `${member.name} answered ${forLead.length === 1 ? 'a request' : `${forLead.length} requests`}`)
+      const replies = forLead.filter(text => !text.startsWith('[report from ')).length
+      const summary = boundContextSummary(concluded ? `${member.name} concluded`
+        : replies === 0 ? `${member.name} reported`
+        : `${member.name} answered ${replies === 1 ? 'a request' : `${replies} requests`}`)
       kept.push({ ...message, source: { ...settled, summary }, content: [{ type: 'text', text: forLead.join('\n\n') }] })
     }
     return changed ? kept : undefined
@@ -688,8 +691,10 @@ export class Scheduler {
     const rounds = completedRounds(log.events, Math.max(log.inherited, (member.settledThrough ?? -1) + 1))
     if (rounds.length === 0) return forLead
     for (const round of rounds) {
+      let answered = 0
       for (const request of ledger.openTo(memberId)) {
         if (request.messageId === undefined || !round.claimed.has(request.messageId)) continue
+        answered += 1
         if (round.stopped !== undefined) {
           // Its message is consumed, so no later round will take it again: it fails now.
           this.fail(main, request, member, `${member.name}'s round ended (${round.stopped}) before answering`, forLead)
@@ -697,6 +702,12 @@ export class Scheduler {
         }
         this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: ledger.mainId }))
         forLead.push(`${this.headerOf(ledger, request, `reply to ${request.id} from ${member.name}`)}\n${round.answer}`)
+      }
+      // A worker round that answered no request (the user spoke to it directly) reaches nobody,
+      // unless it called report: that is an explicit message for the lead. The settled mark
+      // below covers this round, so the report is delivered once.
+      if (member.kind === 'worker' && answered === 0 && round.stopped === undefined && round.report !== undefined) {
+        forLead.push(`[report from ${member.name}, not a request]\n${round.report}`)
       }
     }
     this.record(main, s => appendSettled(s, { agent: memberId, through: rounds.at(-1)!.endSeq }))
