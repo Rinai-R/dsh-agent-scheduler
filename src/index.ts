@@ -1,7 +1,7 @@
 /**
  * Host half of dsh-agent-scheduler. The Loader row makes the bundle's browser half available in
  * every session and registers the `fork-from` provider; all behaviour lives in `./rule`, mounted
- * by the `scheduler` preset.
+ * in the standard preset and switched per Session with `/schedule on|off`.
  * @module dsh-agent-scheduler
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -21,8 +21,8 @@ export function apply(ctx: Context): void {
   installForkFrom(ctx)
   ctx.effect(() => ctx.sessionProjections.register({
     key: SCHEDULER_PROJECTION,
-    // 2: the fold carries settlement watermarks and archived forks; older cached state is dropped.
-    stateVersion: 2,
+    // 3: the fold carries the scheduling switch; older cached state is dropped and refolded.
+    stateVersion: 3,
     stateSchema: rosterSchema,
     init: initRoster,
     apply: applyRoster,

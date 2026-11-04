@@ -12,6 +12,13 @@ export const AGENT_RECORD = 'plugin:dsh-agent-scheduler/agent'
 export const REQUEST_RECORD = 'plugin:dsh-agent-scheduler/request'
 export const ROLE_RECORD = 'plugin:dsh-agent-scheduler/role'
 export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
+export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
+
+/** Whether this Session hands each user message to a fork, switched by `/schedule on|off`. */
+export interface ModeRecord {
+  readonly version: 1
+  readonly on: boolean
+}
 
 /** The user's words as handed to one fork. */
 export interface InputRecord {
@@ -102,6 +109,7 @@ declare module '@deepseek-ai/dsh-session/types' {
     'plugin:dsh-agent-scheduler/request': RequestRecord
     'plugin:dsh-agent-scheduler/role': RoleRecord
     'plugin:dsh-agent-scheduler/settled': SettledRecord
+    'plugin:dsh-agent-scheduler/mode': ModeRecord
   }
 }
 
@@ -119,6 +127,8 @@ export const appendRequest = (session: Session, record: Fields<RequestRecord>): 
   appendPluginRecord(session, REQUEST_RECORD, { version: 1, ...record })
 export const appendRole = (session: Session, record: Fields<RoleRecord>): SessionSeq =>
   appendPluginRecord(session, ROLE_RECORD, { version: 1, ...record })
+export const appendMode = (session: Session, on: boolean): SessionSeq =>
+  appendPluginRecord(session, MODE_RECORD, { version: 1, on })
 export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
   appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
@@ -160,4 +170,5 @@ export const recordReaders = {
   request: (e: SessionEvent) => dataOf<RequestRecord>(e, REQUEST_RECORD),
   role: (e: SessionEvent) => dataOf<RoleRecord>(e, ROLE_RECORD),
   settled: (e: SessionEvent) => dataOf<SettledRecord>(e, SETTLED_RECORD),
+  mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
 }

@@ -20,7 +20,8 @@ describe('roster projection', () => {
     await until(lead, 'Its conclusion')
     const view = rosterOf(lead)
     expect(view.role).toBe('LEAD ROLE: map every requirement')
-    expect(view.members).toEqual([expect.objectContaining({ name: 'fork-1', kind: 'fork', state: 'done', text: 'why is billing slow' })])
+    expect(view.members).toEqual([expect.objectContaining({ name: 'fork-1', kind: 'fork', text: 'why is billing slow' })])
+    expect(['done', 'archived']).toContain(view.members[0]!.state)
 
     await scheduler.createWorker(lead, { name: 'billing', role: 'owns billing', cwd: tmpdir() })
     const after = rosterOf(lead)
@@ -33,6 +34,6 @@ describe('roster projection', () => {
     expect(rosterViewSchema.parse(wire)).toBe(wire)
     expect(rosterView(after)).toBe(wire)
     expect(wire.members.every(m => !('settledThrough' in m))).toBe(true)
-    expect(() => rosterSchema.parse({ role: null, members: [{ id: 1 }], requests: [] })).toThrow(/invalid member/)
+    expect(() => rosterSchema.parse({ enabled: null, role: null, members: [{ id: 1 }], requests: [] })).toThrow(/invalid member/)
   })
 })

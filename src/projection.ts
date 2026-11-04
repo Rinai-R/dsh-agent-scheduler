@@ -48,6 +48,8 @@ export interface RosterRequest {
 
 /** Whole fold state of one main Session; plain JSON. */
 export interface Roster {
+  /** Scheduling switch as last recorded; null before any `/schedule`. */
+  readonly enabled: boolean | null
   readonly role: string | null
   readonly members: readonly RosterMember[]
   readonly requests: readonly RosterRequest[]
@@ -55,12 +57,22 @@ export interface Roster {
 
 /** What the client receives: members and the requests still open. */
 export interface RosterView {
+  /** Whether user messages go to forks now (see {@link schedulingOn}). */
+  readonly enabled: boolean
   readonly role: string | null
   readonly members: readonly Omit<RosterMember, 'settledThrough'>[]
   readonly openRequests: readonly Pick<RosterRequest, 'id' | 'from' | 'to' | 'text'>[]
 }
 
-export const EMPTY_ROSTER: Roster = { role: null, members: [], requests: [] }
+export const EMPTY_ROSTER: Roster = { enabled: null, role: null, members: [], requests: [] }
+
+/**
+ * Whether a Session schedules: its last switch, or, for a log from before the switch existed,
+ * whether it ever handed a message to a fork (those Sessions were created in scheduling mode).
+ * @param state - the fold.
+ * @returns the effective switch.
+ */
+export const schedulingOn = (state: Roster): boolean => state.enabled ?? state.members.some(m => m.kind === 'fork')
 
 /** @returns the state every empty or unrelated log starts from. */
 export const initRoster = (_header: SessionHeader, _inherited: SessionLogOffset): Roster => EMPTY_ROSTER
@@ -149,6 +161,8 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     if (!state.members.some(m => m.id === role.agent)) return state
     return { ...state, members: upsert(state.members, role.agent, m => ({ ...m!, role: role.text, text: role.text })) }
   }
+  const mode = R.mode(event)
+  if (mode !== undefined) return mode.on === state.enabled ? state : { ...state, enabled: mode.on }
   const settled = R.settled(event)
   if (settled !== undefined) {
     if (!state.members.some(m => m.id === settled.agent)) return state
@@ -168,6 +182,7 @@ export function rosterView(state: Roster): RosterView {
   let view = views.get(state)
   if (view === undefined) {
     view = {
+      enabled: schedulingOn(state),
       role: state.role,
       members: state.members.map(({ settledThrough: _, ...member }) => member),
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
@@ -200,6 +215,7 @@ function checkMember(m: unknown, view: boolean): void {
 export const rosterSchema = {
   parse(value: unknown): Roster {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.requests)) fail('state')
+    if (value.enabled !== null && typeof value.enabled !== 'boolean') fail('state enabled')
     for (const m of value.members) checkMember(m, false)
     for (const r of value.requests) {
       if (!isRecord(r) || !isString(r.id) || !isString(r.from) || !isString(r.to) || !isString(r.text)) fail('request')
@@ -213,6 +229,7 @@ export const rosterSchema = {
 export const rosterViewSchema = {
   parse(value: unknown): RosterView {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.openRequests)) fail('view')
+    if (typeof value.enabled !== 'boolean') fail('view enabled')
     for (const m of value.members) checkMember(m, true)
     return value as unknown as RosterView
   },

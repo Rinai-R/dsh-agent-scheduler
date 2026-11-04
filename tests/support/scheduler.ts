@@ -15,6 +15,8 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
     agents: ctx.agents,
     readLog: async id => stored(ctx, id),
     retryMs: 50,
+    // Existing scenarios are scheduling sessions; tests of the switch pass `defaultOn: false`.
+    defaultOn: true,
     ...deps,
   })
   ctx.on('agent/inbox/inserted', ({ agent, message }) => { scheduler.onInserted(agent, message) })

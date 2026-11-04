@@ -1,4 +1,4 @@
-/** Model tools. Every agent of the preset (lead, forks, workers) gets the same set. */
+/** Model tools. Every agent of the preset gets the same set; only scheduling agents may use it. */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { FORK_NOTICE, LEAD_NOTICE, type Scheduler } from './scheduler.js'
@@ -8,7 +8,7 @@ type Live = { get(id: never): Agent | undefined }
 
 const OK = { type: 'object', additionalProperties: true, properties: {} } as const
 /** The calling agent; tools only run inside an agent. */
-function caller(exec: { agent?: Agent | undefined }): Agent {
+function callerOf(exec: { agent?: Agent | undefined }): Agent {
   if (exec.agent === undefined) throw new Error('agent tools need a calling agent')
   return exec.agent
 }
@@ -34,6 +34,13 @@ export function parseModel(value: string): ForkModelSelection {
  */
 export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefinition[] {
   const status = (id: string): string => (agents.get(id as never)?.status) ?? 'idle'
+  // Registered in every session of the preset so the tool list never changes with the switch;
+  // a session that does not schedule gets a refusal instead.
+  const caller = (exec: { agent?: Agent | undefined }): Agent => {
+    const agent = callerOf(exec)
+    scheduler.assertTakesPart(agent)
+    return agent
+  }
   return [
     defineTool({
       name: 'agent_create',
@@ -119,7 +126,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       parameters: { summary: { type: 'string', required: true } },
       output: { schema: OK, render: json },
       // The call itself is the record: the scheduler reads the summary from this round's log.
-      execute: async () => ({ reported: true }),
+      execute: async (_args, exec) => { caller(exec); return { reported: true } },
     }),
   ]
 }
@@ -132,6 +139,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
  * @returns section text.
  */
 export function sectionFor(scheduler: Scheduler, agent: Agent): string {
+  if (!scheduler.takesPart(agent)) return ''
   const role = scheduler.roleFor(agent)
   const isWorker = scheduler.ledgerOf(agent).members.get(agent.id)?.kind === 'worker'
   const lines = isWorker

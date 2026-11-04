@@ -1,6 +1,6 @@
 /**
- * Preset-scoped half of the plugin. Mounted inside the `scheduler` preset, so its listeners and
- * command only reach agents bound to that preset; ordinary chat sessions never see it.
+ * Preset-scoped half of the plugin. Mounted in the standard preset; each main Session switches it
+ * with `/schedule on|off`, and a Session that is off behaves as an ordinary chat.
  * @module dsh-agent-scheduler/rule
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,6 +25,8 @@ export interface Config {
   fork?: ForkModelSelection | undefined
   worker?: ForkModelSelection | undefined
   workerPreset?: string | undefined
+  /** Sessions with no recorded switch schedule; only for the retired `scheduler` preset. */
+  defaultOn?: boolean | undefined
 }
 
 const modelConfig = z.union([
@@ -40,6 +42,7 @@ export const Config: z<Config> = z.object({
   fork: modelConfig.description('Model for forks. Empty uses the lead\'s model and reuses its prompt cache.'),
   worker: modelConfig.description('Default model for workers. Empty uses the runtime default.'),
   workerPreset: z.string().description('Preset for new workers. Empty inherits this session\'s preset.'),
+  defaultOn: z.boolean().description('Schedule in sessions that never used /schedule. Only the retired scheduler preset sets it.'),
 }) as unknown as z<Config>
 
 /**
@@ -75,6 +78,43 @@ export function runForkCommand(invocation: CommandInvocation): CommandResult {
 }
 
 /**
+ * Execute `/schedule [on|off]`; no argument turns it on.
+ * @param scheduler - the scheduler of this preset.
+ * @param invocation - the parsed command.
+ * @returns the command's outcome.
+ */
+export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'>, invocation: CommandInvocation): CommandResult {
+  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/schedule only applies in the main session.' }
+  const arg = invocation.rawInput.trim().toLowerCase()
+  if (arg !== '' && arg !== 'on' && arg !== 'off') return { kind: 'error', text: 'Usage: /schedule [on | off]' }
+  const on = arg !== 'off'
+  scheduler.setMode(invocation.agent, on)
+  return { kind: 'success', text: on ? 'Scheduling is on: each later message goes to a fork.' : 'Scheduling is off. Existing forks and workers keep running.' }
+}
+
+/**
+ * Execute `/agents archive <name>` or `/agents archive done`.
+ * @param scheduler - the scheduler of this preset.
+ * @param invocation - the parsed command.
+ * @returns the command's outcome.
+ */
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded'>, invocation: CommandInvocation): Promise<CommandResult> {
+  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/agents only applies in the main session.' }
+  const [verb, target, ...rest] = invocation.rawInput.trim().split(/\s+/u)
+  if (verb !== 'archive' || target === undefined || rest.length > 0) return { kind: 'error', text: 'Usage: /agents archive <name> | /agents archive done' }
+  try {
+    if (target === 'done') {
+      const names = await scheduler.archiveConcluded(invocation.agent)
+      return { kind: 'success', text: names.length === 0 ? 'No concluded fork to archive.' : `Archived ${names.join(', ')}.` }
+    }
+    await scheduler.archive(invocation.agent, target)
+    return { kind: 'success', text: `Archived ${target}.` }
+  } catch (error) {
+    return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
  * Install the input rule.
  * @param ctx - preset-scoped context.
  * @param config - plugin configuration.
@@ -90,6 +130,7 @@ export function apply(ctx: Context, config: Config): void {
     configuredModel: config.fork,
     configuredWorkerModel: config.worker,
     workerPreset: config.workerPreset,
+    defaultOn: config.defaultOn,
     log: (message, error) => { ctx.logger('agent-scheduler').warn(message, error) },
   })
   ctx.effect(() => () => { scheduler.dispose() }, 'agent-scheduler: queue')
@@ -119,6 +160,20 @@ export function apply(ctx: Context, config: Config): void {
     order: 900,
     text: (context) => context.agent === undefined ? '' : sectionFor(scheduler, context.agent),
   }), 'agent-scheduler: section')
+  ctx.commands.register({
+    definitionId: CommandDefinitionId('dsh-agent-scheduler/schedule'),
+    name: 'schedule',
+    description: 'Hand each later message to a fork of this session (on), or stop (off)',
+    input: { hint: '[on | off]' },
+    handler: (invocation) => runScheduleCommand(scheduler, invocation),
+  })
+  ctx.commands.register({
+    definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
+    name: 'agents',
+    description: 'Archive a fork or worker of this session, or every fork that has concluded',
+    input: { hint: 'archive <name> | archive done' },
+    handler: (invocation) => runAgentsCommand(scheduler, invocation),
+  })
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/fork'),
     name: 'fork',

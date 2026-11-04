@@ -30,7 +30,9 @@ describe('input rule', () => {
     const log = lead.session.snapshotEvents()
     expect(log.filter(e => e.type === 'user/message' && JSON.parse(text(e)).source?.kind === 'user').map(text).join()).not.toContain('input one')
     expect(records(log, INPUT_RECORD).map(r => [r.text, r.name])).toEqual([['input one', 'fork-1'], ['input two', 'fork-2']])
-    expect(records(log, FORK_STATE_RECORD).map(r => r.state)).toEqual(['done', 'done'])
+    expect(records(log, FORK_STATE_RECORD).filter(r => r.state === 'done')).toHaveLength(2)
+    // A fork that concluded archives itself: it routed its one message.
+    await vi.waitFor(() => { expect(records(lead.session.snapshotEvents(), FORK_STATE_RECORD).filter(r => r.state === 'archived')).toHaveLength(2) })
     const forkReq = adapter.requests.find(r => r.sessionId !== 'lead')!
     // The fork's instructions live in the system prompt, not in the user's bubble of the fork chat.
     expect(JSON.stringify(forkReq.messages[0])).toContain(JSON.stringify(FORK_NOTICE).slice(1, -1))
@@ -84,7 +86,7 @@ describe('input rule', () => {
 
   it('a message that missed insertion is handed off in pre-step and costs no model call', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
-    const scheduler = new Scheduler({ subagents: ctx.subagents, agents: ctx.agents, readLog: async () => ({ events: [], inherited: 0 }) })
+    const scheduler = new Scheduler({ subagents: ctx.subagents, agents: ctx.agents, readLog: async () => ({ events: [], inherited: 0 }), defaultOn: true })
     ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
     lead.followup(user('late'))
     await vi.waitFor(() => { expect(forksOf(lead)).toHaveLength(1) }, { timeout: 10_000 })
@@ -123,7 +125,7 @@ describe('lead wakes', () => {
 
   it('rejects a context-only first step whichever side of the listener adds the context', async () => {
     const { lead } = await setup(() => textResponse('X'))
-    const scheduler = new Scheduler({ subagents: {} as never, agents: { get: () => undefined }, readLog: async () => ({ events: [], inherited: 0 }) })
+    const scheduler = new Scheduler({ subagents: {} as never, agents: { get: () => undefined }, readLog: async () => ({ events: [], inherited: 0 }), defaultOn: true })
     const context = createUserMessage({ content: [{ type: 'text', text: 'ctx' }], source: { kind: 'runtime-context', form: 'snapshot', sections: [] } as never })
     let reached = 0
     const pass = async () => { reached += 1; return { kind: 'enter' as const, messages: [context] as never[] } }

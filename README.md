@@ -26,16 +26,24 @@ the lead is never blocked by an input.
 - **Archiving.** Archiving an agent that still owes answers fails those requests and tells the
   lead, so nobody waits forever.
 - **Right sidebar.** An *Agents* page lists forks and workers with live state, opens any of them as
-  an embedded conversation (split view), and a chip above the composer shows how many are running
-  and how many are waiting for you.
+  an embedded conversation (split view) beside the roster, which keeps a column of its own.
+- **Switch.** 「调度」 in the composer's mode row (next to access mode and Plan) turns scheduling on
+  or off at any time, also `/schedule on|off`. While on it is a blue chip with live counts: click
+  it for the Agents page, click its glyph (× on hover) to turn it off.
 - **Queue.** When the runtime refuses a new child for its residency limit, the start (or delivery)
   waits in order and is retried when a slot frees; the input card shows 排队中 instead of failing.
   Other failures are reported to the lead, not retried.
 
 ## Enable it
 
-Create a session and pick **调度模式** (scheduler) in the preset menu. Ordinary chat sessions are
-untouched: the plugin's server listeners and tools live inside that preset only.
+The plugin overrides the shipped `standard` preset with its own rows unchanged plus the scheduler
+rule, so every new session can schedule. Each session starts off and behaves as an ordinary chat
+until you turn 「调度」 on; turning it off returns later messages to the lead, and forks and
+workers already there keep running and still answer to it. The scheduler tools are listed in every
+session (a stable tool list keeps the prompt cache) and refuse while the switch is off.
+
+The old **调度（旧会话）** preset stays only so sessions created with it still open; those sessions
+start with the switch on.
 
 ## Tools
 
@@ -67,7 +75,11 @@ untouched: the plugin's server listeners and tools live inside that preset only.
 
 ## Known limitations
 
-- A session's preset is fixed after its first turn; scheduling cannot be switched on mid-session.
+- Overriding `standard` copies its rows from the dsh version the patch was generated for
+  (`scripts/gen-preset.mjs`); regenerate after a dsh upgrade, or the preset keeps the old rows.
+  Another bundle that also overrides `standard` conflicts with this one.
+- Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
+  lead request misses the prompt cache once.
 - Forks inherit only the lead's completed turns at fork time, not the round in progress.
 - The lead does not see your raw words; it sees them quoted in each conclusion.
 - A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an agent owned by another live agent. A decision it needs travels back in its conclusion and surfaces through the lead.

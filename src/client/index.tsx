@@ -1,11 +1,11 @@
 /**
  * Browser half: renders each handed-off user input where the lead's history no longer holds it,
- * the right-sidebar Agents page, and the Agents chip above the composer. The roster reads the
+ * the right-sidebar Agents page, and the scheduling switch in the composer's mode row. The roster reads the
  * host's `agentScheduler` session projection and the root `useSessionStatus` hook (the only
  * source of "waiting for you"); opening a fork or worker reuses the native subagent-chat
  * resource, so the embedded conversation, its composer and its stop action are the product's own.
  */
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
@@ -20,7 +20,7 @@ const AGENTS_ID = 'dsh-agent-scheduler/agents'
 const AGENTS_KIND = 'agent-scheduler-agents'
 
 export const name = 'dsh-agent-scheduler'
-export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace']
+export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace', 'remote', 'remote.commands']
 
 interface Event { type: string; seq: number; time: number; data: Record<string, unknown> }
 type CardState = 'queued' | 'running' | 'done' | 'failed' | 'archived'
@@ -32,7 +32,7 @@ interface Ctx { key: string; id: string; state?: State; start?: { location: unkn
 
 /** One roster row as the host projection emits it. */
 interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string }
-interface Roster { readonly role: string | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
+interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
 /** One Session's live status as the client root hook reports it. */
 interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
 type Statuses = Map<string, StatusRow>
@@ -61,6 +61,8 @@ export const inputDefinition = {
     if (match.event.type !== FORK_STATE) return context.state
     const fork = CARD_STATE[String(match.event.data.state)]
     if (fork === undefined) return context.state
+    // A fork archives itself after concluding; its card keeps saying it handed back.
+    if (fork === 'archived' && context.state.fork === 'done') return context.state
     const { detail: _, ...rest } = context.state
     const detail = match.event.data.detail
     return { ...rest, fork, ...(typeof detail === 'string' && fork === 'failed' ? { detail } : {}) }
@@ -83,22 +85,40 @@ const STYLE = `
 .sch-input-fork{display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
 .sch-input-fork:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-input-dot,.sch-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--sch-dot,var(--dsw-alias-label-caption))}
-:is(.sch-input,.sch-roster,.sch-dock) [data-state=running],:is(.sch-input,.sch-roster,.sch-dock) [data-row=running]{--sch-dot:var(--dsw-alias-brand-primary-new-colorprimary-new-color);--sch-tone:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
-:is(.sch-input,.sch-roster,.sch-dock) [data-state=done],:is(.sch-input,.sch-roster,.sch-dock) [data-row=done]{--sch-dot:var(--dsw-alias-state-success-primary)}
-:is(.sch-input,.sch-roster,.sch-dock) [data-state=failed],:is(.sch-input,.sch-roster,.sch-dock) [data-row=failed]{--sch-dot:var(--dsw-alias-state-error-primary);--sch-tone:var(--dsw-alias-state-error-primary)}
-:is(.sch-input,.sch-roster,.sch-dock) [data-row=waiting]{--sch-dot:var(--dsw-alias-state-warn-primary);--sch-tone:var(--dsw-alias-state-warn-primary)}
+:is(.sch-input,.sch-roster,.sch-mode-group) [data-state=running],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=running]{--sch-dot:var(--dsw-alias-brand-primary-new-colorprimary-new-color);--sch-tone:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
+:is(.sch-input,.sch-roster,.sch-mode-group) [data-state=done],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=done]{--sch-dot:var(--dsw-alias-state-success-primary)}
+:is(.sch-input,.sch-roster,.sch-mode-group) [data-state=failed],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=failed]{--sch-dot:var(--dsw-alias-state-error-primary);--sch-tone:var(--dsw-alias-state-error-primary)}
+:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=waiting]{--sch-dot:var(--dsw-alias-state-warn-primary);--sch-tone:var(--dsw-alias-state-warn-primary)}
 .sch-dot[data-row=running]{box-shadow:0 0 0 0 var(--sch-dot);animation:sch-pulse 1.8s ease-out infinite}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 /* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
 [data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
 [data-chat-flow-kind="turn-process"] + [data-chat-flow-kind="turn-tail"]{display:none}
 
-/* Agents chip above the composer: a quiet pill; it only takes colour when someone needs you. */
-.sch-dock{display:flex;align-items:center;justify-content:flex-end;padding:0 6px 6px}
-.sch-dock-chip{display:inline-flex;align-items:center;gap:7px;height:26px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);padding:0 11px;border-radius:999px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;transition:background .15s,color .15s}
-.sch-dock-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-dock-chip[data-needs=yes]{color:var(--dsw-alias-state-warn-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,transparent)}
-.sch-dock-sep{color:var(--dsw-alias-label-caption)}
+/* Scheduling switch in the composer's mode row, beside access mode and Plan, in their metrics. */
+.sch-mode-group{display:inline-flex;align-items:center;gap:4px}
+.sch-mode{display:inline-flex;align-items:center;height:28px;border-radius:var(--dsw-radius-sm);font-size:13px;font-weight:500;line-height:20px}
+.sch-mode button,.sch-agents-btn{display:inline-flex;align-items:center;gap:4px;height:28px;border:0;background:none;margin:0;padding:0 8px;color:inherit;font:inherit;cursor:pointer;border-radius:var(--dsw-radius-sm)}
+.sch-mode button:disabled{opacity:.6;cursor:default}
+.sch-mode button:focus-visible,.sch-agents-btn:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+.sch-mode svg{flex:none}
+.sch-mode[data-on=no]{color:var(--dsw-alias-label-secondary)}
+.sch-mode[data-on=no] button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.sch-mode[data-on=yes]{background:var(--dsw-alias-state-business-tertiary);color:var(--dsw-alias-state-business-primary)}
+.sch-mode[data-on=yes]:hover{background:color-mix(in srgb,var(--dsw-alias-state-business-tertiary),var(--dsw-alias-state-business-primary) 6%)}
+.sch-mode-glyph,.sch-mode-x{width:14px;height:14px;line-height:0}
+.sch-mode-glyph{display:block}
+.sch-mode-exit .sch-mode-x,.sch-mode-exit:hover:not(:disabled) .sch-mode-glyph,.sch-mode-exit:focus-visible .sch-mode-glyph{display:none}
+.sch-mode-exit:hover:not(:disabled) .sch-mode-x,.sch-mode-exit:focus-visible .sch-mode-x{display:block}
+.sch-mode-group[data-unsupported] button{opacity:.45}
+.sch-agents-btn{gap:6px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:500;line-height:20px}
+.sch-agents-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.sch-agents-btn .sch-dot{width:6px;height:6px}
+.sch-agents-n{font-weight:400;color:var(--dsw-alias-label-tertiary)}
+.sch-agents-n[data-row=waiting]{color:var(--dsw-alias-state-warn-primary)}
+.sch-agents-n[data-row=running]{color:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
+.sch-agents-n[data-row=failed]{color:var(--dsw-alias-state-error-primary)}
+.sch-mode-error{margin-left:6px;color:var(--dsw-alias-state-error-primary);font-size:12px}
 
 /* Agents page: its own narrow column at the left of the right sidebar, a list of agents. */
 .sch-roster{display:flex;flex-direction:column;height:100%;overflow:auto;padding:0 0 12px;font-size:13px}
@@ -119,6 +139,18 @@ const STYLE = `
 .sch-roster-state{color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-roster-chev{color:var(--dsw-alias-label-caption);opacity:0;transition:opacity .12s}
 .sch-roster-row:hover .sch-roster-chev,.sch-roster-row[data-selected=yes] .sch-roster-chev{opacity:1}
+.sch-roster-item{position:relative}
+.sch-roster-item[data-pending=yes]{opacity:.5}
+.sch-roster-item .sch-roster-row{width:calc(100% - 16px)}
+.sch-roster-archive{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-item:hover .sch-roster-archive,.sch-roster-archive:focus-visible{display:inline-flex}
+.sch-roster-item:hover .sch-roster-end{visibility:hidden}
+.sch-roster-archive:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-foldrow{display:flex;align-items:center;justify-content:space-between;margin:6px 8px 0}
+.sch-roster-foldrow .sch-roster-fold{margin:0}
+.sch-roster-clear{border:0;background:none;padding:4px 8px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
+.sch-roster-clear:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.sch-roster-failure{margin:8px 12px 0;padding:6px 10px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
 .sch-roster-fold{display:flex;align-items:center;gap:4px;margin:6px 8px 0;border:0;background:none;padding:6px 10px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-fold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-fold svg{transition:transform .15s}
@@ -332,6 +364,19 @@ const ICON = {
       <rect x="2" y="2.5" width="12" height="11" rx="2.5" /><path d="M10 2.5v11M5.5 6.5 7.5 8l-2 1.5" />
     </svg>
   ),
+  fork: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="4" cy="3.5" r="1.6" /><circle cx="4" cy="12.5" r="1.6" /><circle cx="12" cy="8" r="1.6" /><path d="M4 5.1v5.8M4 8h3.2c1.6 0 2.4-.9 3.2-.9" />
+    </svg>
+  ),
+  close: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm-2.1 3.7a.6.6 0 0 0-.85.85L7.15 8l-2.1 2.1a.6.6 0 1 0 .85.85L8 8.85l2.1 2.1a.6.6 0 0 0 .85-.85L8.85 8l2.1-2.1a.6.6 0 0 0-.85-.85L8 7.15Z" /></svg>
+  ),
+  archive: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="3" width="12" height="3" rx="1" /><path d="M3 6v6.5c0 .6.4 1 1 1h8c.6 0 1-.4 1-1V6M6.5 9h3" />
+    </svg>
+  ),
   chevron: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
   ),
@@ -370,27 +415,89 @@ export function narrowRoster(sidebar: SidebarFace | undefined): void {
   sidebar?.actionsFor?.(sessionId)?.resizeSplit?.(sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
 }
 
+/** What the Agents button says: the most urgent count, or how many are still around. */
+function agentsLabel(members: readonly Member[], statuses: Statuses | undefined): { tone: RowState | 'idle'; text: string } {
+  const counts = countsOf(members, statuses)
+  if (counts.waiting > 0) return { tone: 'waiting', text: `${counts.waiting} 等你` }
+  if (counts.running > 0) return { tone: 'running', text: `${counts.running} 在跑` }
+  if (counts.queued > 0) return { tone: 'queued', text: `${counts.queued} 排队` }
+  if (counts.failed > 0) return { tone: 'failed', text: `${counts.failed} 失败` }
+  return { tone: 'idle', text: '' }
+}
+
 /**
- * Create the dock chip that shows the roster's totals and opens the Agents page.
- * @param openAgents - opens (or focuses) the Agents tab.
+ * Create the scheduling switch for the composer's mode row: one chip that turns scheduling on or
+ * off, like Plan beside it, and next to it an Agents button whenever this session has forks or
+ * workers. Turning scheduling off keeps them; the Agents page archives them.
+ * @param deps - the command runner and the Agents page opener.
  * @returns the slot component.
  */
-export function createAgentsDock(openAgents: () => void) {
-  return memo(function AgentsDock(props: { useProjection?: (key: string) => unknown; useSessionStatus?: UseSessionStatus }) {
+export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: boolean) => Promise<string | null>; openAgents: () => void; isChild: (sessionId: string) => boolean; supports: (sessionId: string) => Promise<boolean> }) {
+  return memo(function ScheduleSwitch(props: { sessionId?: string; locked?: boolean; useProjection?: (key: string) => unknown; useSessionStatus?: UseSessionStatus }) {
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
-    if (roster === undefined || roster.members.length === 0) return null
-    const counts = countsOf(roster.members, statuses)
-    const live = counts.running + counts.waiting + counts.queued + counts.failed
-    const parts = live === 0 ? [] : summaryParts(counts, live)
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    // A Session keeps the preset revision it started with: one that was running before this
+    // plugin was installed has no /schedule until it is reopened after a restart.
+    const [supported, setSupported] = useState<boolean | undefined>(undefined)
+    const sessionId = props.sessionId
+    useEffect(() => {
+      if (sessionId === undefined) return undefined
+      let alive = true
+      setSupported(undefined)
+      deps.supports(sessionId).then(ok => { if (alive) setSupported(ok) }, () => { if (alive) setSupported(undefined) })
+      return () => { alive = false }
+    }, [sessionId])
+    if (sessionId === undefined || deps.isChild(sessionId)) return null
+    if (supported === false) {
+      return (
+        <span className="sch-mode-group" data-scheduler-switch="" data-on="no" data-unsupported="">
+          <span className="sch-mode" data-on="no">
+            <button type="button" disabled aria-label="调度不可用" title="这个会话在装调度插件之前就已经在运行，不支持开关。新建一个会话，或重启 DeepSeek Harness 后再打开这个会话。">
+              {ICON.fork}调度
+            </button>
+          </span>
+        </span>
+      )
+    }
+    const on = roster?.enabled === true
+    const members = (roster?.members ?? []).filter(m => m.state !== 'archived')
+    const label = agentsLabel(members, statuses)
+    const switchTo = (next: boolean) => {
+      setBusy(true)
+      setError(null)
+      deps.setMode(sessionId, next).then(failure => {
+        setBusy(false)
+        setError(failure)
+        if (failure !== null) deps.supports(sessionId).then(ok => { setSupported(ok) }, () => undefined)
+      }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    const disabled = busy || props.locked === true
     return (
-      <div className="sch-dock">
-        <button type="button" className="sch-dock-chip" data-needs={counts.waiting > 0 ? 'yes' : 'no'} onClick={openAgents} title="打开 Agents">
-          {live === 0 ? null : <span className="sch-dot" data-row={counts.waiting > 0 ? 'waiting' : counts.failed > 0 && counts.running === 0 ? 'failed' : counts.running > 0 ? 'running' : 'queued'} />}
-          <span>Agents</span>
-          {parts.map(part => <span key={part}><span className="sch-dock-sep">· </span>{part}</span>)}
-        </button>
-      </div>
+      <span className="sch-mode-group" data-scheduler-switch="" data-on={on ? 'yes' : 'no'}>
+        <span className="sch-mode" data-on={on ? 'yes' : 'no'}>
+          {on
+            ? (
+              <button type="button" className="sch-mode-exit" disabled={disabled} aria-label="关闭调度" title="调度已开启：每条消息交给一个分身。点击关闭（/schedule off）；已有的分身和 worker 保留" onClick={() => { switchTo(false) }}>
+                <span className="sch-mode-glyph">{ICON.fork}</span><span className="sch-mode-x">{ICON.close}</span>调度
+              </button>
+            )
+            : (
+              <button type="button" disabled={disabled} aria-label="开启调度" title="开启调度（/schedule）：之后的每条消息交给一个分身处理，lead 不被占住" onClick={() => { switchTo(true) }}>
+                {ICON.fork}调度
+              </button>
+            )}
+        </span>
+        {members.length === 0 ? null : (
+          <button type="button" className="sch-agents-btn" aria-label="打开 Agents" title="打开 Agents：查看、打开或归档分身和 worker" onClick={deps.openAgents}>
+            {label.tone === 'idle' ? null : <span className="sch-dot" data-row={label.tone} />}
+            Agents
+            {label.text === '' ? <span className="sch-agents-n">{members.length}</span> : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
+          </button>
+        )}
+        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
+      </span>
     )
   })
 }
@@ -416,7 +523,7 @@ export function subline(member: Member): string {
 export function createAgentsPage(ctx: {
   sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined }
   sidebarRight?: SidebarFace
-}) {
+}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable') {
   return memo(function AgentsPage(props: {
     sessionId?: string
     useProjection?: (key: string) => unknown
@@ -429,6 +536,19 @@ export function createAgentsPage(ctx: {
     const rows = roster?.members ?? []
     const [picked, setPicked] = useState<string | undefined>(undefined)
     const [showArchived, setShowArchived] = useState(false)
+    const [showDone, setShowDone] = useState(false)
+    const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
+    const [failure, setFailure] = useState<string | null>(null)
+    const archive = (target: string) => {
+      if (props.sessionId === undefined) return
+      setPending(p => new Set([...p, target]))
+      setFailure(null)
+      const settle = (error: string | null) => {
+        setPending(p => { const next = new Set(p); next.delete(target); return next })
+        setFailure(error)
+      }
+      run(props.sessionId, `/agents archive ${target}`).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
+    }
     const layout = ctx.sidebarRight?.mountedSurface?.()?.layout
     const selected = (layout === undefined ? undefined : activeChild(layout, AGENTS_KIND, rows.map(m => m.id))) ?? picked
     const open = (member: Member) => {
@@ -446,14 +566,20 @@ export function createAgentsPage(ctx: {
       else tab?.tab.actions.close()
     }
     const live = rows.filter(m => m.state !== 'archived')
-    const forks = live.filter(m => m.kind === 'fork')
+    // A fork that handed back its conclusion and is not working again is finished work: folded
+    // away under 「已交回」, where one click archives it or all of them.
+    const finished = (m: Member) => m.kind === 'fork' && m.state === 'done' && statuses?.get(m.id)?.running !== true && statuses?.get(m.id)?.pendingInteraction === undefined
+    const done = live.filter(finished)
+    const forks = live.filter(m => m.kind === 'fork' && !finished(m))
     const workers = live.filter(m => m.kind === 'worker')
     const archived = rows.filter(m => m.state === 'archived')
     const counts = countsOf(rows, statuses)
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
+      const canArchive = member.state !== 'archived' && state !== 'running' && state !== 'waiting'
       return (
-        <button type="button" key={member.id} className="sch-roster-row" data-row={state} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
+        <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
+        <button type="button" className="sch-roster-row" data-row={state} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
           <span className="sch-dot" data-row={state} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
@@ -464,6 +590,8 @@ export function createAgentsPage(ctx: {
             <span className="sch-roster-chev">{ICON.chevron}</span>
           </span>
         </button>
+        {canArchive ? <button type="button" className="sch-roster-archive" aria-label={`归档 ${member.name}`} title="归档：从名单移到「已归档」，对话保留，名字不再复用" disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
+        </div>
       )
     }
     const section = (title: string, members: readonly Member[]) => {
@@ -478,6 +606,7 @@ export function createAgentsPage(ctx: {
     }
     return (
       <div className="sch-roster" data-scheduler-roster="">
+        {failure === null ? null : <div className="sch-roster-failure" role="status">{failure}</div>}
         <div className="sch-roster-head">
           <div>
             <div className="sch-roster-title">Agents</div>
@@ -486,11 +615,22 @@ export function createAgentsPage(ctx: {
           <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
         </div>
         {rows.length === 0
-          ? <div className="sch-roster-empty">还没有分身或 worker。<br />在主会话里说一件事，lead 会交给一个分身去做。</div>
+          ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会交给一个分身。'}</div>
           : (
             <>
               {section('分身', forks)}
               {section('Worker', workers)}
+              {done.length === 0 ? null : (
+                <>
+                  <div className="sch-roster-foldrow">
+                    <button type="button" className="sch-roster-fold" aria-expanded={showDone} onClick={() => { setShowDone(v => !v) }}>
+                      {ICON.chevron}已交回 {done.length}
+                    </button>
+                    <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title="归档所有已交回、没有待回答请求的分身（/agents archive done）" onClick={() => { archive('done') }}>全部归档</button>
+                  </div>
+                  {showDone ? done.map(member => row(member)) : null}
+                </>
+              )}
               {archived.length === 0 ? null : (
                 <>
                   <button type="button" className="sch-roster-fold" aria-expanded={showArchived} onClick={() => { setShowArchived(v => !v) }}>
@@ -534,6 +674,21 @@ export function apply(ctx: any): void {
     title: () => 'Agents',
     keepMounted: true,
   }), 'agent-scheduler: agents tab type')
-  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx)))
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'agent-scheduler', order: 10 }, createAgentsDock(openAgents)))
+  /** Run one command line; returns null on success, otherwise what went wrong. */
+  const run = async (sessionId: string, line: string): Promise<string | null> => {
+    const result = await ctx.remote.commands.execute(sessionId, line, [])
+    if (!result.ok) return `${result.error.message} (${result.error.code})`
+    const value = result.value as { kind?: string; text?: string } | undefined
+    if (value === undefined) return `unknown command: ${line.split(' ')[0]}`
+    return value.kind === 'error' ? (value.text ?? 'failed') : null
+  }
+  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run)))
+  const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
+  const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
+  const supports = async (sessionId: string): Promise<boolean> => {
+    const result = await ctx.remote.commands.list(sessionId)
+    if (!result.ok) throw new Error(result.error.message)
+    return (result.value as readonly { name?: string }[]).some(command => command.name === 'schedule')
+  }
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
 }

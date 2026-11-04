@@ -18,9 +18,10 @@ import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendRequest, appendRole, appendSettled, forkModelOf,
+  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, forkModelOf,
   type ForkModelSelection,
 } from './records.js'
+import { schedulingOn } from './projection.js'
 import { completedRounds } from './rounds.js'
 
 /**
@@ -29,10 +30,11 @@ import { completedRounds } from './rounds.js'
  * bubble in the fork's chat and must show only what the user typed.
  */
 export const FORK_NOTICE = [
-  'If the newest message is the user\'s own words, you are a fork of the lead, created to handle only that message, holding the lead\'s conversation so far.',
-  'Analyze, then delegate to workers with agent_send or agent_create, or do the work yourself.',
+  'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
+  'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over: agent_list first; agent_send it to the worker that owns that area; if none does, agent_create one for that area with a role, its own cwd (one worker per directory or worktree) and the task.',
+  'Do not do the work yourself: no edits, builds, tests or long investigations. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
-  'End your turn with a self-contained conclusion of what you found and what you delegated to whom (or call report first): it goes to the lead automatically.',
+  'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
 ].join(' ')
 
 /** What the lead is for: the user reads only the lead's own replies. */
@@ -63,6 +65,11 @@ export interface SchedulerDeps {
   /** Preset for new workers; undefined inherits the main Session's preset. */
   readonly workerPreset?: string | undefined
   readonly log?: (message: string, error?: unknown) => void
+  /**
+   * Whether a Session that never recorded a switch schedules. True only for Sessions of the
+   * retired `scheduler` preset, which scheduled from their first message.
+   */
+  readonly defaultOn?: boolean | undefined
   /** Delay before retrying work refused at capacity; tests shorten it. */
   readonly retryMs?: number
 }
@@ -168,6 +175,51 @@ export class Scheduler {
     return ledger
   }
 
+  /**
+   * Whether this Session hands user messages to forks now.
+   * @param agent - the main agent or one of its children.
+   * @returns the switch.
+   */
+  isOn(agent: Agent): boolean {
+    const state = this.ledgerOf(agent).state
+    return state.enabled ?? (this.deps.defaultOn === true || schedulingOn(state))
+  }
+
+  /**
+   * Turn scheduling on or off for a main Session. Forks and workers already there keep running
+   * and still answer to the lead; only later user messages are routed differently.
+   * @param main - the main agent.
+   * @param on - the new switch.
+   * @returns whether the switch changed.
+   */
+  setMode(main: Agent, on: boolean): boolean {
+    if (!isMainSession(main)) throw new Error('scheduling is switched in the main session')
+    if (this.ledgerOf(main).state.enabled === on) return false
+    this.record(main, s => appendMode(s, on))
+    return true
+  }
+
+  /**
+   * Whether an agent belongs to scheduling: the main Session while it is on, or one of its forks
+   * and workers. Children of ordinary subagent tools are not members and are left alone.
+   * @param agent - any agent of this preset.
+   * @returns membership.
+   */
+  takesPart(agent: Agent): boolean {
+    return isMainSession(agent) ? this.isOn(agent) : this.ledgerOf(agent).members.has(agent.id)
+  }
+
+  /**
+   * Refuse a scheduling tool for an agent that does not take part.
+   * @param agent - the calling agent.
+   */
+  assertTakesPart(agent: Agent): void {
+    if (this.takesPart(agent)) return
+    throw new Error(isMainSession(agent)
+      ? 'Scheduling is off in this session. The user turns it on with the 调度 switch below the input or /schedule on; until then, work directly.'
+      : 'This agent is not part of scheduling.')
+  }
+
   /** Forget a main Session (it was disposed); the log stays authoritative. */
   forget(mainId: string): void { this.ledgers.delete(mainId) }
 
@@ -200,8 +252,8 @@ export class Scheduler {
    * @returns whether the scheduler took or rewrote the message.
    */
   onInserted(agent: Agent, message: UserMessage): boolean {
-    if (!isMainSession(agent)) return this.stripNativeNotice(agent, message)
-    if (!isUserInput(message) || !agent.inbox.remove(message.id)) return false
+    if (!isMainSession(agent)) return this.ledgerOf(agent).members.has(agent.id) && this.stripNativeNotice(agent, message)
+    if (!isUserInput(message) || !this.isOn(agent) || !agent.inbox.remove(message.id)) return false
     this.handOff(agent, message)
     return true
   }
@@ -213,6 +265,8 @@ export class Scheduler {
   }
 
   private handOff(main: Agent, message: UserMessage): void {
+    // A Session that schedules by default records it once, so the client's switch shows it.
+    if (this.ledgerOf(main).state.enabled === null) this.record(main, s => appendMode(s, true))
     const forkId = SessionId(`session-${randomUUID()}`)
     const text = textOf(message.content)
     const name = this.ledgerOf(main).nextForkName()
@@ -504,13 +558,29 @@ export class Scheduler {
       // Rounds it completed still answer; the one it was cut off in fails its requests.
       forLead.push(...await this.settleOnce(main, target.id))
     }
-    this.record(main, s => target.kind === 'fork'
-      ? appendForkState(s, { forkId: target.id, state: 'archived' })
-      : appendAgent(s, { action: 'archived', id: target.id, name: target.name }))
+    // A concluded fork may have retired itself while this archive waited.
+    if (ledger.members.get(target.id)?.state !== 'archived') {
+      this.record(main, s => target.kind === 'fork'
+        ? appendForkState(s, { forkId: target.id, state: 'archived' })
+        : appendAgent(s, { action: 'archived', id: target.id, name: target.name }))
+    }
     for (const request of ledger.openTo(target.id)) {
       this.fail(main, request, target, `${target.name} was archived before answering`, forLead)
     }
     for (const text of forLead) this.toLead(main, text, target.id)
+  }
+
+  /**
+   * Archive every fork that has concluded and owes nothing: clears the roster of finished work.
+   * A fork with requests still addressed to it, or one still running, is kept.
+   * @param main - the main agent.
+   * @returns names archived.
+   */
+  async archiveConcluded(main: Agent): Promise<string[]> {
+    const ledger = this.ledgerOf(main)
+    const done = ledger.state.members.filter(m => m.kind === 'fork' && m.state === 'done' && ledger.openTo(m.id).length === 0 && this.deps.agents.get(SessionId(m.id))?.status !== 'running')
+    for (const fork of done) await this.archive(main, fork.id)
+    return done.map(m => m.name)
   }
 
   /**
@@ -551,7 +621,7 @@ export class Scheduler {
     let changed = false
     const kept: UserMessage[] = []
     for (const message of messages) {
-      if (isUserInput(message)) {
+      if (isUserInput(message) && this.isOn(main)) {
         this.handOff(main, message)
         changed = true
         continue
@@ -611,8 +681,10 @@ export class Scheduler {
     this.record(main, s => appendSettled(s, { agent: memberId, through: rounds.at(-1)!.endSeq }))
     const now = ledger.members.get(memberId)!
     // A fork concludes after every completed round; what it delegated is answered to the lead later.
-    if (now.kind === 'fork' && rounds.at(-1)!.stopped === undefined && (now.state === 'started' || now.state === 'done')) {
-      if (now.state !== 'done') this.record(main, s => appendForkState(s, { forkId: memberId, state: 'done' }))
+    // An archived fork reports again only when someone spoke to it directly after it concluded.
+    if (now.kind === 'fork' && rounds.at(-1)!.stopped === undefined && (now.state === 'started' || now.state === 'done' || now.state === 'archived')) {
+      if (now.state !== 'done' && now.state !== 'archived') this.record(main, s => appendForkState(s, { forkId: memberId, state: 'done' }))
+      if (now.state !== 'archived') setTimeout(() => { void this.retire(main, memberId) }, 0)
       const open = ledger.openFrom(memberId).map(r => `${r.id} → ${ledger.nameOf(r.to)}`)
       forLead.push([
         `The user said: ${now.text}`,
@@ -622,6 +694,25 @@ export class Scheduler {
       ].join('\n'))
     }
     return forLead
+  }
+
+  /**
+   * Archive a fork that concluded: it has routed its one message and holds no slot any more.
+   * Its chat stays open in the sidebar; speaking to it there wakes it, and it reports again.
+   * @param main - the main agent.
+   * @param forkId - the fork.
+   */
+  private async retire(main: Agent, forkId: string): Promise<void> {
+    const ledger = this.ledgerOf(main)
+    const fork = ledger.members.get(forkId)
+    if (fork?.kind !== 'fork' || fork.state !== 'done') return
+    try {
+      await this.deps.subagents.drainChildren(main, [SessionId(forkId)])
+    } catch (error) {
+      this.deps.log?.(`releasing ${fork.name} failed`, error)
+    }
+    if (ledger.members.get(forkId)?.state !== 'done') return
+    this.record(main, s => appendForkState(s, { forkId, state: 'archived' }))
   }
 
   /**
@@ -669,9 +760,9 @@ export async function preStep(
   if (admitted !== undefined) messages.splice(0, messages.length, ...admitted)
   const main = isMainSession(agent)
   // Checked on both sides of next(): listener order decides where the runtime's context appears.
-  if (step === 1 && main && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
+  if (step === 1 && main && scheduler.isOn(agent) && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
   const decision = await next()
-  if (step === 1 && main && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
+  if (step === 1 && main && scheduler.isOn(agent) && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
   return decision
 }
 
