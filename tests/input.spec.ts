@@ -80,7 +80,7 @@ describe('input rule', () => {
 
   it('a message that missed insertion is handed off in pre-step and costs no model call', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
-    const scheduler = new Scheduler({ subagents: ctx.subagents, agents: ctx.agents, readEvents: async () => [] })
+    const scheduler = new Scheduler({ subagents: ctx.subagents, agents: ctx.agents, readLog: async () => ({ events: [], inherited: 0 }) })
     ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
     lead.followup(user('late'))
     await vi.waitFor(() => { expect(forksOf(lead)).toHaveLength(1) }, { timeout: 10_000 })
@@ -119,7 +119,7 @@ describe('lead wakes', () => {
 
   it('rejects a context-only first step whichever side of the listener adds the context', async () => {
     const { lead } = await setup(() => textResponse('X'))
-    const scheduler = new Scheduler({ subagents: {} as never, agents: { get: () => undefined }, readEvents: async () => [] })
+    const scheduler = new Scheduler({ subagents: {} as never, agents: { get: () => undefined }, readLog: async () => ({ events: [], inherited: 0 }) })
     const context = createUserMessage({ content: [{ type: 'text', text: 'ctx' }], source: { kind: 'runtime-context', form: 'snapshot', sections: [] } as never })
     let reached = 0
     const pass = async () => { reached += 1; return { kind: 'enter' as const, messages: [context] as never[] } }

@@ -13,13 +13,13 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
   const scheduler = new Scheduler({
     subagents: ctx.subagents,
     agents: ctx.agents,
-    readEvents: async id => (await stored(ctx, id)).events,
+    readLog: async id => stored(ctx, id),
     retryMs: 50,
     ...deps,
   })
   ctx.on('agent/inbox/inserted', ({ agent, message }) => { scheduler.onInserted(agent, message) })
   ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
-  ctx.on('agent/status', ({ status }) => { if (status === 'idle' && scheduler.queued().length > 0) void scheduler.drain() })
+  ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
   ctx.on('agent/disposed', () => { if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.tools.register(tool)
   ctx.systemPrompt.section({ name: 'agent-scheduler', order: 900, text: c => c.agent === undefined ? '' : sectionFor(scheduler, c.agent) })

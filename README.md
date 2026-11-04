@@ -16,14 +16,19 @@ the lead is never blocked by an input.
 - **Workers.** `agent_create` makes a long-lived worker with its own session, role, directory and
   model. Any agent can delegate to a worker with `agent_send`; the answer goes back to whoever
   asked, and to the lead when that requester is gone.
-- **Requests.** Every piece of delegated work is a request with an id. A round answers the
-  requests whose messages that round actually claimed (read from the session log, not from what the
-  agent says).
+- **Requests.** Every piece of delegated work is a request with an id. Each completed round of the
+  agent that took it answers the requests whose messages that round claimed, read from the agent's
+  own session log, with its `report` summary or else its closing text. Attribution happens when the
+  agent goes idle and is recorded as a watermark, so it survives restarts and does not depend on
+  when (or whether) the runtime's settlement notice reaches the lead.
+- **Archiving.** Archiving an agent that still owes answers fails those requests back to whoever
+  asked, so nobody waits forever.
 - **Right sidebar.** An *Agents* page lists forks and workers with live state, opens any of them as
   an embedded conversation (split view), and a chip above the composer shows how many are running
   and how many are waiting for you.
-- **Queue.** When the runtime refuses a new child for capacity, the start is queued and retried
-  when a slot frees; the input card shows the wait instead of failing.
+- **Queue.** When the runtime refuses a new child for its residency limit, the start (or delivery)
+  waits in order and is retried when a slot frees; the input card shows 排队中 instead of failing.
+  Other failures are reported to the agent that asked, not retried.
 
 ## Enable it
 

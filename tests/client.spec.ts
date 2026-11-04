@@ -29,6 +29,11 @@ describe('input definition', () => {
     const s = def.start({ key: 'k', id: 'f1' }, { event: input })
     expect(s).toMatchObject({ fork: 'running', text: 'hello', forkId: 'f1' })
     expect(def.update({ key: 'k', id: 'f1', state: s }, { event: state('done') }).fork).toBe('done')
+    // A fork waiting for a slot is not "handed back"; it runs once it starts.
+    const waiting = def.update({ key: 'k', id: 'f1', state: s }, { event: state('queued') })
+    expect(waiting.fork).toBe('queued')
+    expect(def.update({ key: 'k', id: 'f1', state: waiting }, { event: state('started') }).fork).toBe('running')
+    expect(def.update({ key: 'k', id: 'f1', state: s }, { event: state('archived') }).fork).toBe('archived')
     expect(def.update({ key: 'k', id: 'f1', state: s }, { event: state('failed', 'at capacity') })).toMatchObject({ fork: 'failed', detail: 'at capacity' })
     const node = def.buildViewNode({ key: 'k', id: 'f1', state: s })
     expect(node).toMatchObject({ kind: 'scheduler-input', target: 'chat', anchorSeq: 5, visibility: 'visible' })

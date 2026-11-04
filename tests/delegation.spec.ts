@@ -1,4 +1,7 @@
 /** P2 + P3: requests, attribution, routing back to the requester, worker tools, roles. */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -67,7 +70,7 @@ describe('requests', () => {
       return textResponse('FORK')
     })
     const scheduler = install(ctx)
-    scheduler.createWorker(lead, { name: 'docs', role: 'docs site' })
+    await scheduler.createWorker(lead, { name: 'docs', role: 'docs site' })
     // The worker's first, task-less round reaches nobody.
     await vi.waitFor(async () => { expect((await stored(ctx, SessionId(scheduler.ledgerOf(lead).find('docs')!.id))).events.some(e => e.type === 'turn/end')).toBe(true) })
     await lead.whenIdle()
@@ -94,7 +97,7 @@ describe('requests', () => {
   it('a message the user sends a worker directly is not a request and reaches nobody', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(isWorker('ops')(o) ? (last(o).includes('hello ops') ? 'OPS CHAT' : 'ops ready') : 'LEAD'))
     const scheduler = install(ctx)
-    scheduler.createWorker(lead, { name: 'ops', role: 'deploys' })
+    await scheduler.createWorker(lead, { name: 'ops', role: 'deploys' })
     const id = SessionId(scheduler.ledgerOf(lead).find('ops')!.id)
     await vi.waitFor(async () => { expect((await stored(ctx, id)).events.some(e => e.type === 'turn/end')).toBe(true) })
     await ctx.subagents.sendMessage(lead, id, [{ type: 'text', text: 'hello ops' }], { signal: new AbortController().signal })
@@ -143,8 +146,8 @@ describe('worker tools', () => {
   it('uses the configured worker model unless the worker names one', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse('ready'))
     const scheduler = install(ctx, { configuredWorkerModel: { provider: 'mock-b', model: 'worker-default' } })
-    scheduler.createWorker(lead, { name: 'typed', role: 'x' })
-    scheduler.createWorker(lead, { name: 'named', role: 'y', model: { provider: 'mock', model: 'explicit' } })
+    await scheduler.createWorker(lead, { name: 'typed', role: 'x' })
+    await scheduler.createWorker(lead, { name: 'named', role: 'y', model: { provider: 'mock', model: 'explicit' } })
     await vi.waitFor(() => { expect(adapter.requests.filter(r => isWorker('typed')(r) || isWorker('named')(r))).toHaveLength(2) })
     expect(adapter.requests.find(isWorker('typed'))!.model).toBe('worker-default')
     expect(adapter.requests.find(isWorker('named'))!.model).toBe('explicit')
@@ -155,13 +158,14 @@ describe('worker tools', () => {
     const opts = { provider: 'mock', model: 'lead-model' }
     const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
     const scheduler = install(ctx)
-    scheduler.createWorker(h1.agent, { name: 'billing', role: 'owns billing retries', cwd: '/tmp/billing' })
+    const cwd = mkdtempSync(join(tmpdir(), 'billing-'))
+    await scheduler.createWorker(h1.agent, { name: 'billing', role: 'owns billing retries', cwd })
     await vi.waitFor(() => { expect(scheduler.ledgerOf(h1.agent).find('billing')!.state).toBe('started') })
     await h1.dispose()
     scheduler.forget('main')
     const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
     const recovered = scheduler.ledgerOf(h2.agent).find('billing')!
-    expect(recovered).toMatchObject({ name: 'billing', kind: 'worker', role: 'owns billing retries', cwd: '/tmp/billing' })
+    expect(recovered).toMatchObject({ name: 'billing', kind: 'worker', role: 'owns billing retries', cwd })
     const list = await ctx.tools.get('agent_list', h2.agent)!.execute({}, { agent: h2.agent, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; role?: string }> }
     expect(list.agents).toEqual([expect.objectContaining({ name: 'billing', role: 'owns billing retries' })])
   })
@@ -169,10 +173,10 @@ describe('worker tools', () => {
   it('from: a new worker continues another worker\'s conversation', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'A DONE'))
     const scheduler = install(ctx)
-    scheduler.createWorker(lead, { name: 'a', role: 'first' })
+    await scheduler.createWorker(lead, { name: 'a', role: 'first' })
     const aId = SessionId(scheduler.ledgerOf(lead).find('a')!.id)
     await vi.waitFor(async () => { expect((await stored(ctx, aId)).events.some(e => e.type === 'turn/end')).toBe(true) })
-    scheduler.createWorker(lead, { name: 'b', role: 'second', from: 'a', task: 'continue' })
+    await scheduler.createWorker(lead, { name: 'b', role: 'second', from: 'a', task: 'continue' })
     await vi.waitFor(() => { expect(adapter.requests.some(isWorker('b'))).toBe(true) })
     const bReq = adapter.requests.find(isWorker('b'))!
     // Its seed is a's own session: a's first prompt and answer precede b's task.
@@ -180,16 +184,16 @@ describe('worker tools', () => {
     expect(body(bReq)).toContain('A DONE')
     const created = records(lead.session.snapshotEvents(), AGENT_RECORD).find(r => r.name === 'b')!
     expect(created.from).toBe(aId)
-    expect(() => scheduler.createWorker(lead, { name: 'c', role: 'x', from: 'nobody' })).toThrow(/no agent named/)
+    await expect(scheduler.createWorker(lead, { name: 'c', role: 'x', from: 'nobody' })).rejects.toThrow(/no agent named/)
   })
 
   it('validates names, never reuses them, lists, and archives', async () => {
     const { ctx, lead } = await setup(() => textResponse('ready'))
     const scheduler = install(ctx)
-    expect(() => scheduler.createWorker(lead, { name: 'Bad Name', role: 'x' })).toThrow(/kebab/)
-    expect(() => scheduler.createWorker(lead, { name: 'fork-3', role: 'x' })).toThrow(/reserved/)
-    scheduler.createWorker(lead, { name: 'infra', role: 'ci', cwd: '/tmp' })
-    expect(() => scheduler.createWorker(lead, { name: 'infra', role: 'x' })).toThrow(/taken/)
+    await expect(scheduler.createWorker(lead, { name: 'Bad Name', role: 'x' })).rejects.toThrow(/kebab/)
+    await expect(scheduler.createWorker(lead, { name: 'fork-3', role: 'x' })).rejects.toThrow(/reserved/)
+    await scheduler.createWorker(lead, { name: 'infra', role: 'ci', cwd: '/tmp' })
+    await expect(scheduler.createWorker(lead, { name: 'infra', role: 'x' })).rejects.toThrow(/taken/)
     await vi.waitFor(async () => { expect((await stored(ctx, SessionId(scheduler.ledgerOf(lead).find('infra')!.id))).events.some(e => e.type === 'turn/end')).toBe(true) })
     const list = ctx.tools.get('agent_list', lead)!
     const listed = await list.execute({}, { agent: lead, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; cwd?: string }> }
@@ -197,7 +201,7 @@ describe('worker tools', () => {
     await scheduler.archive(lead, 'infra')
     expect(scheduler.ledgerOf(lead).find('infra')!.state).toBe('archived')
     await expect(scheduler.send(lead, 'infra', 'x')).rejects.toThrow(/archived/)
-    expect(() => scheduler.createWorker(lead, { name: 'infra', role: 'x' })).toThrow(/taken/)
+    await expect(scheduler.createWorker(lead, { name: 'infra', role: 'x' })).rejects.toThrow(/taken/)
   })
 
   it('roles: the lead\'s role reaches the lead and forks with one identical system prompt; a worker has its own', async () => {
@@ -206,7 +210,7 @@ describe('worker tools', () => {
     scheduler.setRole(lead, 'LEAD ROLE: map every requirement')
     lead.followup(user('a'))
     await until(lead, 'Its conclusion')
-    scheduler.createWorker(lead, { name: 'billing', role: 'BILLING ROLE' })
+    await scheduler.createWorker(lead, { name: 'billing', role: 'BILLING ROLE' })
     await vi.waitFor(() => { expect(adapter.requests.some(isWorker('billing'))).toBe(true) })
     const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
     const forkReq = adapter.requests.find(isFork)!
@@ -225,9 +229,9 @@ describe('worker tools', () => {
       return textResponse('LEAD')
     }, 1)
     const scheduler = install(ctx)
-    scheduler.createWorker(lead, { name: 'a', role: 'first' })
+    await scheduler.createWorker(lead, { name: 'a', role: 'first' })
     await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('a')!.id))).toBeDefined() })
-    scheduler.createWorker(lead, { name: 'b', role: 'second', task: 'do b' })
+    await scheduler.createWorker(lead, { name: 'b', role: 'second', task: 'do b' })
     await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).find('b')!.state).toBe('queued') })
     // A finished child leaves residency by itself, so the slot frees without anyone archiving.
     hold.open()

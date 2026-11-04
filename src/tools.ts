@@ -81,7 +81,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
             ...(m.model === undefined ? {} : { model: m.model }),
           })),
           openRequests: [...ledger.requests.values()].filter(r => r.state === 'sent').map(r => ({ id: r.id, from: ledger.nameOf(r.from), to: ledger.nameOf(r.to), text: r.text.slice(0, 120) })),
-          queued: scheduler.queued(),
+          queued: scheduler.queued(ledger.mainId),
         }
       },
     }),
@@ -118,7 +118,8 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       description: 'Give the conclusion of this round explicitly. It replaces your final message as what is sent back to whoever asked.',
       parameters: { summary: { type: 'string', required: true } },
       output: { schema: OK, render: json },
-      execute: async (args, exec) => { scheduler.report(caller(exec), (args as { summary: string }).summary); return { reported: true } },
+      // The call itself is the record: the scheduler reads the summary from this round's log.
+      execute: async () => ({ reported: true }),
     }),
   ]
 }

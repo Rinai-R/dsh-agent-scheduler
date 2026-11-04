@@ -83,9 +83,9 @@ export function apply(ctx: Context, config: Config): void {
   const scheduler = new Scheduler({
     subagents: ctx.subagents,
     agents: ctx.agents,
-    readEvents: async (id) => {
+    readLog: async (id) => {
       using observed = await ctx.sessionQuery.observeSession(SessionId(id), { projectionMode: 'none' })
-      return [...observed.events]
+      return { events: [...observed.events], inherited: Number(observed.inheritedEventCount) }
     },
     configuredModel: config.fork,
     configuredWorkerModel: config.worker,
@@ -96,7 +96,10 @@ export function apply(ctx: Context, config: Config): void {
   // Session titles come from user messages; the input rule removes them, so name the session
   // from the first input. Optional: profiles without the title service keep working.
   let titles: { get(session: Session): unknown; rename(session: Session, title: string): unknown } | undefined
-  ctx.inject(['sessionTitle'], (scoped) => { titles = scoped.sessionTitle })
+  ctx.inject(['sessionTitle'], (scoped) => {
+    titles = scoped.sessionTitle
+    scoped.effect(() => () => { titles = undefined }, 'agent-scheduler: titles')
+  })
   const nameSession = (session: Session, text: string): void => {
     if (titles === undefined || titles.get(session) !== undefined) return
     const short = text.trim().replace(/\s+/gu, ' ').slice(0, 40)
@@ -108,7 +111,7 @@ export function apply(ctx: Context, config: Config): void {
     if (took && isMainSession(agent) && message.source.kind === 'user') nameSession(agent.session, textOf(message.content))
   })
   ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
-  ctx.on('agent/status', ({ status }) => { if (status === 'idle' && scheduler.queued().length > 0) void scheduler.drain() })
+  ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
   ctx.on('agent/disposed', ({ agent }) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.effect(() => ctx.tools.register(tool), `agent-scheduler: ${tool.name}`)
   ctx.effect(() => ctx.systemPrompt.section({

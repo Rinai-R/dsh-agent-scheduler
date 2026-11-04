@@ -11,6 +11,7 @@ export const FORK_MODEL_RECORD = 'plugin:dsh-agent-scheduler/fork-model'
 export const AGENT_RECORD = 'plugin:dsh-agent-scheduler/agent'
 export const REQUEST_RECORD = 'plugin:dsh-agent-scheduler/request'
 export const ROLE_RECORD = 'plugin:dsh-agent-scheduler/role'
+export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 
 /** The user's words as handed to one fork. */
 export interface InputRecord {
@@ -26,8 +27,18 @@ export interface InputRecord {
 export interface ForkStateRecord {
   readonly version: 1
   readonly forkId: string
-  readonly state: 'done' | 'failed' | 'queued' | 'started'
+  readonly state: 'done' | 'failed' | 'queued' | 'started' | 'archived'
   readonly detail?: string
+}
+
+/**
+ * How far a child's log has been attributed: every completed round up to and including the
+ * `turn/end` at `through` has answered the requests it claimed. Rounds after it are still due.
+ */
+export interface SettledRecord {
+  readonly version: 1
+  readonly agent: string
+  readonly through: number
 }
 
 /** Model override for this Session's later forks; `null` clears it. */
@@ -90,6 +101,7 @@ declare module '@deepseek-ai/dsh-session/types' {
     'plugin:dsh-agent-scheduler/agent': AgentRecord
     'plugin:dsh-agent-scheduler/request': RequestRecord
     'plugin:dsh-agent-scheduler/role': RoleRecord
+    'plugin:dsh-agent-scheduler/settled': SettledRecord
   }
 }
 
@@ -107,6 +119,8 @@ export const appendRequest = (session: Session, record: Fields<RequestRecord>): 
   appendPluginRecord(session, REQUEST_RECORD, { version: 1, ...record })
 export const appendRole = (session: Session, record: Fields<RoleRecord>): SessionSeq =>
   appendPluginRecord(session, ROLE_RECORD, { version: 1, ...record })
+export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
+  appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
 function dataOf<T>(event: SessionEvent, type: string): T | undefined {
   const record = pluginRecordOf(event)
@@ -139,10 +153,11 @@ export function forkModelOf(events: readonly SessionEvent[]): ForkModelSelection
   return null
 }
 
-/** Typed readers used by the ledger fold. */
+/** Typed readers used by the roster fold. */
 export const recordReaders = {
   forkState: (e: SessionEvent) => dataOf<ForkStateRecord>(e, FORK_STATE_RECORD),
   agent: (e: SessionEvent) => dataOf<AgentRecord>(e, AGENT_RECORD),
   request: (e: SessionEvent) => dataOf<RequestRecord>(e, REQUEST_RECORD),
   role: (e: SessionEvent) => dataOf<RoleRecord>(e, ROLE_RECORD),
+  settled: (e: SessionEvent) => dataOf<SettledRecord>(e, SETTLED_RECORD),
 }

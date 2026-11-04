@@ -1,44 +1,17 @@
-/** In-memory fold of one main Session's records: forks, workers, requests, roles. */
+/**
+ * Queries over one main Session's roster. The state is the same pure fold the client projection
+ * uses ({@link applyRoster}); this class only caches lookups for the current state.
+ */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { inputOf, recordReaders as R } from './records.js'
+import { applyRoster, EMPTY_ROSTER, type Roster, type RosterMember, type RosterRequest } from './projection.js'
 
-/** Lifecycle of a fork or worker as recorded; liveness comes from the runtime. */
-export type MemberState = 'queued' | 'started' | 'done' | 'failed' | 'archived'
+export type { MemberState, RosterMember as Member, RosterRequest as Request } from './projection.js'
 
-/** One fork or worker. */
-export interface Member {
-  readonly id: string
-  readonly name: string
-  readonly kind: 'fork' | 'worker'
-  state: MemberState
-  /** Fork: the user's input. Worker: its role. */
-  text: string
-  role?: string | undefined
-  cwd?: string | undefined
-  model?: string | undefined
-  from?: string | undefined
-  detail?: string | undefined
-}
-
-/** One request with its latest state. */
-export interface Request {
-  readonly id: string
-  readonly from: string
-  readonly to: string
-  readonly text: string
-  messageId?: string | undefined
-  state: 'sent' | 'answered' | 'failed'
-  answer?: string | undefined
-  deliveredTo?: string | undefined
-}
-
-/** All records of one main Session. */
+/** All records of one main Session, folded. */
 export class Ledger {
-  readonly members = new Map<string, Member>()
-  readonly requests = new Map<string, Request>()
-  role: string | undefined
-  private forkCount = 0
-  private requestCount = 0
+  private current: Roster = EMPTY_ROSTER
+  private memberIndex: ReadonlyMap<string, RosterMember> | undefined
+  private requestIndex: ReadonlyMap<string, RosterRequest> | undefined
 
   /** @param mainId - the main Session's id. */
   constructor(readonly mainId: string) {}
@@ -55,81 +28,46 @@ export class Ledger {
     return ledger
   }
 
-  /**
-   * Apply one event; non-records are ignored. Called for every appended record, so the fold and
-   * the log never disagree.
-   * @param event - a main Session event.
-   */
+  /** @param event - one main-Session event; non-records leave the state as it is. */
   apply(event: SessionEvent): void {
-    const input = inputOf(event)
-    if (input !== undefined) {
-      this.forkCount += 1
-      this.members.set(input.forkId, { id: input.forkId, name: input.name ?? `fork-${this.forkCount}`, kind: 'fork', state: 'started', text: input.text })
-      return
-    }
-    const fork = R.forkState(event)
-    if (fork !== undefined) {
-      const member = this.members.get(fork.forkId)
-      if (member !== undefined) { member.state = fork.state; member.detail = fork.detail }
-      return
-    }
-    const agent = R.agent(event)
-    if (agent !== undefined) {
-      const existing = this.members.get(agent.id)
-      if (agent.action === 'created' || existing === undefined) {
-        this.members.set(agent.id, {
-          id: agent.id, name: agent.name, kind: 'worker', state: agent.action === 'created' ? 'started' : stateOf(agent.action),
-          text: agent.role ?? '', role: agent.role, cwd: agent.cwd, model: agent.model, from: agent.from, detail: agent.detail,
-        })
-      } else {
-        existing.state = stateOf(agent.action)
-        existing.detail = agent.detail
-      }
-      return
-    }
-    const request = R.request(event)
-    if (request !== undefined) {
-      const known = this.requests.get(request.id)
-      if (request.action === 'sent' && known !== undefined) {
-        // The same request again, now with the id of the delivered message.
-        if (request.messageId !== undefined) known.messageId = request.messageId
-        return
-      }
-      if (request.action === 'sent') {
-        this.requestCount += 1
-        this.requests.set(request.id, { id: request.id, from: request.from ?? this.mainId, to: request.to ?? '', text: request.text ?? '', messageId: request.messageId, state: 'sent' })
-        return
-      }
-      if (known === undefined) return
-      known.state = request.action
-      known.answer = request.answer ?? request.detail
-      known.deliveredTo = request.deliveredTo
-      if (request.messageId !== undefined) known.messageId = request.messageId
-      return
-    }
-    const role = R.role(event)
-    if (role !== undefined) {
-      if (role.agent === undefined) this.role = role.text
-      else { const member = this.members.get(role.agent); if (member !== undefined) member.role = role.text }
-    }
+    const next = applyRoster(this.current, event)
+    if (next === this.current) return
+    this.current = next
+    this.memberIndex = undefined
+    this.requestIndex = undefined
+  }
+
+  /** @returns the fold state. */
+  get state(): Roster { return this.current }
+
+  /** @returns the lead's role text. */
+  get role(): string | undefined { return this.current.role ?? undefined }
+
+  /** @returns forks and workers by Session id. */
+  get members(): ReadonlyMap<string, RosterMember> {
+    this.memberIndex ??= new Map(this.current.members.map(m => [m.id, m]))
+    return this.memberIndex
+  }
+
+  /** @returns requests by id. */
+  get requests(): ReadonlyMap<string, RosterRequest> {
+    this.requestIndex ??= new Map(this.current.requests.map(r => [r.id, r]))
+    return this.requestIndex
   }
 
   /** @returns the next fork display name. */
-  nextForkName(): string { return `fork-${this.forkCount + 1}` }
+  nextForkName(): string { return `fork-${this.current.members.filter(m => m.kind === 'fork').length + 1}` }
 
-  /** @returns the next request id. */
-  nextRequestId(): string { return `r-${this.requestCount + 1}` }
+  /** @returns the next request id; requests are never removed, so the count is the sequence. */
+  nextRequestId(): string { return `r-${this.current.requests.length + 1}` }
 
   /**
    * Find a member by name or id.
    * @param key - `billing`, `fork-3`, or a Session id.
    * @returns the member.
    */
-  find(key: string): Member | undefined {
-    const byId = this.members.get(key)
-    if (byId !== undefined) return byId
-    for (const member of this.members.values()) if (member.name === key) return member
-    return undefined
+  find(key: string): RosterMember | undefined {
+    return this.members.get(key) ?? this.current.members.find(m => m.name === key)
   }
 
   /** @returns the display name of a Session id; `lead` for the main Session. */
@@ -139,16 +77,12 @@ export class Ledger {
   }
 
   /** @returns unanswered requests sent by `id`. */
-  openFrom(id: string): Request[] {
-    return [...this.requests.values()].filter(r => r.from === id && r.state === 'sent')
+  openFrom(id: string): RosterRequest[] {
+    return this.current.requests.filter(r => r.from === id && r.state === 'sent')
   }
 
   /** @returns unanswered requests addressed to `id`. */
-  openTo(id: string): Request[] {
-    return [...this.requests.values()].filter(r => r.to === id && r.state === 'sent')
+  openTo(id: string): RosterRequest[] {
+    return this.current.requests.filter(r => r.to === id && r.state === 'sent')
   }
-}
-
-function stateOf(action: 'created' | 'started' | 'queued' | 'archived' | 'failed'): MemberState {
-  return action === 'created' ? 'started' : action
 }

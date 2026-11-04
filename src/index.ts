@@ -7,7 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import { installForkFrom } from './forks-from.js'
-import { applyRoster, initRoster, rosterSchema, SCHEDULER_PROJECTION } from './projection.js'
+import { applyRoster, initRoster, rosterSchema, rosterView, rosterViewSchema, SCHEDULER_PROJECTION } from './projection.js'
 
 export const name = 'agent-scheduler'
 export const inject = ['subagents', 'sessionProjections']
@@ -21,11 +21,12 @@ export function apply(ctx: Context): void {
   installForkFrom(ctx)
   ctx.effect(() => ctx.sessionProjections.register({
     key: SCHEDULER_PROJECTION,
-    stateVersion: 1,
+    // 2: the fold carries settlement watermarks and archived forks; older cached state is dropped.
+    stateVersion: 2,
     stateSchema: rosterSchema,
     init: initRoster,
     apply: applyRoster,
-    wire: { viewSchema: rosterSchema, view: state => state },
+    wire: { viewSchema: rosterViewSchema, view: rosterView },
   }), 'agent-scheduler: roster projection')
 }
 
@@ -33,5 +34,7 @@ export * from './forks-from.js'
 export * from './records.js'
 export * from './scheduler.js'
 export * from './ledger.js'
+export * from './projection.js'
+export * from './rounds.js'
 export * from './tools.js'
 export { parseForkCommand, type Config } from './rule-plugin.js'

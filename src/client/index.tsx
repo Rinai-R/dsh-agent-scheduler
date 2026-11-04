@@ -22,12 +22,16 @@ export const name = 'dsh-agent-scheduler'
 export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace']
 
 interface Event { type: string; seq: number; time: number; data: Record<string, unknown> }
-interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: 'running' | 'done' | 'failed'; readonly detail?: string }
+type CardState = 'queued' | 'running' | 'done' | 'failed' | 'archived'
+interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: CardState; readonly detail?: string }
+
+/** Fork-state record → what the card says. `started` follows a wait in the queue. */
+const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'running', done: 'done', failed: 'failed', archived: 'archived' }
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
 interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string }
-interface Roster { readonly role: string | null; readonly members: readonly Member[]; readonly requests: readonly unknown[] }
+interface Roster { readonly role: string | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
 /** One Session's live status as the client root hook reports it. */
 interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
 type Statuses = Map<string, StatusRow>
@@ -54,8 +58,11 @@ export const inputDefinition = {
   }),
   update: (context: Ctx & { state: State }, match: { event: Event }): State => {
     if (match.event.type !== FORK_STATE) return context.state
+    const fork = CARD_STATE[String(match.event.data.state)]
+    if (fork === undefined) return context.state
+    const { detail: _, ...rest } = context.state
     const detail = match.event.data.detail
-    return { ...context.state, fork: match.event.data.state === 'failed' ? 'failed' : 'done', ...(typeof detail === 'string' ? { detail } : {}) }
+    return { ...rest, fork, ...(typeof detail === 'string' && fork === 'failed' ? { detail } : {}) }
   },
   buildViewNode: (context: Ctx) => context.state === undefined ? null : {
     key: context.key,
@@ -78,6 +85,7 @@ const STYLE = `
 .sch-input-dot[data-state=running]{--sch-dot:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
 .sch-input-dot[data-state=done]{--sch-dot:var(--dsw-alias-state-success-primary)}
 .sch-input-dot[data-state=failed]{--sch-dot:var(--dsw-alias-state-error-primary)}
+.sch-input-dot[data-state=queued],.sch-input-dot[data-state=archived]{--sch-dot:var(--dsw-alias-label-quaternary)}
 /* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
 [data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
 [data-chat-flow-kind="turn-process"] + [data-chat-flow-kind="turn-tail"]{display:none}
@@ -112,7 +120,7 @@ const STYLE = `
 .sch-roster-empty{padding:12px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 `
 
-const INPUT_LABEL = { running: '分身处理中', done: '分身已交回', failed: '分身启动失败' } as const
+const INPUT_LABEL: Record<CardState, string> = { queued: '分身排队中', running: '分身处理中', done: '分身已交回', failed: '分身启动失败', archived: '分身已归档' }
 
 const STATE_LABEL: Record<RowState, string> = {
   running: '在跑',
