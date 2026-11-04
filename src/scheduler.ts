@@ -4,9 +4,10 @@
  *   and a new fork of the lead takes it;
  * - every piece of delegated work is a request; each completed round of the agent that took it
  *   answers the requests whose messages that round claimed, read from its log;
- * - an answer goes back to whoever asked; when that is gone or unreachable, to the lead;
- * - a fork reports to the lead whenever it completes with none of its own requests open.
- * All children are direct children of the main Session, which sends on everyone's behalf.
+ * - there is one pipeline and it ends at the lead: a fork's conclusion, a worker's answer, and a
+ *   failed request all report to the lead. Nobody is woken again just to relay a result, so a
+ *   fork concludes after delegating instead of waiting for its workers;
+ * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
 import { randomUUID } from 'node:crypto'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -24,9 +25,9 @@ import { completedRounds } from './rounds.js'
 /** First-message text for a fork. The system prompt explains the tools; this says what it is for. */
 export const FORK_NOTICE = [
   'You are a fork of the lead, created to handle only the message above, holding the lead\'s conversation so far.',
-  'Analyze, delegate to workers with agent_send or agent_create, or do the work yourself.',
-  'Replies to your requests arrive as messages; while any is outstanding, end your turn and wait.',
-  'When nothing is outstanding, end your turn with a self-contained conclusion (or call report first): it goes to the lead automatically.',
+  'Analyze, then delegate to workers with agent_send or agent_create, or do the work yourself.',
+  'Do not wait for workers: their answers go to the lead directly, not back to you.',
+  'End your turn with a self-contained conclusion of what you found and what you delegated to whom (or call report first): it goes to the lead automatically.',
 ].join(' ')
 
 /** Marker the runtime appends to a child's first message; we route results ourselves. */
@@ -413,7 +414,7 @@ export class Scheduler {
   }
 
   private requestText(id: string, from: string, text: string): string {
-    return `[request ${id} from ${from}]\n${text}\n\nAnswer it, then end your turn: your final message (or your report) goes back to ${from} automatically.`
+    return `[request ${id} from ${from}]\n${text}\n\nAnswer it, then end your turn: your final message (or your report) goes to the lead automatically.`
   }
 
   /**
@@ -584,51 +585,43 @@ export class Scheduler {
           this.fail(main, request, member, `${member.name}'s round ended (${round.stopped}) before answering`, forLead)
           continue
         }
-        const to = this.recipientOf(ledger, request)
-        this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: to }))
-        this.route(main, request, member, `[reply to ${request.id} from ${member.name}]`, round.answer, forLead)
+        this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: ledger.mainId }))
+        forLead.push(`${this.headerOf(ledger, request, `reply to ${request.id} from ${member.name}`)}\n${round.answer}`)
       }
     }
     this.record(main, s => appendSettled(s, { agent: memberId, through: rounds.at(-1)!.endSeq }))
     const now = ledger.members.get(memberId)!
-    if (now.kind === 'fork' && rounds.at(-1)!.stopped === undefined && (now.state === 'started' || now.state === 'done') && ledger.openFrom(memberId).length === 0) {
+    // A fork concludes after every completed round; what it delegated is answered to the lead later.
+    if (now.kind === 'fork' && rounds.at(-1)!.stopped === undefined && (now.state === 'started' || now.state === 'done')) {
       if (now.state !== 'done') this.record(main, s => appendForkState(s, { forkId: memberId, state: 'done' }))
-      forLead.push(`The user said: ${now.text}\n${now.name} handled it. Its conclusion:\n${rounds.at(-1)!.answer}`)
+      const open = ledger.openFrom(memberId).map(r => `${r.id} → ${ledger.nameOf(r.to)}`)
+      forLead.push([
+        `The user said: ${now.text}`,
+        `${now.name} handled it. Its conclusion:`,
+        rounds.at(-1)!.answer,
+        ...(open.length === 0 ? [] : [`Delegated, answers will come to you: ${open.join(', ')}`]),
+      ].join('\n'))
     }
     return forLead
   }
 
-  /** Record a request as failed and tell whoever asked. */
-  private fail(main: Agent, request: Request, by: Member, detail: string, forLead: string[]): void {
-    this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail }))
-    this.route(main, request, by, `[request ${request.id} to ${by.name} failed: ${detail}]`, '', forLead)
-  }
-
-  /** The Session an answer to `request` goes to: the requester, or the main Session when it is gone. */
-  private recipientOf(ledger: Ledger, request: Request): string {
-    const requester = request.from === ledger.mainId ? undefined : ledger.members.get(request.from)
-    return requester === undefined || gone(requester) ? ledger.mainId : requester.id
-  }
-
   /**
-   * Deliver one line about `request` to whoever asked. The lead's copy joins `forLead`; a fork's
-   * or worker's is sent on the main Session's behalf, and goes to the lead if that fails.
+   * The bracketed header of a line for the lead, naming who asked when it was not the lead.
+   * @returns e.g. `[reply to r-3 from billing, asked by fork-2 for "check retries"]`.
    */
-  private route(main: Agent, request: Request, by: Member, header: string, body: string, forLead: string[]): void {
+  private headerOf(ledger: Ledger, request: Request, what: string): string {
+    if (request.from === ledger.mainId) return `[${what}]`
+    const asker = ledger.members.get(request.from)
+    if (asker === undefined) return `[${what}]`
+    const purpose = asker.kind === 'fork' ? ` for "${asker.text.replace(/\s+/gu, ' ').slice(0, 60)}"` : ''
+    return `[${what}, asked by ${asker.name}${purpose}]`
+  }
+
+  /** Record a request as failed and tell the lead. */
+  private fail(main: Agent, request: Request, by: Member, detail: string, forLead: string[]): void {
     const ledger = this.ledgerOf(main)
-    const requester = request.from === ledger.mainId ? undefined : ledger.members.get(request.from)
-    const text = body === '' ? header : `${header}\n${body}`
-    if (requester === undefined || gone(requester)) {
-      // `[reply to r-3 from billing]` becomes `[reply to r-3 from billing; fork-2 is archived, so it comes to you]`.
-      const marked = requester === undefined ? header : `${header.slice(0, -1)}; ${requester.name} is ${requester.state}, so it comes to you]`
-      forLead.push(body === '' ? marked : `${marked}\n${body}`)
-      return
-    }
-    void this.run(main, requester.id, `reply ${request.id}`, async () => {
-      await this.deps.subagents.sendMessage(main, SessionId(requester.id), [{ type: 'text', text }], { signal: new AbortController().signal })
-    }, {
-      failed: error => { this.toLead(main, `${header} (could not reach ${requester.name}: ${messageOf(error)})${body === '' ? '' : `\n${body}`}`, by.id) },
-    })
+    this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail, deliveredTo: ledger.mainId }))
+    forLead.push(this.headerOf(ledger, request, `request ${request.id} to ${by.name} failed: ${detail}`))
   }
 
   /** Give the lead a message outside a step it is admitting: queued for its next turn. */

@@ -20,16 +20,15 @@ const systemOf = (o: GenerateOptions) => JSON.stringify(o.messages[0])
 const systemText = (o: GenerateOptions) => JSON.stringify(o.messages[0]?.content)
 const called = (o: GenerateOptions, tool: string) => o.messages.some(m => m.role === 'assistant' && JSON.stringify(m).includes(`"name":"${tool}"`))
 
-/** A fork that creates `billing` with a task, waits, and concludes from the reply. */
+/** A fork that creates `billing` with a task and concludes at once, without waiting for it. */
 function delegatingScript(worker: (o: GenerateOptions) => Promise<string> | string = () => 'BILLING ANSWER: retries lack backoff') {
   let leadCalls = 0
   const respond = async (o: GenerateOptions) => {
     if (o.sessionId === 'lead' || o.sessionId === 'main') { leadCalls += 1; return textResponse('LEAD OK') }
     if (isWorker('billing')(o)) return textResponse(await worker(o))
     if (isFork(o)) {
-      if (last(o).includes('[reply to r-1 from billing]')) return textResponse('FORK FINAL: billing found missing backoff')
       if (!called(o, 'agent_create')) return toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'owns billing retries', task: 'check the retry policy' })
-      return textResponse('FORK WAITING for billing')
+      return textResponse('FORK CONCLUSION: asked billing to check')
     }
     return textResponse('OTHER')
   }
@@ -37,20 +36,26 @@ function delegatingScript(worker: (o: GenerateOptions) => Promise<string> | stri
 }
 
 describe('requests', () => {
-  it('a fork delegates to a new worker; the answer returns to the fork; only the final conclusion reaches the lead', async () => {
-    const script = delegatingScript()
+  it('a fork delegates and concludes; the worker answers the lead directly; the fork is never woken again', async () => {
+    const hold = gate()
+    const script = delegatingScript(async () => { await hold.promise; return 'BILLING ANSWER: retries lack backoff' })
     const { ctx, lead, adapter } = await setup(script.respond)
     install(ctx)
     lead.followup(user('look at billing retries'))
+    // The conclusion does not wait for the worker, and says what is still coming.
     await until(lead, 'Its conclusion')
-    const log = lead.session.snapshotEvents()
-    expect(leadSaw(lead, 'FORK FINAL')).toBe(1)
-    expect(leadSaw(lead, 'FORK WAITING')).toBe(0)
+    expect(leadSaw(lead, 'FORK CONCLUSION')).toBe(1)
+    expect(leadSaw(lead, 'Delegated, answers will come to you: r-1')).toBe(1)
     expect(leadSaw(lead, 'BILLING ANSWER')).toBe(0)
-    expect(script.leadCalls()).toBe(1)
-    const reqs = records(log, REQUEST_RECORD)
-    const forkId = forksOf(lead)[0]
-    expect(reqs.find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', deliveredTo: forkId })
+    hold.open()
+    await until(lead, '[reply to r-1 from billing, asked by fork-1 for')
+    expect(leadSaw(lead, 'BILLING ANSWER')).toBe(1)
+    const log = lead.session.snapshotEvents()
+    const forkId = forksOf(lead)[0]!
+    // The agent_create call and the conclusion: the answer costs the fork no third model call.
+    expect(adapter.requests.filter(r => r.sessionId === forkId)).toHaveLength(2)
+    expect(adapter.requests.filter(r => r.sessionId === forkId).some(r => body(r).includes('BILLING ANSWER'))).toBe(false)
+    expect(records(log, REQUEST_RECORD).find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', deliveredTo: 'lead' })
     expect(records(log, AGENT_RECORD)).toEqual([expect.objectContaining({ action: 'created', name: 'billing', role: 'owns billing retries' })])
     // The worker saw its role and the request, and was not told to use send_message.
     const workerReq = adapter.requests.find(isWorker('billing'))!
@@ -80,17 +85,16 @@ describe('requests', () => {
     expect(leadSaw(lead, 'DOCS: build is green')).toBe(1)
   })
 
-  it('a reply whose requester was archived goes to the lead instead', async () => {
+  it('an answer reaches the lead even when the fork that asked was archived', async () => {
     const hold = gate()
     const script = delegatingScript(async () => { await hold.promise; return 'LATE ANSWER' })
     const { ctx, lead } = await setup(script.respond)
     const scheduler = install(ctx)
     lead.followup(user('look at billing retries'))
-    await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).find('billing')).toBeDefined() }, { timeout: 10_000 })
-    await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).openFrom(forksOf(lead)[0]!)).toHaveLength(1) })
+    await until(lead, 'Its conclusion')
     await scheduler.archive(lead, 'fork-1')
     hold.open()
-    await until(lead, '[reply to r-1 from billing; fork-1 is archived')
+    await until(lead, '[reply to r-1 from billing, asked by fork-1')
     expect(leadSaw(lead, 'LATE ANSWER')).toBe(1)
   })
 
@@ -116,12 +120,13 @@ describe('requests', () => {
     })
     install(ctx)
     lead.followup(user('look at billing retries'))
-    await until(lead, 'Its conclusion')
+    await until(lead, '[reply to r-1 from billing')
     const reqs = records(lead.session.snapshotEvents(), REQUEST_RECORD)
     expect(reqs.find(r => r.action === 'answered')?.answer).toBe('REPORTED SUMMARY')
+    expect(leadSaw(lead, 'chatty final words')).toBe(0)
   })
 
-  it('a request answered after the main session restarts still reaches the fork', async () => {
+  it('a request sent after the main session restarts is answered to the lead', async () => {
     const hold = gate()
     const script = delegatingScript(async () => { await hold.promise; return 'ANSWER AFTER RESTART' })
     const { ctx } = await setup(script.respond)
@@ -138,7 +143,7 @@ describe('requests', () => {
     // The worker was released with its parent; the lead re-sends the request.
     await scheduler.send(h2.agent, 'billing', 'check the retry policy (again)')
     await until(h2.agent, '[reply to r-2 from billing]')
-    expect(leadSaw(h2.agent, 'ANSWER AFTER RESTART')).toBe(1)
+    expect(scheduler.ledgerOf(h2.agent).requests.get('r-2')).toMatchObject({ state: 'answered', answer: 'ANSWER AFTER RESTART', deliveredTo: 'main' })
   })
 })
 

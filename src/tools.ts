@@ -55,7 +55,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_send',
-      description: 'Send a request to a worker or fork by name. Its answer arrives later as a message "[reply to r-N from name]"; end your turn while waiting.',
+      description: 'Send a request to a worker or fork by name. Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it.',
       parameters: {
         to: { type: 'string', required: true, description: 'Name of the worker or fork.' },
         message: { type: 'string', required: true, description: 'Self-contained request.' },
@@ -137,12 +137,12 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   const lines = isWorker
     ? [
         '# Agent Scheduler: worker',
-        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes back to the requester automatically. You may delegate with agent_send. Do not use send_message.',
+        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically. You may delegate with agent_send; that answer also goes to the lead. Do not use send_message.',
       ]
     : [
         '# Agent Scheduler',
         'The user talks to a lead; every user message is handled by a fresh fork of the lead, and the lead receives the forks\' conclusions as "The user said: ... Its conclusion: ...".',
-        'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one, agent_send to delegate. Replies arrive as "[reply to r-N from name]". Do not use send_message or the subagent tools for this.',
+        'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one, agent_send to delegate. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
         'As the lead, keep a concise map of the user\'s requirements and their state; act on conclusions when needed.',
       ]
   if (role !== undefined && role !== '') lines.push(`Role:\n${role}`)

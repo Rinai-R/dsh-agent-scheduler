@@ -11,11 +11,13 @@ the lead is never blocked by an input.
   immediately. The lead does not see or handle the raw input; it receives the fork's conclusion
   later as "The user said: … / Its conclusion: …", so the lead's history stays a map of requests.
 - **Forks.** A fork is a native fork of the lead: it inherits the lead's completed turns and
-  handles exactly one input. It may delegate with `agent_create` / `agent_send`, then reports a
-  conclusion back to the lead when nothing of its own is outstanding.
+  handles exactly one input. It analyzes, delegates with `agent_create` / `agent_send`, and
+  concludes right away; it does not wait for its workers.
 - **Workers.** `agent_create` makes a long-lived worker with its own session, role, directory and
-  model. Any agent can delegate to a worker with `agent_send`; the answer goes back to whoever
-  asked, and to the lead when that requester is gone.
+  model.
+- **One pipeline, ending at the lead.** A fork's conclusion, a worker's answer, and a failed request
+  all report straight to the lead, tagged with who asked and for which input. No agent is woken
+  again just to relay a result, which would cost a model call and time.
 - **Requests.** Every piece of delegated work is a request with an id. Each completed round of the
   agent that took it answers the requests whose messages that round claimed, read from the agent's
   own session log, with its `report` summary or else its closing text. Attribution happens when the

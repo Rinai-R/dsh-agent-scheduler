@@ -102,14 +102,14 @@ describe('review regressions', () => {
         if (o.sessionId === 'lead') return textResponse('LEAD OK')
         if (isWorker('billing')(o)) return called(o, 'report') ? textResponse('chatty') : toolCallResponse('r1', 'report', { summary: 'REPORTED' })
         if (isFork(o)) {
-          if (body(o).includes('[reply to r-1 from billing]')) return textResponse('FORK FINAL')
-          return called(o, 'agent_create') ? textResponse('FORK WAITING') : toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
+          return called(o, 'agent_create') ? textResponse('FORK FINAL') : toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
         }
         return textResponse('OTHER')
       })
       install(ctx)
       lead.followup(user('look at billing retries'))
       await until(lead, 'Its conclusion')
+      await until(lead, '[reply to r-1 from billing')
       expect(leadSaw(lead, 'FORK FINAL')).toBe(1)
       expect(records(lead.session.snapshotEvents(), REQUEST_RECORD).find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', answer: 'REPORTED' })
     })
@@ -148,5 +148,27 @@ describe('review regressions', () => {
     await until(lead, '[request r-1 to b failed')
     await new Promise(r => setTimeout(r, 300))
     expect(adapter.requests.some(isWorker('b'))).toBe(false)
+  })
+
+  it('a request that fails reaches the lead directly and does not wake the fork that asked', async () => {
+    const hold = gate()
+    const called = (o: GenerateOptions, tool: string) => o.messages.some(m => m.role === 'assistant' && JSON.stringify(m).includes(`"name":"${tool}"`))
+    const { ctx, lead, adapter } = await setup(async o => {
+      if (o.sessionId === 'lead') return textResponse('LEAD')
+      if (isWorker('billing')(o)) { await hold.promise; return textResponse('never heard') }
+      return called(o, 'agent_create') ? textResponse('CONCLUDED') : toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
+    })
+    const scheduler = install(ctx)
+    lead.followup(user('look at billing retries'))
+    await until(lead, 'Its conclusion')
+    // Archiving waits for the cut-off round; this mock's gate ignores the abort a real request honors.
+    const archiving = scheduler.archive(lead, 'billing')
+    hold.open()
+    await archiving
+    await until(lead, '[request r-1 to billing failed')
+    expect(leadSaw(lead, 'asked by fork-1')).toBe(1)
+    // One conclusion for one input, and the fork made only its two original model calls.
+    expect(leadSaw(lead, 'Its conclusion')).toBe(1)
+    expect(adapter.requests.filter(r => r.sessionId === forksOf(lead)[0])).toHaveLength(2)
   })
 })
