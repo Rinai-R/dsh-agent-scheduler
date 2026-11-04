@@ -16,9 +16,10 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { appendForkModel, forkModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { schedulerTools, sectionFor } from './tools.js'
+import { installMemberModels } from './member-model.js'
 
 export const name = 'agent-scheduler-rule'
-export const inject = ['subagents', 'agents', 'commands', 'tools', 'systemPrompt', 'sessionQuery']
+export const inject = ['subagents', 'agents', 'commands', 'tools', 'systemPrompt', 'sessionQuery', 'llm']
 
 /** Plugin configuration. */
 export interface Config {
@@ -160,6 +161,7 @@ export function apply(ctx: Context, config: Config): void {
     order: 900,
     text: (context) => context.agent === undefined ? '' : sectionFor(scheduler, context.agent),
   }), 'agent-scheduler: section')
+  installMemberModels(ctx, scheduler)
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/schedule'),
     name: 'schedule',

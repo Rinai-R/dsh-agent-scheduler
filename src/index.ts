@@ -21,9 +21,9 @@ export function apply(ctx: Context): void {
   installForkFrom(ctx)
   ctx.effect(() => ctx.sessionProjections.register({
     key: SCHEDULER_PROJECTION,
-    // 3: the fold carries the scheduling switch. 4: and the `/fork model` override. Older cached
-    // state is dropped and refolded.
-    stateVersion: 4,
+    // 3: the fold carries the scheduling switch. 4: the `/fork model` override. 5: each member's
+    // own model. Older cached state is dropped and refolded.
+    stateVersion: 5,
     stateSchema: rosterSchema,
     init: initRoster,
     apply: applyRoster,
@@ -38,4 +38,5 @@ export * from './ledger.js'
 export * from './projection.js'
 export * from './rounds.js'
 export * from './tools.js'
+export * from './member-model.js'
 export { parseForkCommand, type Config } from './rule-plugin.js'

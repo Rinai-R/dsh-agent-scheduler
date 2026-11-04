@@ -7,6 +7,7 @@
 import type { SessionEvent, SessionHeader, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { ZodType } from 'zod'
 import { inputOf, recordReaders as R, type ForkModelSelection } from './records.js'
+import { memberModelRecordOf } from './member-model.js'
 
 /** Projection key registered with the session-projection registry. */
 export const SCHEDULER_PROJECTION = 'agentScheduler'
@@ -28,6 +29,8 @@ export interface RosterMember {
   /** Worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly detail?: string | undefined
+  /** Model chosen for this member from its chat (`/agent-model`); absent uses its start model. */
+  readonly pickedModel?: ForkModelSelection | undefined
   /** Seq of the last `turn/end` of this member's log already attributed. */
   readonly settledThrough?: number | undefined
 }
@@ -176,6 +179,11 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     const next = forkModel.selection === null ? null : compact({ ...forkModel.selection })
     return JSON.stringify(next) === JSON.stringify(state.forkModel) ? state : { ...state, forkModel: next }
   }
+  const picked = memberModelRecordOf(event)
+  if (picked !== undefined) {
+    if (!state.members.some(m => m.id === picked.agent)) return state
+    return { ...state, members: upsert(state.members, picked.agent, m => { const { pickedModel: _, ...rest } = m!; return picked.selection === null ? rest : { ...rest, pickedModel: compact({ ...picked.selection }) } }) }
+  }
   const settled = R.settled(event)
   if (settled !== undefined) {
     if (!state.members.some(m => m.id === settled.agent)) return state
@@ -224,6 +232,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
   for (const key of ['role', 'cwd', 'model', 'from', 'detail']) if (!optionalString(m[key])) fail(`member ${key}`)
+  if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
 }
 

@@ -5,7 +5,7 @@
  * source of "waiting for you"); opening a fork or worker reuses the native subagent-chat
  * resource, so the embedded conversation, its composer and its stop action are the product's own.
  */
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useState, useSyncExternalStore } from 'react'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
@@ -32,7 +32,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string; readonly pickedModel?: ForkModel }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly forkModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
@@ -150,6 +150,16 @@ const STYLE = `
 .sch-request-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-brand-primary-new-colorprimary-new-color,currentColor)}
 .sch-request-hint{margin-left:auto;color:var(--dsw-alias-label-tertiary)}
 .sch-request-body{padding:0 14px 10px 29px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;color:var(--dsw-alias-label-primary)}
+.sch-mm{position:relative;display:inline-flex;align-items:center}
+.sch-mm-trigger{display:inline-flex;align-items:center;gap:4px;height:28px;max-width:220px;border:0;background:none;padding:0 8px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sch-mm-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.sch-mm-trigger:disabled{opacity:.6;cursor:default}
+.sch-mm-menu{position:absolute;right:0;bottom:calc(100% + 6px);z-index:50;min-width:240px;max-height:360px;overflow:auto;padding:4px;border-radius:12px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.sch-mm-head{padding:6px 10px 2px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-mm-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;border:0;background:none;padding:6px 10px;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;text-align:left;cursor:pointer}
+.sch-mm-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.sch-mm-item[aria-checked=true]{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-label-primary))}
+.sch-mm-effort{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-roster-reqs{margin-right:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
@@ -456,6 +466,9 @@ const ICON = {
       <rect x="2" y="3" width="12" height="3" rx="1" /><path d="M3 6v6.5c0 .6.4 1 1 1h8c.6 0 1-.4 1-1V6M6.5 9h3" />
     </svg>
   ),
+  chevronDown: (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+  ),
   chevron: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
   ),
@@ -605,7 +618,123 @@ export function subline(member: Member): string {
 }
 
 /** One provider group of the Host model catalog (`remote.session.modelCatalog`). */
-export interface CatalogGroup { readonly id: string; readonly name: string; readonly models: readonly { readonly id: string; readonly name: string }[] }
+/** Reasoning levels a catalog model advertises. */
+export interface CatalogReasoning { readonly defaultEffort?: string; readonly efforts: readonly { readonly id: string; readonly name: string }[] }
+export interface CatalogGroup { readonly id: string; readonly name: string; readonly models: readonly { readonly id: string; readonly name: string; readonly reasoning?: CatalogReasoning }[] }
+
+/**
+ * The command that sets one member's model, run in the main Session.
+ * @param member - member name.
+ * @param selection - the choice, or null for the model it started with.
+ * @returns the command line.
+ */
+export function memberModelCommand(member: string, selection: ForkModel | null): string {
+  if (selection === null) return `/agent-model ${member} default`
+  return `/agent-model ${member} ${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` ${selection.reasoningEffort}`}`
+}
+
+/**
+ * What the member composer's trigger says.
+ * @param groups - the catalog.
+ * @param selection - the member's own choice.
+ * @returns the label: model name and effort, or 「默认模型」.
+ */
+export function memberModelLabel(groups: readonly CatalogGroup[], selection: ForkModel | null | undefined): string {
+  if (selection === null || selection === undefined) return '默认模型'
+  const model = groups.find(g => g.id === selection.provider)?.models.find(m => m.id === selection.model)
+  const name = model?.name ?? selection.model
+  const effort = selection.reasoningEffort === undefined ? undefined : model?.reasoning?.efforts.find(e => e.id === selection.reasoningEffort)?.name ?? selection.reasoningEffort
+  return effort === undefined ? name : `${name} · ${effort}`
+}
+
+/**
+ * Model picker in a fork's or worker's own chat composer: the runtime's selector hides itself for
+ * subagent Sessions, so this one sets the member's model through the main Session.
+ * @param deps - who the member is, the command runner and the catalog.
+ * @returns the slot component.
+ */
+/** A subscribable read of one projection key, as the client session binding exposes it. */
+export interface Face { getSnapshot: () => unknown; subscribe: (listener: () => void) => () => void }
+const NO_FACE: Face = { getSnapshot: () => undefined, subscribe: () => () => undefined }
+
+/**
+ * The member a Session is, from its parent's roster.
+ * @param roster - the parent's roster view.
+ * @param sessionId - the child Session.
+ * @returns its name, or undefined when it is not a live member.
+ */
+export function memberOf(roster: Roster | undefined, sessionId: string): Member | undefined {
+  return roster?.members.find(m => m.id === sessionId && m.state !== 'archived' && m.state !== 'failed')
+}
+
+export function createMemberModelPicker(deps: {
+  parentOf: (sessionId: string) => string | undefined
+  rosterFace: (parent: string) => Face
+  run: (sessionId: string, line: string) => Promise<string | null>
+  has: (sessionId: string, name: string) => Promise<boolean>
+  catalog: () => Promise<readonly CatalogGroup[]>
+}) {
+  return memo(function MemberModelPicker(props: { sessionId?: string }) {
+    const sessionId = props.sessionId
+    const parentId = sessionId === undefined ? undefined : deps.parentOf(sessionId)
+    const face = parentId === undefined ? NO_FACE : deps.rosterFace(parentId)
+    const roster = useSyncExternalStore(face.subscribe, face.getSnapshot) as Roster | undefined
+    const row = sessionId === undefined ? undefined : memberOf(roster, sessionId)
+    const member = parentId === undefined || row === undefined ? undefined : { parent: parentId, name: row.name }
+    const own = row?.pickedModel ?? null
+    const [groups, setGroups] = useState<readonly CatalogGroup[]>([])
+    const [open, setOpen] = useState(false)
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [supported, setSupported] = useState(false)
+    const parent = member?.parent
+    useEffect(() => {
+      if (parent === undefined) return undefined
+      let alive = true
+      deps.has(parent, 'agent-model').then(ok => { if (alive) setSupported(ok) }, () => undefined)
+      deps.catalog().then(g => { if (alive) setGroups(g) }, () => undefined)
+      return () => { alive = false }
+    }, [parent])
+    if (member === undefined || !supported) return null
+    const choose = (selection: ForkModel | null) => {
+      setOpen(false)
+      setBusy(true)
+      setError(null)
+      deps.run(member.parent, memberModelCommand(member.name, selection)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    const same = (a: ForkModel | null, b: ForkModel | null) => JSON.stringify(a) === JSON.stringify(b)
+    const label = memberModelLabel(groups, own)
+    return (
+      <span className="sch-mm" data-scheduler-member-model={own === null ? 'default' : `${own.provider}/${own.model}${own.reasoningEffort === undefined ? '' : ` ${own.reasoningEffort}`}`}>
+        <button type="button" className="sch-mm-trigger" disabled={busy} aria-haspopup="menu" aria-expanded={open} aria-label={`${member.name} 的模型：${label}`} title={`${member.name} 自己用的模型，下一步生效（/agent-model）。换成和 lead 不同的模型会用不上 lead 的提示缓存。`} onClick={() => { setOpen(v => !v) }}>
+          {label}{ICON.chevronDown}
+        </button>
+        {open ? (
+          <div className="sch-mm-menu" role="menu">
+            <button type="button" role="menuitemradio" aria-checked={own === null} className="sch-mm-item" onClick={() => { choose(null) }}>默认模型（创建时的模型）</button>
+            {groups.map(group => (
+              <div key={group.id} className="sch-mm-group" role="group" aria-label={group.name}>
+                <div className="sch-mm-head">{group.name}</div>
+                {group.models.flatMap(model => {
+                  const levels = model.reasoning?.efforts ?? []
+                  const base = { provider: group.id, model: model.id }
+                  if (levels.length === 0) {
+                    return [<button key={model.id} type="button" role="menuitemradio" aria-checked={same(own, base)} className="sch-mm-item" data-value={`${group.id}/${model.id}`} onClick={() => { choose(base) }}>{model.name}</button>]
+                  }
+                  return levels.map(level => {
+                    const selection = { ...base, reasoningEffort: level.id }
+                    return <button key={`${model.id}:${level.id}`} type="button" role="menuitemradio" aria-checked={same(own, selection)} className="sch-mm-item" data-value={`${group.id}/${model.id} ${level.id}`} onClick={() => { choose(selection) }}>{model.name}<span className="sch-mm-effort">{level.name}</span></button>
+                  })
+                })}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
+      </span>
+    )
+  })
+}
 
 /** Value of the 「分身模型」 select for the lead's model. */
 export const SAME_AS_LEAD = ''
@@ -895,5 +1024,10 @@ export function apply(ctx: any): void {
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
   const supports = (sessionId: string) => has(sessionId, 'schedule')
+  /** Parent of an addressed fork or worker chat. */
+  const parentOf = (sessionId: string): string | undefined => (ctx.sessions?.subagentAddress?.(sessionId) as { parentSessionId?: string } | undefined)?.parentSessionId
+  /** The parent's roster projection; the parent is the open main Session, so its binding is retained. */
+  const rosterFace = (parent: string): Face => ctx.sessions?.binding?.(parent)?.session?.projections?.faceOf?.(ROSTER) ?? NO_FACE
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({ name: 'conversation.input.right', id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf, rosterFace, run, has, catalog })))
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
 }
