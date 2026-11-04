@@ -150,6 +150,7 @@ const STYLE = `
 .sch-roster-foldrow .sch-roster-fold{margin:0}
 .sch-roster-clear{border:0;background:none;padding:4px 8px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
 .sch-roster-clear:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.sch-roster-notice{margin:10px 12px 0;padding:8px 10px;border-radius:8px;background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));font:var(--dsw-font-xxs-12);line-height:18px}
 .sch-roster-failure{margin:8px 12px 0;padding:6px 10px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
 .sch-roster-fold{display:flex;align-items:center;gap:4px;margin:6px 8px 0;border:0;background:none;padding:6px 10px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-fold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
@@ -523,7 +524,7 @@ export function subline(member: Member): string {
 export function createAgentsPage(ctx: {
   sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined }
   sidebarRight?: SidebarFace
-}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable') {
+}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true) {
   return memo(function AgentsPage(props: {
     sessionId?: string
     useProjection?: (key: string) => unknown
@@ -539,12 +540,23 @@ export function createAgentsPage(ctx: {
     const [showDone, setShowDone] = useState(false)
     const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
     const [failure, setFailure] = useState<string | null>(null)
+    // The browser half updates as soon as the plugin is installed; the host half (and with it
+    // /agents) only after DeepSeek Harness restarts. Ask the Session instead of failing on click.
+    const [canArchiveHere, setCanArchiveHere] = useState(true)
+    const sessionId = props.sessionId
+    useEffect(() => {
+      if (sessionId === undefined) return undefined
+      let alive = true
+      has(sessionId, 'agents').then(ok => { if (alive) setCanArchiveHere(ok) }, () => undefined)
+      return () => { alive = false }
+    }, [sessionId])
     const archive = (target: string) => {
       if (props.sessionId === undefined) return
       setPending(p => new Set([...p, target]))
       setFailure(null)
       const settle = (error: string | null) => {
         setPending(p => { const next = new Set(p); next.delete(target); return next })
+        if (error !== null && /unknown command/u.test(error)) { setCanArchiveHere(false); setFailure(null); return }
         setFailure(error)
       }
       run(props.sessionId, `/agents archive ${target}`).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
@@ -576,7 +588,7 @@ export function createAgentsPage(ctx: {
     const counts = countsOf(rows, statuses)
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
-      const canArchive = member.state !== 'archived' && state !== 'running' && state !== 'waiting'
+      const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
         <button type="button" className="sch-roster-row" data-row={state} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
@@ -607,6 +619,7 @@ export function createAgentsPage(ctx: {
     return (
       <div className="sch-roster" data-scheduler-roster="">
         {failure === null ? null : <div className="sch-roster-failure" role="status">{failure}</div>}
+        {canArchiveHere ? null : <div className="sch-roster-notice" role="status" data-scheduler-restart="">插件已更新，但 DeepSeek Harness 还在用旧版本运行，暂时不能归档。按 ⌘Q 完全退出再打开即可。</div>}
         <div className="sch-roster-head">
           <div>
             <div className="sch-roster-title">Agents</div>
@@ -626,7 +639,9 @@ export function createAgentsPage(ctx: {
                     <button type="button" className="sch-roster-fold" aria-expanded={showDone} onClick={() => { setShowDone(v => !v) }}>
                       {ICON.chevron}已交回 {done.length}
                     </button>
-                    <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title="归档所有已交回、没有待回答请求的分身（/agents archive done）" onClick={() => { archive('done') }}>全部归档</button>
+                    {canArchiveHere
+                      ? <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title="归档所有已交回、没有待回答请求的分身（/agents archive done）" onClick={() => { archive('done') }}>全部归档</button>
+                      : null}
                   </div>
                   {showDone ? done.map(member => row(member)) : null}
                 </>
@@ -682,13 +697,14 @@ export function apply(ctx: any): void {
     if (value === undefined) return `unknown command: ${line.split(' ')[0]}`
     return value.kind === 'error' ? (value.text ?? 'failed') : null
   }
-  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run)))
+  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has)))
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
-  const supports = async (sessionId: string): Promise<boolean> => {
+  const has = async (sessionId: string, name: string): Promise<boolean> => {
     const result = await ctx.remote.commands.list(sessionId)
     if (!result.ok) throw new Error(result.error.message)
-    return (result.value as readonly { name?: string }[]).some(command => command.name === 'schedule')
+    return (result.value as readonly { name?: string }[]).some(command => command.name === name)
   }
+  const supports = (sessionId: string) => has(sessionId, 'schedule')
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
 }
