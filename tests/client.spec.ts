@@ -1,6 +1,7 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, inputDefinition as def, rowStateOf } from '../src/client/index.js'
+import { chatPlacement, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
+import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
 const column = (panes: Array<{ id: string; roster?: boolean }>) => ({
@@ -70,10 +71,33 @@ describe('client activation', () => {
       sidebarRightTabs: { register: () => () => undefined },
       // The real slot runtime may call the factory at once; anything it closes over must exist.
       slots: { inject: (_name: string, f: () => unknown) => { f() }, register: (seat: { name: string }) => { registered.push(seat.name); return () => undefined } },
-      remote: { commands: { execute: async () => ({ ok: true, value: { kind: 'success' } }), list: async () => ({ ok: true, value: [] }) } },
+      remote: { commands: { execute: async () => ({ ok: true, value: { kind: 'success' } }), list: async () => ({ ok: true, value: [] }) }, session: { modelCatalog: async () => ({ ok: true, value: { groups: [] } }) } },
       sessions: {}, sidebarRight: {}, uiWorkspace: {},
     }
     expect(() => { apply(ctx) }).not.toThrow()
     expect(registered).toEqual(expect.arrayContaining(['conversation.chat.node', 'sidebar.right.pane.tab', 'conversation.input.left']))
+  })
+})
+
+describe('fork model picker', () => {
+  const groups = [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'v4', name: 'V4' }] }, { id: 'glm-gateway', name: 'GLM', models: [{ id: 'claude/opus', name: 'Opus' }] }]
+  it('maps options to /fork commands the host parses back to the same selection', () => {
+    expect(forkModelValue(null)).toBe(SAME_AS_LEAD)
+    expect(forkModelCommand(SAME_AS_LEAD)).toBe('/fork model default')
+    expect(parseForkCommand(forkModelCommand(SAME_AS_LEAD).slice('/fork '.length))).toBeNull()
+    const value = forkModelValue({ provider: 'glm-gateway', model: 'claude/opus' })
+    expect(forkModelCommand(value)).toBe('/fork model glm-gateway/claude/opus')
+    expect(parseForkCommand(forkModelCommand(value).slice('/fork '.length))).toEqual({ provider: 'glm-gateway', model: 'claude/opus' })
+    // Re-picking the current model keeps the effort set by command; another model drops it.
+    const current = { provider: 'glm-gateway', model: 'claude/opus', reasoningEffort: 'high' }
+    expect(forkModelCommand(value, current)).toBe('/fork model glm-gateway/claude/opus high')
+    expect(forkModelCommand(forkModelValue({ provider: 'deepseek', model: 'v4' }), current)).toBe('/fork model deepseek/v4')
+  })
+  it('keeps an override the catalog no longer lists visible instead of showing another value', () => {
+    expect(forkModelGroups(groups, null)).toBe(groups)
+    expect(forkModelGroups(groups, { provider: 'deepseek', model: 'v4' })).toBe(groups)
+    const shown = forkModelGroups(groups, { provider: 'gone', model: 'm' })
+    expect(shown).toHaveLength(3)
+    expect(shown[2]).toMatchObject({ id: 'gone', models: [{ id: 'm' }] })
   })
 })

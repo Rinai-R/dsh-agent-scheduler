@@ -6,7 +6,7 @@
  */
 import type { SessionEvent, SessionHeader, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { ZodType } from 'zod'
-import { inputOf, recordReaders as R } from './records.js'
+import { inputOf, recordReaders as R, type ForkModelSelection } from './records.js'
 
 /** Projection key registered with the session-projection registry. */
 export const SCHEDULER_PROJECTION = 'agentScheduler'
@@ -51,6 +51,8 @@ export interface Roster {
   /** Scheduling switch as last recorded; null before any `/schedule`. */
   readonly enabled: boolean | null
   readonly role: string | null
+  /** `/fork model` override for later forks; null uses the plugin config, else the lead's model. */
+  readonly forkModel: ForkModelSelection | null
   readonly members: readonly RosterMember[]
   readonly requests: readonly RosterRequest[]
 }
@@ -60,11 +62,12 @@ export interface RosterView {
   /** Whether user messages go to forks now (see {@link schedulingOn}). */
   readonly enabled: boolean
   readonly role: string | null
+  readonly forkModel: ForkModelSelection | null
   readonly members: readonly Omit<RosterMember, 'settledThrough'>[]
   readonly openRequests: readonly Pick<RosterRequest, 'id' | 'from' | 'to' | 'text'>[]
 }
 
-export const EMPTY_ROSTER: Roster = { enabled: null, role: null, members: [], requests: [] }
+export const EMPTY_ROSTER: Roster = { enabled: null, role: null, forkModel: null, members: [], requests: [] }
 
 /**
  * Whether a Session schedules: its last switch, or, for a log from before the switch existed,
@@ -163,6 +166,11 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const mode = R.mode(event)
   if (mode !== undefined) return mode.on === state.enabled ? state : { ...state, enabled: mode.on }
+  const forkModel = R.forkModel(event)
+  if (forkModel !== undefined) {
+    const next = forkModel.selection === null ? null : compact({ ...forkModel.selection })
+    return JSON.stringify(next) === JSON.stringify(state.forkModel) ? state : { ...state, forkModel: next }
+  }
   const settled = R.settled(event)
   if (settled !== undefined) {
     if (!state.members.some(m => m.id === settled.agent)) return state
@@ -184,6 +192,7 @@ export function rosterView(state: Roster): RosterView {
     view = {
       enabled: schedulingOn(state),
       role: state.role,
+      forkModel: state.forkModel ?? null,
       members: state.members.map(({ settledThrough: _, ...member }) => member),
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
     }
@@ -199,6 +208,11 @@ const optionalString = (v: unknown): boolean => v === undefined || typeof v === 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 function fail(what: string): never { throw new TypeError(`agentScheduler projection: invalid ${what}`) }
+
+function checkForkModel(v: unknown): void {
+  if (v === null) return
+  if (!isRecord(v) || !isString(v.provider) || !isString(v.model) || !optionalString(v.reasoningEffort)) fail('forkModel')
+}
 
 function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
@@ -216,6 +230,7 @@ export const rosterSchema = {
   parse(value: unknown): Roster {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.requests)) fail('state')
     if (value.enabled !== null && typeof value.enabled !== 'boolean') fail('state enabled')
+    checkForkModel(value.forkModel)
     for (const m of value.members) checkMember(m, false)
     for (const r of value.requests) {
       if (!isRecord(r) || !isString(r.id) || !isString(r.from) || !isString(r.to) || !isString(r.text)) fail('request')
@@ -230,6 +245,7 @@ export const rosterViewSchema = {
   parse(value: unknown): RosterView {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.openRequests)) fail('view')
     if (typeof value.enabled !== 'boolean') fail('view enabled')
+    checkForkModel(value.forkModel)
     for (const m of value.members) checkMember(m, true)
     return value as unknown as RosterView
   },

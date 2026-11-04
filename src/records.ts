@@ -170,5 +170,13 @@ export const recordReaders = {
   request: (e: SessionEvent) => dataOf<RequestRecord>(e, REQUEST_RECORD),
   role: (e: SessionEvent) => dataOf<RoleRecord>(e, ROLE_RECORD),
   settled: (e: SessionEvent) => dataOf<SettledRecord>(e, SETTLED_RECORD),
+  forkModel: (e: SessionEvent) => {
+    const d = dataOf<ForkModelRecord>(e, FORK_MODEL_RECORD)
+    if (d === undefined) return undefined
+    const sel = d.selection as Partial<ForkModelSelection> | null
+    if (sel === null) return d
+    if (typeof sel?.provider !== 'string' || typeof sel.model !== 'string' || (sel.reasoningEffort !== undefined && typeof sel.reasoningEffort !== 'string')) return undefined
+    return d
+  },
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
 }

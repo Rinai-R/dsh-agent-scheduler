@@ -5,6 +5,7 @@ import { setup, teardown } from './support/harness.js'
 import { textResponse } from './support/mock-adapter.js'
 import { install, user, until } from './support/scheduler.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema, rosterView, rosterViewSchema, type Roster } from '../src/projection.js'
+import { runForkCommand } from '../src/rule-plugin.js'
 
 afterEach(teardown)
 
@@ -34,6 +35,26 @@ describe('roster projection', () => {
     expect(rosterViewSchema.parse(wire)).toBe(wire)
     expect(rosterView(after)).toBe(wire)
     expect(wire.members.every(m => !('settledThrough' in m))).toBe(true)
-    expect(() => rosterSchema.parse({ enabled: null, role: null, members: [{ id: 1 }], requests: [] })).toThrow(/invalid member/)
+    expect(() => rosterSchema.parse({ enabled: null, role: null, forkModel: null, members: [{ id: 1 }], requests: [] })).toThrow(/invalid member/)
+  })
+
+  it('folds the /fork model override the Agents page shows', async () => {
+    const { lead } = await setup(() => textResponse('X'))
+    const run = (rawInput: string) => runForkCommand({ agent: lead, rawInput, attachments: [] } as never)
+    expect(rosterView(rosterOf(lead)).forkModel).toBeNull()
+    run('model mock-b/other high')
+    const set = rosterOf(lead)
+    expect(set.forkModel).toEqual({ provider: 'mock-b', model: 'other', reasoningEffort: 'high' })
+    expect(rosterViewSchema.parse(rosterView(set)).forkModel).toEqual(set.forkModel)
+    expect(rosterSchema.parse(JSON.parse(JSON.stringify(set)))).toEqual(set)
+    // The same selection again changes nothing, so the projection publishes nothing.
+    const event = lead.session.snapshotEvents().at(-1)!
+    expect(applyRoster(set, event)).toBe(set)
+    run('model default')
+    expect(rosterOf(lead).forkModel).toBeNull()
+    // Malformed records are ignored; a malformed state does not validate.
+    const bad = { type: 'plugin:dsh-agent-scheduler/fork-model', seq: 1, time: 1, ignorable: true, data: { version: 1, selection: { provider: 1 } } }
+    expect(applyRoster(set, bad as never)).toBe(set)
+    expect(() => rosterSchema.parse({ ...set, forkModel: { provider: 'a' } })).toThrow(/invalid forkModel/)
   })
 })

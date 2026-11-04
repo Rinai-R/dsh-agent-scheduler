@@ -21,8 +21,9 @@ export function apply(ctx: Context): void {
   installForkFrom(ctx)
   ctx.effect(() => ctx.sessionProjections.register({
     key: SCHEDULER_PROJECTION,
-    // 3: the fold carries the scheduling switch; older cached state is dropped and refolded.
-    stateVersion: 3,
+    // 3: the fold carries the scheduling switch. 4: and the `/fork model` override. Older cached
+    // state is dropped and refolded.
+    stateVersion: 4,
     stateSchema: rosterSchema,
     init: initRoster,
     apply: applyRoster,

@@ -20,7 +20,7 @@ const AGENTS_ID = 'dsh-agent-scheduler/agents'
 const AGENTS_KIND = 'agent-scheduler-agents'
 
 export const name = 'dsh-agent-scheduler'
-export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace', 'remote', 'remote.commands']
+export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace', 'remote', 'remote.commands', 'remote.session']
 
 interface Event { type: string; seq: number; time: number; data: Record<string, unknown> }
 type CardState = 'queued' | 'running' | 'done' | 'failed' | 'archived'
@@ -32,7 +32,9 @@ interface Ctx { key: string; id: string; state?: State; start?: { location: unkn
 
 /** One roster row as the host projection emits it. */
 interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string }
-interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
+/** Provider route and model, as `/fork model` records it. */
+export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
+interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly forkModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
 /** One Session's live status as the client root hook reports it. */
 interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
 type Statuses = Map<string, StatusRow>
@@ -156,6 +158,13 @@ const STYLE = `
 .sch-roster-fold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-fold svg{transition:transform .15s}
 .sch-roster-fold[aria-expanded=true] svg{transform:rotate(90deg)}
+.sch-forkmodel{display:flex;flex-direction:column;gap:4px;padding:2px 12px 6px 18px}
+.sch-forkmodel-row{display:flex;align-items:center;gap:8px;min-width:0}
+.sch-forkmodel-label{flex:none;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-forkmodel select{flex:1;min-width:0;height:26px;border:1px solid var(--dsw-alias-border-default,var(--dsw-alias-interactive-bg-hover));border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);padding:0 6px;cursor:pointer}
+.sch-forkmodel select:disabled{opacity:.6;cursor:default}
+.sch-forkmodel-note{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);line-height:16px}
+.sch-forkmodel-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
 .sch-roster-empty{margin:auto;padding:24px;max-width:220px;text-align:center;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:18px}
 `
 
@@ -516,6 +525,91 @@ export function subline(member: Member): string {
   return [dir, duty].filter(part => part !== undefined && part !== '').join(' · ')
 }
 
+/** One provider group of the Host model catalog (`remote.session.modelCatalog`). */
+export interface CatalogGroup { readonly id: string; readonly name: string; readonly models: readonly { readonly id: string; readonly name: string }[] }
+
+/** Value of the 「分身模型」 select for the lead's model. */
+export const SAME_AS_LEAD = ''
+
+/**
+ * Encode a fork model as a select value; JSON keeps provider ids with slashes intact.
+ * @param model - the selection, or null for the lead's.
+ * @returns the option value.
+ */
+export const forkModelValue = (model: ForkModel | null | undefined): string =>
+  model === null || model === undefined ? SAME_AS_LEAD : JSON.stringify([model.provider, model.model])
+
+/**
+ * The command a select value stands for.
+ * @param value - an option value from {@link forkModelValue}.
+ * @param current - the current override, whose effort is kept when only re-picking the same model.
+ * @returns the `/fork` command line.
+ */
+export function forkModelCommand(value: string, current?: ForkModel | null): string {
+  if (value === SAME_AS_LEAD) return '/fork model default'
+  const [provider, model] = JSON.parse(value) as [string, string]
+  const effort = current?.provider === provider && current.model === model ? current.reasoningEffort : undefined
+  return `/fork model ${provider}/${model}${effort === undefined ? '' : ` ${effort}`}`
+}
+
+/**
+ * The select's option groups: the catalog, plus the current override when the catalog lacks it
+ * (signed out, provider removed), so the select never silently shows another value.
+ * @param groups - catalog groups, in catalog order.
+ * @param current - the current override.
+ * @returns groups to render.
+ */
+export function forkModelGroups(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): readonly CatalogGroup[] {
+  if (current === null || current === undefined) return groups
+  if (groups.some(g => g.id === current.provider && g.models.some(m => m.id === current.model))) return groups
+  return [...groups, { id: current.provider, name: `${current.provider}（不在当前模型列表）`, models: [{ id: current.model, name: current.model }]}]
+}
+
+/**
+ * The 「分身模型」 control of the Agents page: shows the Session's `/fork model` override and
+ * changes it by running that command, so the log records it like a typed command.
+ * @param deps - session, current value, command runner, and catalog loader.
+ * @returns the control.
+ */
+function ForkModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: () => Promise<readonly CatalogGroup[]> }) {
+  const { sessionId, current, run, catalog } = deps
+  const [groups, setGroups] = useState<readonly CatalogGroup[] | undefined>(undefined)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    catalog().then(g => { if (alive) setGroups(g) }, (reason: unknown) => { if (alive) setLoadError(reason instanceof Error ? reason.message : String(reason)) })
+    return () => { alive = false }
+  }, [sessionId])
+  const value = forkModelValue(current)
+  const change = (next: string) => {
+    if (next === value) return
+    setBusy(true)
+    setError(null)
+    run(sessionId, forkModelCommand(next, current)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
+  }
+  const shown = forkModelGroups(groups ?? [], current)
+  return (
+    <div className="sch-forkmodel" data-scheduler-fork-model={value === SAME_AS_LEAD ? 'lead' : value}>
+      <label className="sch-forkmodel-row" title="之后新开的分身用哪个模型（/fork model）。默认和 lead 用同一个模型，能复用 lead 的提示缓存；换成别的模型后，每个分身都要从头计费、首轮更慢。已在跑的分身不受影响。">
+        <span className="sch-forkmodel-label">分身模型</span>
+        <select aria-label="分身模型" value={value} disabled={busy} onChange={(e) => { change(e.currentTarget.value) }}>
+          <option value={SAME_AS_LEAD}>同 lead（默认）</option>
+          {shown.map(group => (
+            <optgroup key={group.id} label={group.name}>
+              {group.models.map(model => <option key={model.id} value={forkModelValue({ provider: group.id, model: model.id })}>{model.name}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      {value === SAME_AS_LEAD ? null : <div className="sch-forkmodel-note" role="note">分身不再和 lead 同模型，用不上 lead 的提示缓存：每个新分身首轮更慢、更贵。</div>}
+      {loadError === null ? null : <div className="sch-forkmodel-error" role="status" title={loadError}>模型列表加载失败</div>}
+      {error === null ? null : <div className="sch-forkmodel-error" role="status" title={error}>切换失败：{error}</div>}
+    </div>
+  )
+}
+
 /**
  * Create the Agents page body for the right sidebar.
  * @param ctx - client plugin context, for the controller's known child addresses.
@@ -524,7 +618,7 @@ export function subline(member: Member): string {
 export function createAgentsPage(ctx: {
   sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined }
   sidebarRight?: SidebarFace
-}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true) {
+}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: () => Promise<readonly CatalogGroup[]>) {
   return memo(function AgentsPage(props: {
     sessionId?: string
     useProjection?: (key: string) => unknown
@@ -543,11 +637,14 @@ export function createAgentsPage(ctx: {
     // The browser half updates as soon as the plugin is installed; the host half (and with it
     // /agents) only after DeepSeek Harness restarts. Ask the Session instead of failing on click.
     const [canArchiveHere, setCanArchiveHere] = useState(true)
+    // Sessions started before the rule existed have no /fork; hide the picker there.
+    const [canPickModel, setCanPickModel] = useState(false)
     const sessionId = props.sessionId
     useEffect(() => {
       if (sessionId === undefined) return undefined
       let alive = true
       has(sessionId, 'agents').then(ok => { if (alive) setCanArchiveHere(ok) }, () => undefined)
+      has(sessionId, 'fork').then(ok => { if (alive) setCanPickModel(ok) }, () => undefined)
       return () => { alive = false }
     }, [sessionId])
     const archive = (target: string) => {
@@ -627,6 +724,7 @@ export function createAgentsPage(ctx: {
           </div>
           <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
         </div>
+        {sessionId === undefined || catalog === undefined || !canPickModel ? null : <ForkModelPicker sessionId={sessionId} current={roster?.forkModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0
           ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会交给一个分身。'}</div>
           : (
@@ -703,7 +801,13 @@ export function apply(ctx: any): void {
     if (!result.ok) throw new Error(result.error.message)
     return (result.value as readonly { name?: string }[]).some(command => command.name === name)
   }
-  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has)))
+  /** The Host's provider-grouped model catalog, the one the composer's model menu lists. */
+  const catalog = async (): Promise<readonly CatalogGroup[]> => {
+    const result = await ctx.remote.session.modelCatalog()
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+    return (result.value as { groups: readonly CatalogGroup[] }).groups
+  }
+  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has, catalog)))
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
   const supports = (sessionId: string) => has(sessionId, 'schedule')
