@@ -1,0 +1,237 @@
+/** P2 + P3: requests, attribution, routing back to the requester, worker tools, roles. */
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { gate, setup, stored, teardown } from './support/harness.js'
+import { textResponse, toolCallResponse } from './support/mock-adapter.js'
+import { body, forksOf, install, last, leadSaw, records, until, user } from './support/scheduler.js'
+import { AGENT_RECORD, REQUEST_RECORD } from '../src/records.js'
+
+afterEach(teardown)
+
+const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && o.sessionId !== 'main' && body(o).includes('You are a fork of the lead')
+const isWorker = (name: string) => (o: GenerateOptions) => body(o).includes(`You are worker \\"${name}\\"`)
+/** The system message is the first message of a request. */
+const systemOf = (o: GenerateOptions) => JSON.stringify(o.messages[0])
+/** Its content only: message ids differ between a read and a replayed request, the text does not. */
+const systemText = (o: GenerateOptions) => JSON.stringify(o.messages[0]?.content)
+const called = (o: GenerateOptions, tool: string) => o.messages.some(m => m.role === 'assistant' && JSON.stringify(m).includes(`"name":"${tool}"`))
+
+/** A fork that creates `billing` with a task, waits, and concludes from the reply. */
+function delegatingScript(worker: (o: GenerateOptions) => Promise<string> | string = () => 'BILLING ANSWER: retries lack backoff') {
+  let leadCalls = 0
+  const respond = async (o: GenerateOptions) => {
+    if (o.sessionId === 'lead' || o.sessionId === 'main') { leadCalls += 1; return textResponse('LEAD OK') }
+    if (isWorker('billing')(o)) return textResponse(await worker(o))
+    if (isFork(o)) {
+      if (last(o).includes('[reply to r-1 from billing]')) return textResponse('FORK FINAL: billing found missing backoff')
+      if (!called(o, 'agent_create')) return toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'owns billing retries', task: 'check the retry policy' })
+      return textResponse('FORK WAITING for billing')
+    }
+    return textResponse('OTHER')
+  }
+  return { respond, leadCalls: () => leadCalls }
+}
+
+describe('requests', () => {
+  it('a fork delegates to a new worker; the answer returns to the fork; only the final conclusion reaches the lead', async () => {
+    const script = delegatingScript()
+    const { ctx, lead, adapter } = await setup(script.respond)
+    install(ctx)
+    lead.followup(user('look at billing retries'))
+    await until(lead, 'Its conclusion')
+    const log = lead.session.snapshotEvents()
+    expect(leadSaw(lead, 'FORK FINAL')).toBe(1)
+    expect(leadSaw(lead, 'FORK WAITING')).toBe(0)
+    expect(leadSaw(lead, 'BILLING ANSWER')).toBe(0)
+    expect(script.leadCalls()).toBe(1)
+    const reqs = records(log, REQUEST_RECORD)
+    const forkId = forksOf(lead)[0]
+    expect(reqs.find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', deliveredTo: forkId })
+    expect(records(log, AGENT_RECORD)).toEqual([expect.objectContaining({ action: 'created', name: 'billing', role: 'owns billing retries' })])
+    // The worker saw its role and the request, and was not told to use send_message.
+    const workerReq = adapter.requests.find(isWorker('billing'))!
+    expect(body(workerReq)).toContain('[request r-1 from fork-1]')
+    expect(body(workerReq)).not.toContain('Your parent agent id is')
+    expect(systemOf(workerReq)).toContain('Agent Scheduler: worker')
+  })
+
+  it('agent_send from the lead: the reply comes back to the lead', async () => {
+    let sent = false
+    const { ctx, lead } = await setup(o => {
+      if (isWorker('docs')(o)) return textResponse(body(o).includes('[request r-1 from lead]') ? 'DOCS: build is green' : 'docs ready')
+      if (o.sessionId === 'lead') {
+        if (!sent && body(o).includes('ask docs')) { sent = true; return toolCallResponse('s1', 'agent_send', { to: 'docs', message: 'is the build green?' }) }
+        return textResponse('LEAD')
+      }
+      return textResponse('FORK')
+    })
+    const scheduler = install(ctx)
+    scheduler.createWorker(lead, { name: 'docs', role: 'docs site' })
+    // The worker's first, task-less round reaches nobody.
+    await vi.waitFor(async () => { expect((await stored(ctx, SessionId(scheduler.ledgerOf(lead).find('docs')!.id))).events.some(e => e.type === 'turn/end')).toBe(true) })
+    await lead.whenIdle()
+    expect(leadSaw(lead, 'docs ready')).toBe(0)
+    lead.followup({ ...user('ask docs'), source: { kind: 'goal' } as never })
+    await until(lead, '[reply to r-1 from docs]')
+    expect(leadSaw(lead, 'DOCS: build is green')).toBe(1)
+  })
+
+  it('a reply whose requester was archived goes to the lead instead', async () => {
+    const hold = gate()
+    const script = delegatingScript(async () => { await hold.promise; return 'LATE ANSWER' })
+    const { ctx, lead } = await setup(script.respond)
+    const scheduler = install(ctx)
+    lead.followup(user('look at billing retries'))
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).find('billing')).toBeDefined() }, { timeout: 10_000 })
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).openFrom(forksOf(lead)[0]!)).toHaveLength(1) })
+    await scheduler.archive(lead, 'fork-1')
+    hold.open()
+    await until(lead, '[reply to r-1 from billing; fork-1 is archived')
+    expect(leadSaw(lead, 'LATE ANSWER')).toBe(1)
+  })
+
+  it('a message the user sends a worker directly is not a request and reaches nobody', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(isWorker('ops')(o) ? (last(o).includes('hello ops') ? 'OPS CHAT' : 'ops ready') : 'LEAD'))
+    const scheduler = install(ctx)
+    scheduler.createWorker(lead, { name: 'ops', role: 'deploys' })
+    const id = SessionId(scheduler.ledgerOf(lead).find('ops')!.id)
+    await vi.waitFor(async () => { expect((await stored(ctx, id)).events.some(e => e.type === 'turn/end')).toBe(true) })
+    await ctx.subagents.sendMessage(lead, id, [{ type: 'text', text: 'hello ops' }], { signal: new AbortController().signal })
+    await vi.waitFor(() => { expect(adapter.requests.some(r => r.sessionId === id && last(r).includes('hello ops'))).toBe(true) })
+    await new Promise(r => setTimeout(r, 300))
+    await lead.whenIdle()
+    expect(adapter.requests.filter(r => r.sessionId === 'lead')).toHaveLength(0)
+  })
+
+  it('report replaces the final message as the answer', async () => {
+    const script = delegatingScript()
+    const { ctx, lead } = await setup(async o => {
+      if (isWorker('billing')(o) && !called(o, 'report')) return toolCallResponse('r1', 'report', { summary: 'REPORTED SUMMARY' })
+      if (isWorker('billing')(o)) return textResponse('chatty final words')
+      return script.respond(o)
+    })
+    install(ctx)
+    lead.followup(user('look at billing retries'))
+    await until(lead, 'Its conclusion')
+    const reqs = records(lead.session.snapshotEvents(), REQUEST_RECORD)
+    expect(reqs.find(r => r.action === 'answered')?.answer).toBe('REPORTED SUMMARY')
+  })
+
+  it('a request answered after the main session restarts still reaches the fork', async () => {
+    const hold = gate()
+    const script = delegatingScript(async () => { await hold.promise; return 'ANSWER AFTER RESTART' })
+    const { ctx } = await setup(script.respond)
+    const opts = { provider: 'mock', model: 'lead-model' }
+    const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
+    const scheduler = install(ctx)
+    h1.agent.followup(user('look at billing retries'))
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(h1.agent).openFrom(forksOf(h1.agent)[0]!)).toHaveLength(1) }, { timeout: 10_000 })
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(h1.agent).requests.get('r-1')?.messageId).toBeDefined() })
+    await h1.dispose()
+    scheduler.forget('main')
+    hold.open()
+    const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
+    // The worker was released with its parent; the lead re-sends the request.
+    await scheduler.send(h2.agent, 'billing', 'check the retry policy (again)')
+    await until(h2.agent, '[reply to r-2 from billing]')
+    expect(leadSaw(h2.agent, 'ANSWER AFTER RESTART')).toBe(1)
+  })
+})
+
+describe('worker tools', () => {
+  it('uses the configured worker model unless the worker names one', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse('ready'))
+    const scheduler = install(ctx, { configuredWorkerModel: { provider: 'mock-b', model: 'worker-default' } })
+    scheduler.createWorker(lead, { name: 'typed', role: 'x' })
+    scheduler.createWorker(lead, { name: 'named', role: 'y', model: { provider: 'mock', model: 'explicit' } })
+    await vi.waitFor(() => { expect(adapter.requests.filter(r => isWorker('typed')(r) || isWorker('named')(r))).toHaveLength(2) })
+    expect(adapter.requests.find(isWorker('typed'))!.model).toBe('worker-default')
+    expect(adapter.requests.find(isWorker('named'))!.model).toBe('explicit')
+  })
+
+  it('recovers worker metadata from the log after the main Session restarts', async () => {
+    const { ctx } = await setup(o => textResponse(o.sessionId === 'main' ? 'MAIN' : 'worker says hi'))
+    const opts = { provider: 'mock', model: 'lead-model' }
+    const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
+    const scheduler = install(ctx)
+    scheduler.createWorker(h1.agent, { name: 'billing', role: 'owns billing retries', cwd: '/tmp/billing' })
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(h1.agent).find('billing')!.state).toBe('started') })
+    await h1.dispose()
+    scheduler.forget('main')
+    const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
+    const recovered = scheduler.ledgerOf(h2.agent).find('billing')!
+    expect(recovered).toMatchObject({ name: 'billing', kind: 'worker', role: 'owns billing retries', cwd: '/tmp/billing' })
+    const list = await ctx.tools.get('agent_list', h2.agent)!.execute({}, { agent: h2.agent, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; role?: string }> }
+    expect(list.agents).toEqual([expect.objectContaining({ name: 'billing', role: 'owns billing retries' })])
+  })
+
+  it('from: a new worker continues another worker\'s conversation', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'A DONE'))
+    const scheduler = install(ctx)
+    scheduler.createWorker(lead, { name: 'a', role: 'first' })
+    const aId = SessionId(scheduler.ledgerOf(lead).find('a')!.id)
+    await vi.waitFor(async () => { expect((await stored(ctx, aId)).events.some(e => e.type === 'turn/end')).toBe(true) })
+    scheduler.createWorker(lead, { name: 'b', role: 'second', from: 'a', task: 'continue' })
+    await vi.waitFor(() => { expect(adapter.requests.some(isWorker('b'))).toBe(true) })
+    const bReq = adapter.requests.find(isWorker('b'))!
+    // Its seed is a's own session: a's first prompt and answer precede b's task.
+    expect(body(bReq)).toContain('You are worker \\"a\\"')
+    expect(body(bReq)).toContain('A DONE')
+    const created = records(lead.session.snapshotEvents(), AGENT_RECORD).find(r => r.name === 'b')!
+    expect(created.from).toBe(aId)
+    expect(() => scheduler.createWorker(lead, { name: 'c', role: 'x', from: 'nobody' })).toThrow(/no agent named/)
+  })
+
+  it('validates names, never reuses them, lists, and archives', async () => {
+    const { ctx, lead } = await setup(() => textResponse('ready'))
+    const scheduler = install(ctx)
+    expect(() => scheduler.createWorker(lead, { name: 'Bad Name', role: 'x' })).toThrow(/kebab/)
+    expect(() => scheduler.createWorker(lead, { name: 'fork-3', role: 'x' })).toThrow(/reserved/)
+    scheduler.createWorker(lead, { name: 'infra', role: 'ci', cwd: '/tmp' })
+    expect(() => scheduler.createWorker(lead, { name: 'infra', role: 'x' })).toThrow(/taken/)
+    await vi.waitFor(async () => { expect((await stored(ctx, SessionId(scheduler.ledgerOf(lead).find('infra')!.id))).events.some(e => e.type === 'turn/end')).toBe(true) })
+    const list = ctx.tools.get('agent_list', lead)!
+    const listed = await list.execute({}, { agent: lead, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; cwd?: string }> }
+    expect(listed.agents).toEqual([expect.objectContaining({ name: 'infra', kind: 'worker', cwd: '/tmp' })])
+    await scheduler.archive(lead, 'infra')
+    expect(scheduler.ledgerOf(lead).find('infra')!.state).toBe('archived')
+    await expect(scheduler.send(lead, 'infra', 'x')).rejects.toThrow(/archived/)
+    expect(() => scheduler.createWorker(lead, { name: 'infra', role: 'x' })).toThrow(/taken/)
+  })
+
+  it('roles: the lead\'s role reaches the lead and forks with one identical system prompt; a worker has its own', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(isFork(o) ? 'FORK' : 'X'))
+    const scheduler = install(ctx)
+    scheduler.setRole(lead, 'LEAD ROLE: map every requirement')
+    lead.followup(user('a'))
+    await until(lead, 'Its conclusion')
+    scheduler.createWorker(lead, { name: 'billing', role: 'BILLING ROLE' })
+    await vi.waitFor(() => { expect(adapter.requests.some(isWorker('billing'))).toBe(true) })
+    const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
+    const forkReq = adapter.requests.find(isFork)!
+    const workerReq = adapter.requests.find(isWorker('billing'))!
+    expect(systemOf(leadReq)).toContain('LEAD ROLE')
+    expect(systemText(forkReq)).toBe(systemText(leadReq))
+    expect(systemOf(workerReq)).toContain('BILLING ROLE')
+    expect(systemOf(workerReq)).not.toContain('LEAD ROLE')
+  })
+
+  it('a worker at capacity is queued and starts later; its task still gets answered', async () => {
+    const hold = gate()
+    const { ctx, lead } = await setup(async o => {
+      if (isWorker('a')(o)) { await hold.promise; return textResponse('A DONE') }
+      if (isWorker('b')(o)) return textResponse(body(o).includes('[request r-1 from lead]') ? 'B ANSWER' : 'b ready')
+      return textResponse('LEAD')
+    }, 1)
+    const scheduler = install(ctx)
+    scheduler.createWorker(lead, { name: 'a', role: 'first' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('a')!.id))).toBeDefined() })
+    scheduler.createWorker(lead, { name: 'b', role: 'second', task: 'do b' })
+    await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).find('b')!.state).toBe('queued') })
+    // A finished child leaves residency by itself, so the slot frees without anyone archiving.
+    hold.open()
+    await until(lead, '[reply to r-1 from b]')
+    expect(leadSaw(lead, 'B ANSWER')).toBe(1)
+  })
+})

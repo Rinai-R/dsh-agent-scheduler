@@ -1,0 +1,105 @@
+{
+  "name": "dsh-agent-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DeepSeek Harness plugin: a lead agent that forks one analyst per input, long-lived worker agents, and a right-sidebar roster.",
+  "license": "MIT",
+  "author": "Rinai-R",
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24",
+    "dsh": ">=0.2.1-rc.5 <0.3.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "gen:preset": "node scripts/gen-preset.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-agent-preset": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-commands": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-fs-local": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-query": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-title": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-subagent": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-subagent-fork-in-process": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-working-directory": "0.2.1-rc.5",
+    "@deepseek-ai/schemastery": "3.18.5",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19.0.0",
+    "esbuild": "^0.28.0",
+    "react": "^19.0.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.0"
+  },
+  "icon": "./icon.svg",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./rule": {
+      "types": "./lib/rule-plugin.d.ts",
+      "default": "./lib/rule-plugin.js"
+    },
+    "./client": "./dist/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "dist",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-subagent",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-commands": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-session-query": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-session-title": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-subagent": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/schemastery": "~3.18.5"
+  }
+}
