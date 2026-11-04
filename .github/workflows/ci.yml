@@ -1,0 +1,70 @@
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm pack --dry-run
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    # One release per tag; a rerun of the same tag waits instead of racing.
+    concurrency: publish-${{ github.ref_name }}
+    permissions:
+      contents: write   # create the GitHub Release and upload the tgz
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Verify tag matches package.json version
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          if [ "v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}"
+            exit 1
+          fi
+      - run: npm run build
+      - name: Pack
+        id: pack
+        run: echo "file=$(npm pack --silent | tail -n 1)" >> "$GITHUB_OUTPUT"
+      - name: Publish to npm
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          if [[ "$VERSION" == *-* ]]; then TAG=next; else TAG=latest; fi
+          # Publish the exact tarball that is attached to the Release.
+          npm publish "${{ steps.pack.outputs.file }}" --access public --provenance --tag "$TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Create GitHub Release
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          PRERELEASE=""
+          if [[ "$VERSION" == *-* ]]; then PRERELEASE="--prerelease"; fi
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.file }}" \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag $PRERELEASE
+        env:
+          GH_TOKEN: ${{ github.token }}

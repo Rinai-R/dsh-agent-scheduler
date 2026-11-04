@@ -34,6 +34,21 @@ the lead is never blocked by an input.
   waits in order and is retried when a slot frees; the input card shows 排队中 instead of failing.
   Other failures are reported to the lead, not retried.
 
+## Install
+
+Requires DeepSeek Harness `>=0.2.1-rc.5 <0.3.0` (see `engines.dsh`).
+
+```bash
+dsh plugin add dsh-agent-scheduler            # latest release from npm
+dsh plugin add dsh-agent-scheduler@next       # latest prerelease
+dsh plugin --profile web add dsh-agent-scheduler   # into a specific profile
+```
+
+Each GitHub Release also carries the packed `.tgz`; install it with
+`dsh plugin add ./dsh-agent-scheduler-<version>.tgz`. When reinstalling a tarball, give it a new
+file name: the package manager does not replace the contents of a same-named tarball. Restart
+`dsh` (or the desktop app) afterwards.
+
 ## Enable it
 
 The plugin overrides the shipped `standard` preset with its own rows unchanged plus the scheduler

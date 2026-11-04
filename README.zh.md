@@ -19,6 +19,19 @@ DeepSeek Harness 插件：一个会话一个 lead，每条输入 fork 一个分�
   打开时是蓝色 chip，带在跑、等你的数量：点它打开 Agents 页，点前面的图标（悬停变 ×）关闭。
 - **队列。** 宿主的驻留名额满了，启动（或投递）就按顺序排队，有空位再试；输入卡显示「排队中」，不直接失败。其他失败直接告诉 lead，不重试。
 
+## 安装
+
+需要 DeepSeek Harness `>=0.2.1-rc.5 <0.3.0`（见 `engines.dsh`）。
+
+```bash
+dsh plugin add dsh-agent-scheduler            # npm 上的最新正式版
+dsh plugin add dsh-agent-scheduler@next       # 最新预发布版
+dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
+```
+
+每个 GitHub Release 也附带打好的 `.tgz`，可用 `dsh plugin add ./dsh-agent-scheduler-<版本>.tgz`
+安装。重装 tgz 时换一个文件名：包管理器不会替换同名 tgz 的内容。装完重启 `dsh`（或桌面应用）。
+
 ## 怎么启用
 
 插件覆盖了内置的 `standard` 预设：原有各行不变，只多一行调度规则，所以每个新会话都能调度。会话默认
