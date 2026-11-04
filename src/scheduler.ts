@@ -60,6 +60,8 @@ type Outcome = 'done' | 'queued' | 'failed'
 /** A child start or delivery refused for capacity, retried in order. */
 interface Pending {
   readonly mainId: string
+  /** The member the work starts or delivers to, so archiving it can drop the work. */
+  readonly memberId: string
   readonly label: string
   readonly attempt: () => Promise<'done' | 'capacity' | 'failed'>
 }
@@ -204,7 +206,7 @@ export class Scheduler {
     const name = this.ledgerOf(main).nextForkName()
     this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name }))
     const agentOptions = forkAgentOptions(main, this.deps.configuredModel)
-    void this.run(main, name, async () => {
+    void this.run(main, forkId, name, async () => {
       await this.deps.subagents.startActivation({
         provider: 'fork', label: `${name}: ${text.slice(0, 50)}`, childId: forkId, signal: new AbortController().signal, delivery: 'parent',
         request: { parent: main, prompt: [...message.content, { type: 'text', text: FORK_NOTICE }], ...(agentOptions === undefined ? {} : { agentOptions }) },
@@ -227,7 +229,7 @@ export class Scheduler {
    * @param hooks - `queued` once when it first waits; `failed` on a real failure.
    * @returns the outcome of the first attempt.
    */
-  private async run(main: Agent, label: string, attempt: () => Promise<void>, hooks: { queued?: () => void; failed: (error: unknown) => void }): Promise<Outcome> {
+  private async run(main: Agent, memberId: string, label: string, attempt: () => Promise<void>, hooks: { queued?: () => void; failed: (error: unknown) => void }): Promise<Outcome> {
     const once = async (): Promise<'done' | 'capacity' | 'failed'> => {
       try {
         await attempt()
@@ -241,7 +243,7 @@ export class Scheduler {
     }
     const wait = (): Outcome => {
       hooks.queued?.()
-      this.queue.push({ mainId: main.id, label, attempt: once })
+      this.queue.push({ mainId: main.id, memberId, label, attempt: once })
       this.arm()
       return 'queued'
     }
@@ -380,7 +382,7 @@ export class Scheduler {
       requestId === undefined ? 'No task yet: acknowledge briefly and wait for requests.' : this.requestText(requestId, ledger.nameOf(caller.id), task!),
     ].join('\n\n')
     let failure = ''
-    const outcome = await this.run(main, args.name, () => this.delivering(main, id, async () => {
+    const outcome = await this.run(main, id, args.name, () => this.delivering(main, id, async () => {
       if (seed !== undefined) registerForkSeed(id, seed)
       let messageId: string
       try {
@@ -434,7 +436,7 @@ export class Scheduler {
     this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text }))
     let failure = ''
     // A target still waiting to start is ahead in the queue, so this delivery waits behind it.
-    const outcome = await this.run(main, id, () => this.delivering(main, target.id, async () => {
+    const outcome = await this.run(main, target.id, id, () => this.delivering(main, target.id, async () => {
       const messageId = await this.deps.subagents.sendMessage(main, SessionId(target.id), [{ type: 'text', text: this.requestText(id, from, text) }], { signal: new AbortController().signal })
       this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text, messageId }))
     }), {
@@ -471,15 +473,22 @@ export class Scheduler {
     const target = ledger.find(name)
     if (target === undefined) throw new Error(`no agent named "${name}"`)
     if (target.state === 'archived') return
-    await this.deps.subagents.drainChildren(main, [SessionId(target.id)])
-    const forLead = await this.settleOnce(main, target.id)
+    // Work still waiting for a slot is dropped: a start would create it again, a delivery would
+    // reach an agent that is no longer listening. Their requests fail below.
+    const dropped = this.queue.filter(p => p.memberId === target.id)
+    for (const pending of dropped) this.queue.splice(this.queue.indexOf(pending), 1)
+    const neverStarted = target.state === 'queued'
+    const forLead: string[] = []
+    if (!neverStarted) {
+      await this.deps.subagents.drainChildren(main, [SessionId(target.id)])
+      // Rounds it completed still answer; the one it was cut off in fails its requests.
+      forLead.push(...await this.settleOnce(main, target.id))
+    }
     this.record(main, s => target.kind === 'fork'
       ? appendForkState(s, { forkId: target.id, state: 'archived' })
       : appendAgent(s, { action: 'archived', id: target.id, name: target.name }))
     for (const request of ledger.openTo(target.id)) {
-      const detail = `${target.name} was archived before answering`
-      this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail }))
-      this.route(main, request, target, `[request ${request.id} to ${target.name} failed: ${detail}]`, '', forLead)
+      this.fail(main, request, target, `${target.name} was archived before answering`, forLead)
     }
     for (const text of forLead) this.toLead(main, text, target.id)
   }
@@ -570,6 +579,11 @@ export class Scheduler {
     for (const round of rounds) {
       for (const request of ledger.openTo(memberId)) {
         if (request.messageId === undefined || !round.claimed.has(request.messageId)) continue
+        if (round.stopped !== undefined) {
+          // Its message is consumed, so no later round will take it again: it fails now.
+          this.fail(main, request, member, `${member.name}'s round ended (${round.stopped}) before answering`, forLead)
+          continue
+        }
         const to = this.recipientOf(ledger, request)
         this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: to }))
         this.route(main, request, member, `[reply to ${request.id} from ${member.name}]`, round.answer, forLead)
@@ -577,11 +591,17 @@ export class Scheduler {
     }
     this.record(main, s => appendSettled(s, { agent: memberId, through: rounds.at(-1)!.endSeq }))
     const now = ledger.members.get(memberId)!
-    if (now.kind === 'fork' && (now.state === 'started' || now.state === 'done') && ledger.openFrom(memberId).length === 0) {
+    if (now.kind === 'fork' && rounds.at(-1)!.stopped === undefined && (now.state === 'started' || now.state === 'done') && ledger.openFrom(memberId).length === 0) {
       if (now.state !== 'done') this.record(main, s => appendForkState(s, { forkId: memberId, state: 'done' }))
       forLead.push(`The user said: ${now.text}\n${now.name} handled it. Its conclusion:\n${rounds.at(-1)!.answer}`)
     }
     return forLead
+  }
+
+  /** Record a request as failed and tell whoever asked. */
+  private fail(main: Agent, request: Request, by: Member, detail: string, forLead: string[]): void {
+    this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail }))
+    this.route(main, request, by, `[request ${request.id} to ${by.name} failed: ${detail}]`, '', forLead)
   }
 
   /** The Session an answer to `request` goes to: the requester, or the main Session when it is gone. */
@@ -604,7 +624,7 @@ export class Scheduler {
       forLead.push(body === '' ? marked : `${marked}\n${body}`)
       return
     }
-    void this.run(main, `reply ${request.id}`, async () => {
+    void this.run(main, requester.id, `reply ${request.id}`, async () => {
       await this.deps.subagents.sendMessage(main, SessionId(requester.id), [{ type: 'text', text }], { signal: new AbortController().signal })
     }, {
       failed: error => { this.toLead(main, `${header} (could not reach ${requester.name}: ${messageOf(error)})${body === '' ? '' : `\n${body}`}`, by.id) },
@@ -637,8 +657,21 @@ export async function preStep(
   if (admitted !== undefined) messages.splice(0, messages.length, ...admitted)
   const main = isMainSession(agent)
   // Checked on both sides of next(): listener order decides where the runtime's context appears.
-  if (step === 1 && main && messages.every(isContextOnly)) return { kind: 'reject' }
+  if (step === 1 && main && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
   const decision = await next()
-  if (step === 1 && main && decision.kind === 'enter' && decision.messages.every(isContextOnly)) return { kind: 'reject' }
+  if (step === 1 && main && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
   return decision
+}
+
+/**
+ * A rejected turn ends without draining the inbox, so anything that arrived while this step was
+ * admitted (a reply queued for the lead, a settlement steered in) would wait for the next wake.
+ * Take it into this step instead, through the same admission.
+ * @returns whether the step now holds something besides context.
+ */
+async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMessage[]): Promise<boolean> {
+  const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn].filter(message => agent.inbox.remove(message.id))
+  if (pending.length === 0) return false
+  messages.push(...(await scheduler.admit(agent, pending) ?? pending))
+  return !messages.every(isContextOnly)
 }

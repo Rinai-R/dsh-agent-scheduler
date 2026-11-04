@@ -114,4 +114,39 @@ describe('review regressions', () => {
       expect(records(lead.session.snapshotEvents(), REQUEST_RECORD).find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', answer: 'REPORTED' })
     })
   }
+
+  it('archiving an agent mid-round fails the request it was working on, and says so to the requester', async () => {
+    const slow = gate()
+    const { ctx, lead } = await setup(async o => {
+      if (isWorker('slow')(o)) { if (body(o).includes('[request r-1')) await slow.promise; return textResponse('late words') }
+      return textResponse('LEAD')
+    })
+    const scheduler = install(ctx)
+    await scheduler.createWorker(lead, { name: 'slow', role: 'x', task: 'take your time' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('slow')!.id))?.status).toBe('running') })
+    await scheduler.archive(lead, 'slow')
+    slow.open()
+    await until(lead, '[request r-1 to slow failed')
+    expect(scheduler.ledgerOf(lead).requests.get('r-1')).toMatchObject({ state: 'failed' })
+    expect(leadSaw(lead, 'late words')).toBe(0)
+  })
+
+  it('archiving a worker still waiting for a slot fails its task and never starts it', async () => {
+    const hold = gate()
+    const { ctx, lead, adapter } = await setup(async o => {
+      if (isWorker('a')(o)) await hold.promise
+      return textResponse(isWorker('b')(o) ? 'B RAN' : 'X')
+    }, 1)
+    const scheduler = install(ctx)
+    await scheduler.createWorker(lead, { name: 'a', role: 'first' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('a')!.id))).toBeDefined() })
+    expect((await scheduler.createWorker(lead, { name: 'b', role: 'second', task: 'do b' })).queued).toBe(true)
+    await scheduler.archive(lead, 'b')
+    expect(scheduler.queued()).toEqual([])
+    expect(scheduler.ledgerOf(lead).requests.get('r-1')).toMatchObject({ state: 'failed' })
+    hold.open()
+    await until(lead, '[request r-1 to b failed')
+    await new Promise(r => setTimeout(r, 300))
+    expect(adapter.requests.some(isWorker('b'))).toBe(false)
+  })
 })

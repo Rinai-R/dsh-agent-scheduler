@@ -21,6 +21,8 @@ export interface Round {
   readonly claimed: ReadonlySet<string>
   /** What it answers with. */
   readonly answer: string
+  /** Why it ended when not normally (`aborted`, `error`, …); then it answers nothing. */
+  readonly stopped?: string | undefined
 }
 
 const textOf = (content: readonly ContentBlock[]): string =>
@@ -45,8 +47,8 @@ function roundOf(events: readonly SessionEvent[], end: SessionEvent): Round {
   for (const event of events) if (event.type === 'user/message') claimed.add(event.data.id)
   const closing = reportOf(events) ?? textOf(finalAssistantOutput(events) ?? [])
   const reason = (end.data as { reason?: { kind?: unknown } }).reason?.kind
-  const body = closing.trim() === '' ? '(no closing message)' : closing
-  return { endSeq: end.seq, claimed, answer: reason === undefined || reason === 'completed' ? body : `(round ended: ${String(reason)}) ${body}` }
+  const answer = closing.trim() === '' ? '(no closing message)' : closing
+  return { endSeq: end.seq, claimed, answer, ...(reason === undefined || reason === 'completed' ? {} : { stopped: String(reason) }) }
 }
 
 /**

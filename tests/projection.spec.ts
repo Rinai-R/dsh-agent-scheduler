@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 /** The client roster projection: a fold over the same records the host writes. */
 import { afterEach, describe, expect, it } from 'vitest'
 import { setup, teardown } from './support/harness.js'
@@ -21,9 +22,9 @@ describe('roster projection', () => {
     expect(view.role).toBe('LEAD ROLE: map every requirement')
     expect(view.members).toEqual([expect.objectContaining({ name: 'fork-1', kind: 'fork', state: 'done', text: 'why is billing slow' })])
 
-    void scheduler.createWorker(lead, { name: 'billing', role: 'owns billing', cwd: '/tmp/billing' })
+    await scheduler.createWorker(lead, { name: 'billing', role: 'owns billing', cwd: tmpdir() })
     const after = rosterOf(lead)
-    expect(after.members).toContainEqual(expect.objectContaining({ name: 'billing', kind: 'worker', state: 'started', role: 'owns billing', cwd: '/tmp/billing' }))
+    expect(after.members).toContainEqual(expect.objectContaining({ name: 'billing', kind: 'worker', state: 'started', role: 'owns billing', cwd: tmpdir() }))
     // The host's ledger and the client's projection are one fold.
     expect(scheduler.ledgerOf(lead).state).toEqual(after)
     // Persisted state and the wire copy both pass their real validation; garbage does not.
