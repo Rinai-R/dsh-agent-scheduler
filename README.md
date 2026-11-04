@@ -1,7 +1,72 @@
 # dsh-agent-scheduler
 
-A DeepSeek Harness plugin that schedules work in a session: every user message is handed to a
-fork of the lead, long-lived workers own repositories or areas, and their answers report back to
-the lead. Development happens on `feat/initial`.
+A DeepSeek Harness plugin: one lead agent per session, a fresh fork for every input, long-lived
+worker agents with their own sessions, and a right-sidebar roster. Scheduling is a rule, not the
+model's judgement: every user message leaves the lead's inbox on insertion and a fork takes it, so
+the lead is never blocked by an input.
 
-MIT licensed.
+## What it does
+
+- **Input rule.** In a *scheduler* session, each user message is handed to a new fork of the lead
+  immediately. The lead does not see or handle the raw input; it receives the fork's conclusion
+  later as "The user said: … / Its conclusion: …", so the lead's history stays a map of requests.
+- **Forks.** A fork is a native fork of the lead: it inherits the lead's completed turns and
+  handles exactly one input. It may delegate with `agent_create` / `agent_send`, then reports a
+  conclusion back to the lead when nothing of its own is outstanding.
+- **Workers.** `agent_create` makes a long-lived worker with its own session, role, directory and
+  model. Any agent can delegate to a worker with `agent_send`; the answer goes back to whoever
+  asked, and to the lead when that requester is gone.
+- **Requests.** Every piece of delegated work is a request with an id. A round answers the
+  requests whose messages that round actually claimed (read from the session log, not from what the
+  agent says).
+- **Right sidebar.** An *Agents* page lists forks and workers with live state, opens any of them as
+  an embedded conversation (split view), and a chip above the composer shows how many are running
+  and how many are waiting for you.
+- **Queue.** When the runtime refuses a new child for capacity, the start is queued and retried
+  when a slot frees; the input card shows the wait instead of failing.
+
+## Enable it
+
+Create a session and pick **调度模式** (scheduler) in the preset menu. Ordinary chat sessions are
+untouched: the plugin's server listeners and tools live inside that preset only.
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `agent_create` | Create a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
+| `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. |
+| `agent_list` | The roster and open requests. |
+| `agent_interrupt` | Stop an agent's current round. |
+| `agent_archive` | Archive an agent; its name is never reused. |
+| `role_set` | Set the lead's or a worker's role. |
+| `report` | Give this round's conclusion explicitly instead of the final message. |
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `/fork model <provider>/<model> [effort]` | Model for later forks (default: the lead's). |
+| `/fork model default` | Back to the default. |
+| `/role [text]` | Show or set the lead's role. |
+
+## Configuration
+
+| Field | Meaning | Default |
+|---|---|---|
+| `fork` | `{ provider, model, reasoningEffort? }` for forks | the lead's model |
+| `worker` | `{ provider, model, reasoningEffort? }` for workers | the runtime default |
+| `workerPreset` | preset for new workers | the session's preset |
+
+## Known limitations
+
+- A session's preset is fixed after its first turn; scheduling cannot be switched on mid-session.
+- Forks inherit only the lead's completed turns at fork time, not the round in progress.
+- The lead does not see your raw words; it sees them quoted in each conclusion.
+- A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an agent owned by another live agent. A decision it needs travels back in its conclusion and surfaces through the lead.
+- The plugin's records live in the main session log; child sessions are native.
+- Only two horizontal panes are allowed by the runtime's docking kit.
+
+## License
+
+MIT

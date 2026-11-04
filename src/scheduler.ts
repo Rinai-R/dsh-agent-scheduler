@@ -60,7 +60,17 @@ const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ??
 const isUserInput = (message: UserMessage): boolean => message.source.kind === 'user'
 /** Context the runtime refreshes on every step; never a reason for the lead to speak. */
 const isContextOnly = (message: UserMessage): boolean => (message.source as { form?: unknown }).form === 'snapshot'
-const isCapacity = (error: unknown): boolean => /subagent limit reached|delivery-unavailable/u.test(error instanceof Error ? error.message : String(error))
+/**
+ * Whether a refusal is the runtime's capacity guard rather than a defect: the start path reports
+ * `ACTIVATION_LIMIT_REACHED`, a cold-resume delivery reports `subagent/delivery-unavailable`.
+ * @param error - whatever the runtime threw.
+ * @returns true when waiting for a slot can help.
+ */
+export const isCapacity = (error: unknown): boolean => {
+  const code = (error as { code?: unknown }).code
+  if (code === 'ACTIVATION_LIMIT_REACHED' || code === 'subagent/delivery-unavailable') return true
+  return /subagent limit reached|delivery-unavailable|temporarily unavailable/u.test(error instanceof Error ? error.message : String(error))
+}
 
 export const textOf = (content: readonly ContentBlock[]): string =>
   content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
