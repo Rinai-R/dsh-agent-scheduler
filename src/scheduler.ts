@@ -23,7 +23,8 @@ import {
   type ForkModelSelection,
 } from './records.js'
 import { schedulingOn } from './projection.js'
-import { completedRounds } from './rounds.js'
+import { completedRounds, cutByRestart } from './rounds.js'
+import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type ChildTrace } from './recovery.js'
 
 /**
  * What a fork is for. It lives in the system-prompt section shared by the lead and its forks (so a
@@ -210,6 +211,10 @@ export class Scheduler {
    * itself after the id is recorded.
    */
   private readonly inflight = new Map<string, number>()
+  /** Members this scheduler itself stopped (interrupt, archive): their cut rounds settle at once. */
+  private readonly stopping = new Set<string>()
+  /** Per member, the last round a restart cut off that `recover` has dealt with. */
+  private readonly recoveredThrough = new Map<string, number>()
 
   /** @param deps - services and policy. */
   constructor(private readonly deps: SchedulerDeps) {}
@@ -606,6 +611,7 @@ export class Scheduler {
     const main = this.mainOf(caller)
     const target = this.ledgerOf(main).find(name)
     if (target === undefined) throw new Error(`no agent named "${name}"`)
+    this.stopping.add(target.id)
     this.deps.subagents.interrupt(SessionId(target.id), { kind: 'ancestor', agent: main })
   }
 
@@ -628,6 +634,7 @@ export class Scheduler {
     // Queued or failed to start: the runtime holds no session for it, so there is nothing to
     // drain or settle (draining an unknown session throws "session ... not found").
     const neverStarted = target.state === 'queued' || target.state === 'failed'
+    this.stopping.add(target.id)
     const forLead: string[] = []
     if (!neverStarted) {
       await this.deps.subagents.drainChildren(main, [SessionId(target.id)])
@@ -681,6 +688,137 @@ export class Scheduler {
     const ledger = this.ledgerOf(agent)
     const member = ledger.members.get(agent.id)
     return member?.kind === 'worker' ? member.role : ledger.role
+  }
+
+  // ------------------------------------------------------------------ restart recovery
+
+  /**
+   * Settle what a DSH restart cut off, once the main Session is back. Read from logs only: open
+   * requests and member states from this Session's plugin records, how each child's rounds ended
+   * from the child's own log. Members resident in this process are alive and left alone.
+   * - a queued fork or worker lost its place in the in-memory queue: it fails, with its requests;
+   * - a fork whose last round was cut (or that never ran a round) fails, and the lead is told;
+   * - a request whose round was cut, or that still waits in a sleeping child's inbox, fails and
+   *   the lead is told (`fail`), or with `resume` its worker gets one note in its own session to
+   *   check its state and finish it, up to `maxResumes` times. A note carries its request and
+   *   attempt on its first line, so a note already delivered before another restart is found in
+   *   the child's log and not sent twice;
+   * - a request that never reached its child fails.
+   * Failed records close a request, so a later restart finds nothing to do for it again.
+   * @param main - the main agent, just resumed.
+   */
+  async recover(main: Agent): Promise<void> {
+    if (!isMainSession(main)) return
+    const ledger = this.ledgerOf(main)
+    const policy = recoveryPolicy()
+    // Only what was open when the Session came back; anything sent since is this process's work.
+    const openAtResume = new Set(ledger.state.requests.filter(r => r.state === 'sent').map(r => r.id))
+    for (const member of [...ledger.state.members]) {
+      // Only a fork still routing, something still queued, or someone owing an answer can be cut off.
+      const routing = member.kind === 'fork' && member.state === 'started'
+      if (!routing && member.state !== 'queued' && ledger.openTo(member.id).length === 0) continue
+      if (this.deps.agents.get(SessionId(member.id)) !== undefined) continue
+      const previous = this.settling.get(member.id) ?? Promise.resolve()
+      const next = previous.catch(() => undefined).then(() => this.recoverMember(main, member.id, policy, openAtResume))
+      this.settling.set(member.id, next)
+      try {
+        await next
+      } catch (error) {
+        this.deps.log?.(`recovering ${member.name} failed`, error)
+      } finally {
+        if (this.settling.get(member.id) === next) this.settling.delete(member.id)
+      }
+      // Rounds that completed before the restart still answer through the ordinary settlement.
+      const after = ledger.members.get(member.id)
+      if (after !== undefined && after.state !== 'failed' && (ledger.openTo(member.id).length > 0 || (after.kind === 'fork' && after.state === 'started'))) this.settleInBackground(main, member.id)
+    }
+  }
+
+  private async recoverMember(main: Agent, memberId: string, policy: ReturnType<typeof recoveryPolicy>, openAtResume: ReadonlySet<string>): Promise<void> {
+    const ledger = this.ledgerOf(main)
+    const member = ledger.members.get(memberId)
+    if (member === undefined) return
+    const forLead: string[] = []
+    if (member.state === 'queued') {
+      const detail = 'it was waiting for a free slot when DSH restarted and never started'
+      this.record(main, s => member.kind === 'fork'
+        ? appendForkState(s, { forkId: memberId, state: 'failed', detail })
+        : appendAgent(s, { action: 'failed', id: memberId, name: member.name, detail }))
+      if (member.kind === 'fork') forLead.push(`The user said: ${member.text}\n${member.name} never started: ${detail}. Nothing was done for it.`)
+      for (const request of ledger.openTo(memberId).filter(r => openAtResume.has(r.id))) this.fail(main, request, member, `${RESTART_DETAIL} (${detail})`, forLead)
+      for (const text of forLead) this.toLead(main, text, memberId)
+      return
+    }
+    let log: SessionLog | undefined
+    try {
+      log = await this.logOf(memberId)
+    } catch (error) {
+      this.deps.log?.(`reading ${member.name} after a restart failed`, error)
+    }
+    const all = log === undefined ? [] : completedRounds(log.events, log.inherited)
+    const unsettled = all.filter(r => r.endSeq > (member.settledThrough ?? -1))
+    const trace: ChildTrace = log === undefined ? { pending: new Set(), taken: new Set(), requestMessages: new Map(), resumes: new Map() } : traceChild(log.events.slice(log.inherited))
+    if (member.kind === 'fork' && member.state === 'started') {
+      const last = all.at(-1)
+      const concludes = unsettled.some(r => r.stopped === undefined)
+      if (!concludes && (last === undefined || cutByRestart(last))) {
+        this.record(main, s => appendForkState(s, { forkId: memberId, state: 'failed', detail: 'interrupted by a DSH restart' }))
+        const open = ledger.openFrom(memberId).map(r => `${r.id} → ${ledger.nameOf(r.to)}`)
+        forLead.push([
+          `The user said: ${member.text}`,
+          `${member.name} was interrupted by a DSH restart before concluding; it did not finish routing this message.`,
+          ...(open.length === 0 ? [] : [`What it had delegated is still open and will be answered to you: ${open.join(', ')}`]),
+        ].join('\n'))
+      }
+    }
+    // Deliveries this process is making right now (sent after the resume) are not restart victims.
+    const live = (id: string) => this.inflight.has(memberId) || this.queue.some(p => p.memberId === memberId && (p.label === id || p.label === member.name))
+    for (const request of ledger.openTo(memberId)) {
+      if (!openAtResume.has(request.id) || live(request.id)) continue
+      const fate = log === undefined ? { kind: 'lost' as const } : fateOf(request, unsettled, trace)
+      if (fate.kind === 'answered') continue
+      if (fate.kind === 'lost') {
+        this.fail(main, request, member, `${RESTART_DETAIL} (it never reached ${member.name})`, forLead)
+        continue
+      }
+      const done = Math.max(0, ...(trace.resumes.get(request.id)?.keys() ?? []))
+      // Only work the restart cut off is resumed; a round someone stopped stays stopped.
+      const resumable = policy.onInterrupted === 'resume' && member.kind === 'worker' && member.state === 'started' && fate.byRestart
+      if (!resumable || done >= policy.maxResumes) {
+        const why = !fate.byRestart ? `${member.name}'s round ended before answering`
+          : !resumable ? RESTART_DETAIL
+          : `${RESTART_DETAIL} (resumed ${done} time${done === 1 ? '' : 's'}, the limit)`
+        this.fail(main, request, member, why, forLead)
+        continue
+      }
+      await this.resumeRequest(main, member, request, done + 1, policy.maxResumes, trace)
+    }
+    // Every request those cut rounds claimed is now failed or re-pointed at its resume note.
+    const lastCut = unsettled.filter(r => r.stopped !== undefined).at(-1)
+    if (lastCut !== undefined) this.recoveredThrough.set(memberId, lastCut.endSeq)
+    for (const text of forLead) this.toLead(main, text, memberId)
+  }
+
+  /** Continue one request in its worker's own session; a note already delivered is reused. */
+  private async resumeRequest(main: Agent, member: Member, request: Request, attempt: number, max: number, trace: ChildTrace): Promise<void> {
+    const existing = trace.resumes.get(request.id)?.get(attempt)
+    const repoint = (messageId: string) => {
+      this.record(main, s => appendRequest(s, { action: 'sent', id: request.id, from: request.from, to: request.to, text: request.text, messageId }))
+    }
+    if (existing !== undefined) { repoint(existing); return }
+    let failure = ''
+    const outcome = await this.run(main, member.id, request.id, () => this.delivering(main, member.id, async () => {
+      const messageId = await this.deps.subagents.sendMessage(main, SessionId(member.id), [{ type: 'text', text: resumeText(request.id, attempt, max) }], { signal: new AbortController().signal })
+      repoint(messageId)
+    }), {
+      failed: error => {
+        failure = messageOf(error)
+        const forLead: string[] = []
+        this.fail(main, request, member, `${RESTART_DETAIL} (resuming it failed: ${failure})`, forLead)
+        for (const text of forLead) this.toLead(main, text, member.id)
+      },
+    })
+    if (outcome === 'failed') this.deps.log?.(`resuming ${request.id} on ${member.name} failed: ${failure}`)
   }
 
   // ------------------------------------------------------------------ routing
@@ -743,7 +881,14 @@ export class Scheduler {
     if (this.inflight.has(memberId)) return forLead
     const log = await this.logOf(memberId)
     const member = ledger.members.get(memberId)!
-    const rounds = completedRounds(log.events, Math.max(log.inherited, (member.settledThrough ?? -1) + 1))
+    const all = completedRounds(log.events, Math.max(log.inherited, (member.settledThrough ?? -1) + 1))
+    // A round the host's shutdown cut off (not this scheduler's own interrupt or archive) is left
+    // unsettled, with everything after it: the main Session is going away too, so a failure told
+    // now could be lost, and `recover` settles it by the configured policy when it comes back.
+    const handled = this.recoveredThrough.get(memberId) ?? -1
+    const cut = all.findIndex(r => cutByRestart(r) && r.endSeq > handled && !this.stopping.has(memberId))
+    const rounds = cut < 0 ? all : all.slice(0, cut)
+    if (all.some(r => r.stopped !== undefined)) this.stopping.delete(memberId)
     if (rounds.length === 0) return forLead
     for (const round of rounds) {
       let answered = 0

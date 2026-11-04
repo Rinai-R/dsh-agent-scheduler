@@ -154,6 +154,16 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
   ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
+  // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
+  // After creation resolves: the runtime only delivers to children of a published parent.
+  ctx.on('agent/created', ({ agent, source }) => {
+    if (source !== 'resume' || !isMainSession(agent)) return undefined
+    setTimeout(() => {
+      if (ctx.agents.get(agent.id) !== agent || scheduler.ledgerOf(agent).state.members.length === 0) return
+      void scheduler.recover(agent).catch((error: unknown) => { ctx.logger('agent-scheduler').warn('restart recovery failed', error) })
+    }, 0)
+    return undefined
+  })
   ctx.on('agent/disposed', ({ agent }) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.effect(() => ctx.tools.register(tool), `agent-scheduler: ${tool.name}`)
   ctx.effect(() => ctx.systemPrompt.section({

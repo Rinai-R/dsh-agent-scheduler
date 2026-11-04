@@ -23,6 +23,11 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
   ctx.on('agent/inbox/inserted', ({ agent, message }) => { scheduler.onInserted(agent, message) })
   ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
   ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
+  // As the rule does: a resumed main Session settles what the restart cut off.
+  ctx.on('agent/created', ({ agent, source }) => {
+    if (source === 'resume' && agent.session.header.parentSession === undefined) setTimeout(() => { void scheduler.recover(agent) }, 0)
+    return undefined
+  })
   ctx.on('agent/created', ({ agent }) => { restoreMemberModel(scheduler, agent); return undefined })
   ctx.on('agent/disposed', () => { if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.tools.register(tool)

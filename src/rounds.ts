@@ -25,7 +25,20 @@ export interface Round {
   readonly report?: string | undefined
   /** Why it ended when not normally (`aborted`, `error`, …); then it answers nothing. */
   readonly stopped?: string | undefined
+  /** The cancellation cause of an `aborted` round (`user`, `parent`, `disposed`, …). */
+  readonly cause?: string | undefined
 }
+
+/**
+ * Whether a round was cut off by the host going away rather than by someone: a crash leaves an
+ * `interrupted` closer (appended on resume and on cold reads); a shutdown cancels the child as
+ * `disposed`, or as `parent` while its parent is torn down. The scheduler's own interrupt and
+ * archive also cancel as `parent`; the scheduler tells those apart itself.
+ * @param round - a completed round.
+ * @returns true for a round a restart or shutdown may have cut off.
+ */
+export const cutByRestart = (round: Round): boolean =>
+  round.stopped === 'interrupted' || (round.stopped === 'aborted' && (round.cause === 'disposed' || round.cause === 'parent'))
 
 const textOf = (content: readonly ContentBlock[]): string =>
   content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
@@ -49,12 +62,15 @@ function roundOf(events: readonly SessionEvent[], end: SessionEvent): Round {
   for (const event of events) if (event.type === 'user/message') claimed.add(event.data.id)
   const report = reportOf(events)
   const closing = report ?? textOf(finalAssistantOutput(events) ?? [])
-  const reason = (end.data as { reason?: { kind?: unknown } }).reason?.kind
+  const ended = (end.data as { reason?: { kind?: unknown; reason?: { kind?: unknown } } }).reason
+  const reason = ended?.kind
+  const cause = ended?.reason?.kind
   const answer = closing.trim() === '' ? '(no closing message)' : closing
   return {
     endSeq: end.seq, claimed, answer,
     ...(report === undefined ? {} : { report }),
     ...(reason === undefined || reason === 'completed' ? {} : { stopped: String(reason) }),
+    ...(typeof cause === 'string' ? { cause } : {}),
   }
 }
 

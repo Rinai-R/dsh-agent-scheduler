@@ -6,6 +6,7 @@
  * resource, so the embedded conversation, its composer and its stop action are the product's own.
  */
 import { memo, useEffect, useState, useSyncExternalStore } from 'react'
+import { registerRecoveryConfig } from './recovery-config.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
@@ -1031,4 +1032,5 @@ export function apply(ctx: any): void {
   const rosterFace = (parent: string): Face => ctx.sessions?.binding?.(parent)?.session?.projections?.faceOf?.(ROSTER) ?? NO_FACE
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({ name: 'conversation.input.right', id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf, rosterFace, run, has, catalog })))
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
+  registerRecoveryConfig(ctx)
 }
