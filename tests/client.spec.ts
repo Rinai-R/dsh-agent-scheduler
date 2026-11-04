@@ -1,6 +1,24 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { inputDefinition as def, rowStateOf } from '../src/client/index.js'
+import { chatPlacement, inputDefinition as def, rowStateOf } from '../src/client/index.js'
+
+/** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
+const column = (panes: Array<{ id: string; roster?: boolean }>) => ({
+  querySelectorAll: () => panes.map(p => ({ dataset: { dockkitPane: p.id }, querySelector: () => (p.roster === true ? {} : null) })),
+}) as never
+
+describe('agent chat placement', () => {
+  it('splits while the roster has the column to itself', () => {
+    expect(chatPlacement(column([{ id: 'a', roster: true }]))).toEqual({ preferNewPane: true })
+    expect(chatPlacement(column([{ id: 'a' }]), 'a')).toEqual({ preferNewPane: true })
+  })
+  it('once two panes exist, opens in the one that is not the roster\'s, never over the roster', () => {
+    expect(chatPlacement(column([{ id: 'a', roster: true }, { id: 'b' }]))).toEqual({ paneId: 'b' })
+    expect(chatPlacement(column([{ id: 'b' }, { id: 'a', roster: true }]))).toEqual({ paneId: 'b' })
+    // The page's own pane id wins over the DOM guess.
+    expect(chatPlacement(column([{ id: 'a' }, { id: 'b' }]), 'b')).toEqual({ paneId: 'a' })
+  })
+})
 
 const input = { type: 'plugin:dsh-agent-scheduler/input', seq: 5, time: 9, data: { forkId: 'f1', text: 'hello' } }
 const state = (s: string, detail?: string) => ({ type: 'plugin:dsh-agent-scheduler/fork-state', seq: 8, time: 10, data: { forkId: 'f1', state: s, ...(detail ? { detail } : {}) } })

@@ -431,8 +431,9 @@ export class Scheduler {
     return { name: args.name, id, queued: outcome === 'queued', ...(requestId === undefined ? {} : { request: requestId }) }
   }
 
+  /** A request as the worker's chat shows it: who asks and what. How to answer is in its system prompt. */
   private requestText(id: string, from: string, text: string): string {
-    return `[request ${id} from ${from}]\n${text}\n\nAnswer it, then end your turn: your final message (or your report) goes to the lead automatically.`
+    return `[request ${id} from ${from}]\n${text}`
   }
 
   /**

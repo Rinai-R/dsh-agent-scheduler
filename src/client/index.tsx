@@ -165,6 +165,22 @@ export function subagentAddress(
 }
 
 /**
+ * Where an agent's chat goes in the right column: a docked pane other than the one showing the
+ * Agents page, so opening a second agent never covers the roster. The column allows two panes;
+ * once both exist, `preferNewPane` no longer splits and would drop the chat into the active pane,
+ * which is the roster's pane right after a row click.
+ * @param doc - the document.
+ * @param rosterPane - the Agents page's own pane id, when known.
+ * @returns placement options for `openResource`.
+ */
+export function chatPlacement(doc: Pick<Document, 'querySelectorAll'>, rosterPane?: string): { paneId: string } | { preferNewPane: true } {
+  const panes = [...doc.querySelectorAll<HTMLElement>('[data-sidebar-right-session]:not([hidden]) [data-dockkit-pane]')]
+  const holding = rosterPane ?? panes.find(p => p.querySelector('[data-scheduler-roster]') !== null)?.dataset.dockkitPane
+  const other = panes.map(p => p.dataset.dockkitPane).find(id => id !== undefined && id !== '' && id !== holding)
+  return other === undefined ? { preferNewPane: true } : { paneId: other }
+}
+
+/**
  * Read the roster projection, tolerating a missing hook.
  * @param props - framework standard props of the seat.
  * @returns the roster, or undefined before it exists.
@@ -256,14 +272,14 @@ export function createAgentsPage(ctx: {
     sessionId?: string
     useProjection?: (key: string) => unknown
     useSessionStatus?: UseSessionStatus
-    useTabInfo?: () => { tab: { actions: { openResource: (address: string, options?: Record<string, unknown>) => void; close: () => void } } }
+    useTabInfo?: () => { panel?: { id?: string }; tab: { actions: { openResource: (address: string, options?: Record<string, unknown>) => void; close: () => void } } }
   }) {
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const tab = props.useTabInfo?.()
     const open = (member: Member) => {
       if (props.sessionId === undefined || tab === undefined) return
-      tab.tab.actions.openResource(subagentAddress(ctx, props.sessionId, member.id), { preferNewPane: true })
+      tab.tab.actions.openResource(subagentAddress(ctx, props.sessionId, member.id), chatPlacement(document, tab.panel?.id))
     }
     // Fold the whole column, keeping its tabs: closing only this tab would leave open agent chats
     // holding the column's width. The runtime's header button and the chip expand it again.
@@ -329,7 +345,7 @@ export function apply(ctx: any): void {
     const address = { parentSessionId: parent, childSessionId: child, mode: 'continuable' }
     const sidebar = ctx.sidebarRight as { openResource?: (address: string, options?: Record<string, unknown>) => void } | undefined
     if (sidebar?.openResource === undefined) { ctx.uiWorkspace?.openSession(address); return }
-    sidebar.openResource(subagentAddress(ctx, parent, child), { kind: 'subagentchat', preferNewPane: true })
+    sidebar.openResource(subagentAddress(ctx, parent, child), { kind: 'subagentchat', ...chatPlacement(document) })
   }
   const openAgents = () => {
     const sidebar = ctx.sidebarRight as { mounted?: { getSnapshot: () => unknown }; openTab?: (kind: string, options?: Record<string, unknown>) => void } | undefined
