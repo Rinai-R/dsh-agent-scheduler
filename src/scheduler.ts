@@ -23,12 +23,22 @@ import {
 } from './records.js'
 import { completedRounds } from './rounds.js'
 
-/** First-message text for a fork. The system prompt explains the tools; this says what it is for. */
+/**
+ * What a fork is for. It lives in the system-prompt section shared by the lead and its forks (so a
+ * fork keeps the lead's cache prefix), not in the fork's first message: that message is the user's
+ * bubble in the fork's chat and must show only what the user typed.
+ */
 export const FORK_NOTICE = [
-  'You are a fork of the lead, created to handle only the message above, holding the lead\'s conversation so far.',
+  'If the newest message is the user\'s own words, you are a fork of the lead, created to handle only that message, holding the lead\'s conversation so far.',
   'Analyze, then delegate to workers with agent_send or agent_create, or do the work yourself.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
   'End your turn with a self-contained conclusion of what you found and what you delegated to whom (or call report first): it goes to the lead automatically.',
+].join(' ')
+
+/** What the lead is for: the user reads only the lead's own replies. */
+export const LEAD_NOTICE = [
+  'Otherwise you are the lead. The user\'s words never reach you directly; you receive forks\' conclusions as "The user said: ... Its conclusion: ...", workers\' answers as "[reply to r-N from name, asked by ...]", and failures as "[request r-N to name failed: ...]".',
+  'The user does not read those messages or the forks\' work: only your replies. Tell the user the result in your own words, briefly, with anything they must decide. Never say you already answered them unless you did in a reply of your own.',
 ].join(' ')
 
 /** Marker the runtime appends to a child's first message; we route results ourselves. */
@@ -211,7 +221,7 @@ export class Scheduler {
     void this.run(main, forkId, name, async () => {
       await this.deps.subagents.startActivation({
         provider: 'fork', label: `${name}: ${text.slice(0, 50)}`, childId: forkId, signal: new AbortController().signal, delivery: 'parent',
-        request: { parent: main, prompt: [...message.content, { type: 'text', text: FORK_NOTICE }], ...(agentOptions === undefined ? {} : { agentOptions }) },
+        request: { parent: main, prompt: [...message.content], ...(agentOptions === undefined ? {} : { agentOptions }) },
       })
       if (this.ledgerOf(main).members.get(forkId)?.state === 'queued') this.record(main, s => appendForkState(s, { forkId, state: 'started' }))
     }, {

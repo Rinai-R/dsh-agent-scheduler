@@ -97,7 +97,7 @@ describe('review regressions', () => {
   for (let run = 1; run <= 5; run += 1) {
     it(`a worker answering before its start returns still answers its task (run ${run})`, async () => {
       const called = (o: GenerateOptions, tool: string) => o.messages.some(m => m.role === 'assistant' && JSON.stringify(m).includes(`"name":"${tool}"`))
-      const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && body(o).includes('You are a fork of the lead')
+      const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && JSON.stringify(o.messages[0]).includes('# Agent Scheduler\\n') && !JSON.stringify(o.messages[0]).includes('Agent Scheduler: worker')
       const { ctx, lead } = await setup(o => {
         if (o.sessionId === 'lead') return textResponse('LEAD OK')
         if (isWorker('billing')(o)) return called(o, 'report') ? textResponse('chatty') : toolCallResponse('r1', 'report', { summary: 'REPORTED' })

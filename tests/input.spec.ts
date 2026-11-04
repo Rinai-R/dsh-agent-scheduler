@@ -32,7 +32,11 @@ describe('input rule', () => {
     expect(records(log, INPUT_RECORD).map(r => [r.text, r.name])).toEqual([['input one', 'fork-1'], ['input two', 'fork-2']])
     expect(records(log, FORK_STATE_RECORD).map(r => r.state)).toEqual(['done', 'done'])
     const forkReq = adapter.requests.find(r => r.sessionId !== 'lead')!
-    expect(body(forkReq)).toContain(JSON.stringify(FORK_NOTICE).slice(1, -1))
+    // The fork's instructions live in the system prompt, not in the user's bubble of the fork chat.
+    expect(JSON.stringify(forkReq.messages[0])).toContain(JSON.stringify(FORK_NOTICE).slice(1, -1))
+    const own = forkReq.messages.filter(m => m.role === 'user' && /input (one|two)/u.test(JSON.stringify(m.content))).at(-1)!
+    expect(own).toBeDefined()
+    expect(JSON.stringify(own.content)).not.toContain('fork of the lead')
     // The runtime's "send your result with send_message" notice is removed from the fork's first message.
     expect(body(forkReq)).not.toContain('Your parent agent id is')
   })

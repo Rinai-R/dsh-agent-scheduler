@@ -12,7 +12,8 @@ import { AGENT_RECORD, REQUEST_RECORD } from '../src/records.js'
 
 afterEach(teardown)
 
-const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && o.sessionId !== 'main' && body(o).includes('You are a fork of the lead')
+/** A fork is any child that is not a worker: forks carry the lead's section, workers their own. */
+const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && o.sessionId !== 'main' && JSON.stringify(o.messages[0]).includes('# Agent Scheduler\\n') && !JSON.stringify(o.messages[0]).includes('Agent Scheduler: worker')
 const isWorker = (name: string) => (o: GenerateOptions) => body(o).includes(`You are worker \\"${name}\\"`)
 /** The system message is the first message of a request. */
 const systemOf = (o: GenerateOptions) => JSON.stringify(o.messages[0])

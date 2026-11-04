@@ -1,7 +1,7 @@
 /** Model tools. Every agent of the preset (lead, forks, workers) gets the same set. */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
-import type { Scheduler } from './scheduler.js'
+import { FORK_NOTICE, LEAD_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
 
 type Live = { get(id: never): Agent | undefined }
@@ -141,7 +141,9 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
       ]
     : [
         '# Agent Scheduler',
-        'The user talks to a lead; every user message is handled by a fresh fork of the lead, and the lead receives the forks\' conclusions as "The user said: ... Its conclusion: ...".',
+        'The user talks to a lead; every user message is handed to a fresh fork of the lead.',
+        FORK_NOTICE,
+        LEAD_NOTICE,
         'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one, agent_send to delegate. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
       ]
   if (role !== undefined && role !== '') lines.push(`Role:\n${role}`)
