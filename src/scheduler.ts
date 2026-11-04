@@ -472,7 +472,7 @@ export class Scheduler {
 
   /**
    * Archive a fork or worker: release it and keep its name taken. Rounds it completed still
-   * answer their requests; requests it will now never answer fail back to whoever asked.
+   * answer their requests; requests it will now never answer fail, and that failure goes to the lead.
    * @param caller - the agent asking.
    * @param name - the member.
    */

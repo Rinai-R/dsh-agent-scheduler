@@ -81,7 +81,7 @@ export interface RequestRecord {
   readonly messageId?: string
   readonly text?: string
   readonly answer?: string
-  /** Where the answer went: the requester, or the lead when the requester was gone. */
+  /** Where the answer went: always the lead. */
   readonly deliveredTo?: string
   readonly detail?: string
 }

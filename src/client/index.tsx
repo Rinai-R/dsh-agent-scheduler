@@ -248,7 +248,10 @@ export function createAgentsDock(openAgents: () => void) {
  * @param ctx - client plugin context, for the controller's known child addresses.
  * @returns the slot component.
  */
-export function createAgentsPage(ctx: { sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined } }) {
+export function createAgentsPage(ctx: {
+  sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined }
+  sidebarRight?: { isExpanded?: () => boolean; toggleExpanded?: () => void }
+}) {
   return memo(function AgentsPage(props: {
     sessionId?: string
     useProjection?: (key: string) => unknown
@@ -261,6 +264,13 @@ export function createAgentsPage(ctx: { sessions?: { subagentAddress?: (id: stri
     const open = (member: Member) => {
       if (props.sessionId === undefined || tab === undefined) return
       tab.tab.actions.openResource(subagentAddress(ctx, props.sessionId, member.id), { preferNewPane: true })
+    }
+    // Fold the whole column, keeping its tabs: closing only this tab would leave open agent chats
+    // holding the column's width. The runtime's header button and the chip expand it again.
+    const collapse = () => {
+      const sidebar = ctx.sidebarRight
+      if (sidebar?.toggleExpanded !== undefined && sidebar.isExpanded?.() !== false) sidebar.toggleExpanded()
+      else tab?.tab.actions.close()
     }
     const rows = roster?.members ?? []
     const forks = rows.filter(m => m.kind === 'fork' && m.state !== 'archived')
@@ -289,7 +299,7 @@ export function createAgentsPage(ctx: { sessions?: { subagentAddress?: (id: stri
       <div className="sch-roster" data-scheduler-roster="">
         <div className="sch-roster-head">
           <span>{rows.length === 0 ? '' : `${rows.filter(m => m.state !== 'archived').length} 个 agent`}</span>
-          <button type="button" className="sch-roster-collapse" title="收起这一栏；点输入框上方的 Agents chip 可以再打开" onClick={() => { tab?.tab.actions.close() }}>收起 ⇥</button>
+          <button type="button" className="sch-roster-collapse" title="收起右栏（Agents 和已打开的对话都保留）；点对话头部右上角或输入框上方的 Agents 可以展开" onClick={collapse}>收起 ⇥</button>
         </div>
         {rows.length === 0
           ? <div className="sch-roster-empty">还没有分身或 worker。发一条消息给 lead。</div>

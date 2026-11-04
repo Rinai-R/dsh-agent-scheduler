@@ -37,7 +37,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
   return [
     defineTool({
       name: 'agent_create',
-      description: 'Create a long-lived worker agent with its own session, for one repository or area. Give it a role, optionally a working directory (one worker per directory or worktree), a model ("provider/model"), a preset, and a first task; the task becomes a request whose answer comes back to you.',
+      description: 'Create a long-lived worker agent with its own session, for one repository or area. Give it a role, optionally a working directory (one worker per directory or worktree), a model ("provider/model"), a preset, and a first task; the task becomes a request whose answer goes to the lead, not back to you.',
       parameters: {
         name: { type: 'string', required: true, description: 'Unique lower-kebab-case name, never reused.' },
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },

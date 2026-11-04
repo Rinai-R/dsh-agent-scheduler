@@ -23,14 +23,14 @@ the lead is never blocked by an input.
   own session log, with its `report` summary or else its closing text. Attribution happens when the
   agent goes idle and is recorded as a watermark, so it survives restarts and does not depend on
   when (or whether) the runtime's settlement notice reaches the lead.
-- **Archiving.** Archiving an agent that still owes answers fails those requests back to whoever
-  asked, so nobody waits forever.
+- **Archiving.** Archiving an agent that still owes answers fails those requests and tells the
+  lead, so nobody waits forever.
 - **Right sidebar.** An *Agents* page lists forks and workers with live state, opens any of them as
   an embedded conversation (split view), and a chip above the composer shows how many are running
   and how many are waiting for you.
 - **Queue.** When the runtime refuses a new child for its residency limit, the start (or delivery)
   waits in order and is retried when a slot frees; the input card shows 排队中 instead of failing.
-  Other failures are reported to the agent that asked, not retried.
+  Other failures are reported to the lead, not retried.
 
 ## Enable it
 
