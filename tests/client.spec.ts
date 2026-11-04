@@ -58,3 +58,22 @@ describe('input definition', () => {
     expect(def.buildViewNode({ key: 'k', id: 'f1' })).toBeNull()
   })
 })
+
+describe('client activation', () => {
+  it('apply runs to the end with seats that build their bodies immediately', async () => {
+    const { apply } = await import('../src/client/index.js')
+    const registered: string[] = []
+    ;(globalThis as { document?: unknown }).document ??= { createElement: () => ({ dataset: {} }), head: { appendChild: () => undefined } }
+    const ctx = {
+      effect: (f: () => unknown) => { f() },
+      uiConversation: { events: { register: () => () => undefined } },
+      sidebarRightTabs: { register: () => () => undefined },
+      // The real slot runtime may call the factory at once; anything it closes over must exist.
+      slots: { inject: (_name: string, f: () => unknown) => { f() }, register: (seat: { name: string }) => { registered.push(seat.name); return () => undefined } },
+      remote: { commands: { execute: async () => ({ ok: true, value: { kind: 'success' } }), list: async () => ({ ok: true, value: [] }) } },
+      sessions: {}, sidebarRight: {}, uiWorkspace: {},
+    }
+    expect(() => { apply(ctx) }).not.toThrow()
+    expect(registered).toEqual(expect.arrayContaining(['conversation.chat.node', 'sidebar.right.pane.tab', 'conversation.input.left']))
+  })
+})

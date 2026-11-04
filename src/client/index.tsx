@@ -697,14 +697,15 @@ export function apply(ctx: any): void {
     if (value === undefined) return `unknown command: ${line.split(' ')[0]}`
     return value.kind === 'error' ? (value.text ?? 'failed') : null
   }
-  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has)))
-  const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
-  const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
+  /** Whether the Session's host half knows a command: it lags the browser half until a restart. */
   const has = async (sessionId: string, name: string): Promise<boolean> => {
     const result = await ctx.remote.commands.list(sessionId)
     if (!result.ok) throw new Error(result.error.message)
     return (result.value as readonly { name?: string }[]).some(command => command.name === name)
   }
+  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has)))
+  const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
+  const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
 }
