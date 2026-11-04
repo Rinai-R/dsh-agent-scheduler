@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { boundContextSummary, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, createDeveloperMessage, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
@@ -92,6 +92,57 @@ interface Pending {
 export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
 const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? agent.id
 const isUserInput = (message: UserMessage): boolean => message.source.kind === 'user'
+
+/** Source of the empty node that hides a handed-off message from the lead's model input. */
+export const HANDOFF_SOURCE = 'agent-scheduler-handoff'
+
+/**
+ * Log a handed-off user message as received, then hide it from the lead's model input.
+ *
+ * The browser composer releases a sent draft (text and attachments) only once the Session log
+ * holds a `user/message` carrying the prompt's request id; an inbox removal is recorded as a
+ * cancellation, and a draft with attachments is then restored as unsent. Logging the message
+ * gives the composer its receipt and the chat the user's own bubble, images included. The
+ * replacement that follows shadows that one surface node, inside a step with an empty developer message
+ * which yields no model message, so the lead never reads the words a fork is handling. Outside
+ * a step the shadow is a one-line note instead (the format allows developer messages only
+ * inside steps).
+ * @param session - the main Session.
+ * @param message - the user message being handed to a fork.
+ * @param note - the line the lead reads in its place when no step is open.
+ * @returns false when the log has no system prompt yet and nothing could be logged.
+ */
+export function admitHidden(session: Session, message: UserMessage, note: string): boolean {
+  // A log's first surface node must be the system prompt, which only the lead's first step
+  // writes; before it, a user message cannot be logged at all.
+  const head = session.surface.nodes[0]
+  if (head === undefined || session.eventAt(head)?.type !== 'system/message') return false
+  const logged = session.append('user/message', message, { surfaceOp: 'append' })
+  const replace = { surfaceOp: { op: 'replace', startSeq: logged.seq, endSeq: logged.seq }, sourceEventSeqs: [logged.seq] } as never
+  const open = openStep(session.snapshotEvents())
+  if (open !== undefined) {
+    // Inside a step the node may sit between a tool call and its result, where no user message
+    // may stand; an empty developer message of that step yields no model message at all.
+    session.append('developer/message', {
+      ...open,
+      message: createDeveloperMessage({ source: { kind: HANDOFF_SOURCE } as never, content: [] }),
+    } as never, replace)
+    return true
+  }
+  // Outside a step a developer message is not allowed; a one-line note in its place is.
+  session.append('user/message', createUserMessage({ content: [{ type: 'text', text: note }], source: { kind: HANDOFF_SOURCE } as never }), replace)
+  return true
+}
+
+/** The turn and step of a step still open at the end of the log, if any. */
+function openStep(events: readonly SessionEvent[]): { turn: number; step: number } | undefined {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]!
+    if (event.type === 'step/end' || event.type === 'turn/end') return undefined
+    if (event.type === 'step/start') return { turn: event.data.turn, step: event.data.step }
+  }
+  return undefined
+}
 /** Context the runtime refreshes on every step; never a reason for the lead to speak. */
 const isContextOnly = (message: UserMessage): boolean => (message.source as { form?: unknown }).form === 'snapshot'
 
@@ -257,7 +308,7 @@ export class Scheduler {
    */
   onInserted(agent: Agent, message: UserMessage): boolean {
     if (!isMainSession(agent)) return this.ledgerOf(agent).members.has(agent.id) && this.stripNativeNotice(agent, message)
-    if (!isUserInput(message) || !this.isOn(agent) || !agent.inbox.remove(message.id)) return false
+    if (!isUserInput(message) || !this.isOn(agent) || !agent.inbox.nextTurn.concat(agent.inbox.nextStep).some(m => m.id === message.id)) return false
     this.handOff(agent, message)
     return true
   }
@@ -274,7 +325,11 @@ export class Scheduler {
     const forkId = SessionId(`session-${randomUUID()}`)
     const text = textOf(message.content)
     const name = this.ledgerOf(main).nextForkName()
-    this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name }))
+    // Admit before removing: the composer keeps a draft with attachments until it sees the
+    // message logged; a removal alone reads to it as a canceled send and restores the draft.
+    const logged = admitHidden(main.session, message, `[A user message was handed to ${name}; its conclusion will come to you.]`)
+    main.inbox.remove(message.id)
+    this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name, ...(logged ? { logged: true as const } : {}) }))
     const agentOptions = forkAgentOptions(main, this.deps.configuredModel)
     void this.run(main, forkId, name, async () => {
       await this.deps.subagents.startActivation({

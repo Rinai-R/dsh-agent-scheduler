@@ -28,6 +28,9 @@ export interface InputRecord {
   readonly text: string
   /** Display name, `fork-N`. */
   readonly name?: string
+  /** The message is also logged as the user's own `user/message` (hidden from the lead), so
+   * the chat already shows it; the card adds only the fork's state. Absent in older logs. */
+  readonly logged?: true
 }
 
 /** A fork's lifecycle change as the main Session saw it. */

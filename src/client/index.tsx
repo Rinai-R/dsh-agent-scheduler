@@ -25,7 +25,7 @@ export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 's
 
 interface Event { type: string; seq: number; time: number; data: Record<string, unknown> }
 type CardState = 'queued' | 'running' | 'done' | 'failed' | 'archived'
-interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: CardState; readonly detail?: string }
+interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: CardState; readonly detail?: string; /** The chat already shows the user's own message (with its images); the card adds only the status. */ readonly logged?: true }
 
 /** Fork-state record → what the card says. `started` follows a wait in the queue. */
 const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'running', done: 'done', failed: 'failed', archived: 'archived' }
@@ -59,6 +59,7 @@ export const inputDefinition = {
     text: String(match.event.data.text ?? ''),
     forkId: String(match.event.data.forkId),
     fork: 'running',
+    ...(match.event.data.logged === true ? { logged: true as const } : {}),
   }),
   update: (context: Ctx & { state: State }, match: { event: Event }): State => {
     if (match.event.type !== FORK_STATE) return context.state
@@ -345,10 +346,10 @@ function countsOf(members: readonly Member[], statuses: Statuses | undefined) {
  */
 export function createInputCard(open: (parent: string, child: string) => void) {
   return memo(function InputCard({ node, sessionId }: { node: { data: State }; sessionId: string }) {
-    const { text, fork, forkId, detail } = node.data
+    const { text, fork, forkId, detail, logged } = node.data
     return (
-      <div className="sch-input" data-scheduler-input="" data-fork-state={fork}>
-        <div className="sch-input-bubble">{text}</div>
+      <div className="sch-input" data-scheduler-input="" data-fork-state={fork} data-logged={logged === true ? 'yes' : 'no'}>
+        {logged === true ? null : <div className="sch-input-bubble">{text}</div>}
         <button type="button" className="sch-input-fork" title={detail ?? forkId} onClick={() => { open(sessionId, forkId) }}>
           <span className="sch-input-dot" data-state={fork} />
           {INPUT_LABEL[fork]}{detail === undefined ? '' : `：${detail}`}

@@ -128,3 +128,12 @@ describe('request card', () => {
     expect(openLabel(2, 'idle')).toBe('2 个请求待回答')
   })
 })
+
+describe('input card when the message is logged', () => {
+  it('keeps the logged flag so the card draws only the fork status under the native bubble', () => {
+    const logged = { type: 'plugin:dsh-agent-scheduler/input', seq: 7, time: 9, data: { forkId: 'f2', text: 'with image', logged: true } }
+    expect(def.start({ key: 'k', id: 'f2' }, { event: logged })).toMatchObject({ logged: true, text: 'with image' })
+    // Older records have no flag: the card still draws the user's words itself.
+    expect(def.start({ key: 'k', id: 'f1' }, { event: input })).not.toHaveProperty('logged')
+  })
+})
