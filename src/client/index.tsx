@@ -11,6 +11,7 @@ import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, RO
 const INPUT = 'plugin:dsh-agent-scheduler/input'
 const FORK_STATE = 'plugin:dsh-agent-scheduler/fork-state'
 const NODE_KIND = 'scheduler-input'
+const REQUEST_KIND = 'scheduler-request'
 
 /** Projection key registered by the host half. */
 const ROSTER = 'agentScheduler'
@@ -81,7 +82,74 @@ export const inputDefinition = {
   },
 }
 
+/** What a request steered into a running member's round shows. */
+interface RequestCard { readonly seq: number; readonly id: string; readonly from: string; readonly text: string }
+interface MessageEvent { type: string; seq: number; time: number; data: { id?: unknown; content?: unknown; source?: { kind?: unknown } } }
+interface Located { location?: { kind?: string; step?: { step?: number } } }
+
+/**
+ * Parse a scheduler request relayed into a member: `[request r-N from name]` then the text.
+ * @param event - a `user/message` event of the member's log.
+ * @returns the request, or undefined for any other message.
+ */
+export function requestOf(event: MessageEvent): Omit<RequestCard, 'seq'> | undefined {
+  if (event.type !== 'user/message' || event.data.source?.kind !== 'agent-message' || !Array.isArray(event.data.content)) return undefined
+  for (const block of event.data.content as { type?: unknown; text?: unknown }[]) {
+    if (block.type !== 'text' || typeof block.text !== 'string') continue
+    const head = /^\[request (r-\d+) from ([^\]\n]+)\]\n?/u.exec(block.text)
+    if (head !== null) return { id: head[1]!, from: head[2]!, text: block.text.slice(head[0].length) }
+  }
+  return undefined
+}
+
+/**
+ * A request that reached a member while it was running. The runtime steers it into the round in
+ * progress (step 2 or later), where the chat shows ordinary context as nothing at all; the round
+ * then answers it with whatever it concludes. A request that wakes an idle member opens a turn
+ * at step 1 and already has the runtime's own 「收到任务消息」 row, so it is left alone.
+ */
+export const requestDefinition = {
+  kind: REQUEST_KIND,
+  target: 'chat',
+  match: (event: MessageEvent) => requestOf(event) === undefined ? null : { id: String(event.data.id), role: 'start' as const },
+  start: (_context: unknown, match: { event: MessageEvent } & Located): RequestCard | undefined => {
+    const step = match.location?.kind === 'step' ? match.location.step?.step : undefined
+    if (step === undefined || step < 2) return undefined
+    const request = requestOf(match.event)
+    return request === undefined ? undefined : { seq: match.event.seq, ...request }
+  },
+  update: (context: { state?: RequestCard }) => context.state,
+  buildViewNode: (context: { key: string; id: string; state?: RequestCard | undefined; start?: { location: unknown } }) => context.state === undefined ? null : {
+    key: context.key,
+    kind: REQUEST_KIND,
+    id: context.id,
+    target: 'chat',
+    anchorSeq: context.state.seq,
+    location: context.start?.location ?? { kind: 'unresolved' },
+    visibility: 'visible',
+    data: context.state,
+  },
+}
+
+/** The card for {@link requestDefinition}. */
+export const RequestCardView = memo(function RequestCardView({ node }: { node: { data: RequestCard } }) {
+  const { id, from, text } = node.data
+  return (
+    <details className="sch-request" data-scheduler-request={id}>
+      <summary><span className="sch-request-dot" />收到请求 {id}（来自 {from}）<span className="sch-request-hint">在这轮进行中送达，这轮结束时一并回答，回答交给 lead</span></summary>
+      <div className="sch-request-body">{text}</div>
+    </details>
+  )
+})
+
 const STYLE = `
+.sch-request{margin:4px 0;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:var(--dsw-radius-xl,12px);background:var(--dsw-alias-markdown-code-block,transparent);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}
+.sch-request summary{display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;list-style:none}
+.sch-request summary::-webkit-details-marker{display:none}
+.sch-request-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-brand-primary-new-colorprimary-new-color,currentColor)}
+.sch-request-hint{margin-left:auto;color:var(--dsw-alias-label-tertiary)}
+.sch-request-body{padding:0 14px 10px 29px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;color:var(--dsw-alias-label-primary)}
+.sch-roster-reqs{margin-right:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
 .sch-input-fork{display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
@@ -513,6 +581,16 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
 }
 
 /**
+ * What a row says about requests sent to it and not yet answered.
+ * @param n - open requests to this member.
+ * @param state - the row's live state.
+ * @returns e.g. 「2 个请求待回答」.
+ */
+export function openLabel(n: number, state: RowState): string {
+  return state === 'running' ? `${n} 个请求处理中` : `${n} 个请求待回答`
+}
+
+/**
  * The second line of a row: what a fork was asked, or a worker's directory and duty.
  * @param member - a roster row.
  * @returns the line.
@@ -683,8 +761,10 @@ export function createAgentsPage(ctx: {
     const workers = live.filter(m => m.kind === 'worker')
     const archived = rows.filter(m => m.state === 'archived')
     const counts = countsOf(rows, statuses)
+    const openTo = (id: string) => (roster?.openRequests ?? []).filter(r => r.to === id)
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
+      const pendingRequests = openTo(member.id)
       const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
@@ -695,6 +775,7 @@ export function createAgentsPage(ctx: {
             <span className="sch-roster-sub">{subline(member)}</span>
           </span>
           <span className="sch-roster-end">
+            {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => `${r.id}：${r.text.replace(/\s+/gu, ' ').slice(0, 80)}`).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
             <span className="sch-roster-state" data-row={state}>{STATE_LABEL[state]}</span>
             <span className="sch-roster-chev">{ICON.chevron}</span>
           </span>
@@ -762,6 +843,7 @@ export function createAgentsPage(ctx: {
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
 export function apply(ctx: any): void {
   ctx.uiConversation.events.register(inputDefinition)
+  ctx.uiConversation.events.register(requestDefinition)
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-agent-scheduler'
@@ -780,6 +862,7 @@ export function apply(ctx: any): void {
   }
   const openAgents = () => { openAgentsPage(sidebar()) }
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: NODE_KIND }, createInputCard(open)))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: REQUEST_KIND }, RequestCardView))
   ctx.effect(() => ctx.sidebarRightTabs.register({
     id: AGENTS_ID,
     kind: AGENTS_KIND,

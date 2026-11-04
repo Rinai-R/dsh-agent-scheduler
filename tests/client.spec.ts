@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
+import { chatPlacement, openLabel, requestDefinition, requestOf, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -99,5 +99,29 @@ describe('fork model picker', () => {
     const shown = forkModelGroups(groups, { provider: 'gone', model: 'm' })
     expect(shown).toHaveLength(3)
     expect(shown[2]).toMatchObject({ id: 'gone', models: [{ id: 'm' }] })
+  })
+})
+
+describe('request card', () => {
+  const relay = (text: string, kind = 'agent-message') => ({ type: 'user/message', seq: 201, time: 1, data: { id: 'm1', content: [{ type: 'text', text: 'Agent s sent a message: ' }, { type: 'text', text }], source: { kind } } })
+  const at = (step: number) => ({ kind: 'step', step: { step } })
+  it('reads a relayed request and nothing else', () => {
+    expect(requestOf(relay('[request r-2 from fork-2]\nlook at gpt_image'))).toEqual({ id: 'r-2', from: 'fork-2', text: 'look at gpt_image' })
+    expect(requestOf(relay('[reply to r-2 from hub]\nx'))).toBeUndefined()
+    expect(requestOf(relay('[request r-2 from fork-2]\nx', 'user'))).toBeUndefined()
+    expect(requestDefinition.match({ type: 'turn/start', seq: 1, time: 1, data: {} })).toBeNull()
+  })
+  it('shows a request steered into a running round, not one that opened its own turn', () => {
+    const event = relay('[request r-2 from fork-2]\nlook at gpt_image')
+    expect(requestDefinition.match(event)).toEqual({ id: 'm1', role: 'start' })
+    const steered = requestDefinition.start(undefined, { event, location: at(27) })
+    expect(steered).toEqual({ seq: 201, id: 'r-2', from: 'fork-2', text: 'look at gpt_image' })
+    expect(requestDefinition.buildViewNode({ key: 'k', id: 'm1', state: steered })).toMatchObject({ kind: 'scheduler-request', anchorSeq: 201, visibility: 'visible' })
+    expect(requestDefinition.start(undefined, { event, location: at(1) })).toBeUndefined()
+    expect(requestDefinition.buildViewNode({ key: 'k', id: 'm1' })).toBeNull()
+  })
+  it('labels open requests on a roster row', () => {
+    expect(openLabel(1, 'running')).toBe('1 个请求处理中')
+    expect(openLabel(2, 'idle')).toBe('2 个请求待回答')
   })
 })

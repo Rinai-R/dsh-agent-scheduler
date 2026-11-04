@@ -508,13 +508,16 @@ export class Scheduler {
    * @returns the request id, and whether delivery waits for a slot.
    * @throws when the target is unknown or gone, or delivery failed.
    */
-  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean }> {
+  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; note: string }> {
     const main = this.mainOf(caller)
     const ledger = this.ledgerOf(main)
     const target = ledger.find(to)
     if (target === undefined) throw new Error(`no agent named "${to}"; use agent_list`)
     if (target.id === caller.id) throw new Error('cannot send a request to yourself')
     if (gone(target)) throw new Error(`"${to}" is ${target.state}`)
+    // A running target takes the message at its next step boundary, inside the round it is in;
+    // say so, since `queued` alone (waiting for a slot) reads as "it is being handled now".
+    const busy = this.deps.agents.get(SessionId(target.id))?.status === 'running'
     const id = ledger.nextRequestId()
     const from = ledger.nameOf(caller.id)
     this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text }))
@@ -530,7 +533,13 @@ export class Scheduler {
       },
     })
     if (outcome === 'failed') throw new Error(`request ${id} to "${target.name}" was not delivered: ${failure}`)
-    return { request: id, to: target.name, queued: outcome === 'queued' }
+    const queued = outcome === 'queued'
+    const note = queued
+      ? `${target.name} has not started yet (no free slot); ${id} is delivered when it starts.`
+      : busy
+        ? `${target.name} is busy; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
+        : `${target.name} was idle and starts on ${id} now.`
+    return { request: id, to: target.name, queued, busy, note }
   }
 
   /**

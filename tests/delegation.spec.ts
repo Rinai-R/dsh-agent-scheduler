@@ -148,6 +148,37 @@ describe('requests', () => {
   })
 })
 
+describe('sending to a busy worker', () => {
+  it('says the target is busy, steers the request into its current round, and that round answers it', async () => {
+    const hold = gate()
+    let firstStep = true
+    const { ctx, lead } = await setup(async o => {
+      if (o.sessionId === 'lead') return textResponse('LEAD OK')
+      if (isWorker('hub')(o)) {
+        // The worker's first round is a long tool step: a request sent meanwhile lands mid-round.
+        if (firstStep) { firstStep = false; await hold.promise; return toolCallResponse('w1', 'agent_list', {}) }
+        return textResponse('HUB ANSWER covering both')
+      }
+      return textResponse('OTHER')
+    })
+    const scheduler = install(ctx)
+    await scheduler.createWorker(lead, { name: 'hub', role: 'owns hub', task: 'smoke test asr' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('hub')!.id))?.status).toBe('running') })
+    const sent = await scheduler.send(lead, 'hub', 'then look at gpt_image')
+    expect(sent).toMatchObject({ request: 'r-2', to: 'hub', queued: false, busy: true })
+    expect(sent.note).toMatch(/busy.*after its current step/u)
+    hold.open()
+    await until(lead, '[reply to r-2 from hub]')
+    const reqs = scheduler.ledgerOf(lead).requests
+    // One round claimed both requests, so both get its one answer.
+    expect(reqs.get('r-1')).toMatchObject({ state: 'answered', answer: 'HUB ANSWER covering both' })
+    expect(reqs.get('r-2')).toMatchObject({ state: 'answered', answer: 'HUB ANSWER covering both' })
+    const idle = await scheduler.send(lead, 'hub', 'one more')
+    expect(idle).toMatchObject({ busy: false, queued: false })
+    expect(idle.note).toMatch(/idle/u)
+  })
+})
+
 describe('worker tools', () => {
   it('uses the configured worker model unless the worker names one', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse('ready'))
