@@ -115,9 +115,12 @@ describe('request card', () => {
     const event = relay('[request r-2 from fork-2]\nlook at gpt_image')
     expect(requestDefinition.match(event)).toEqual({ id: 'm1', role: 'start' })
     const steered = requestDefinition.start(undefined, { event, location: at(27) })
-    expect(steered).toEqual({ seq: 201, id: 'r-2', from: 'fork-2', text: 'look at gpt_image' })
+    expect(steered).toEqual({ seq: 201, id: 'r-2', from: 'fork-2', text: 'look at gpt_image', steered: true })
     expect(requestDefinition.buildViewNode({ key: 'k', id: 'm1', state: steered })).toMatchObject({ kind: 'scheduler-request', anchorSeq: 201, visibility: 'visible' })
-    expect(requestDefinition.start(undefined, { event, location: at(1) })).toBeUndefined()
+    // The engine rejects an undefined state; one that opened its own turn builds no node instead.
+    const waking = requestDefinition.start(undefined, { event, location: at(1) })
+    expect(waking).toMatchObject({ steered: false })
+    expect(requestDefinition.buildViewNode({ key: 'k', id: 'm1', state: waking })).toBeNull()
     expect(requestDefinition.buildViewNode({ key: 'k', id: 'm1' })).toBeNull()
   })
   it('labels open requests on a roster row', () => {

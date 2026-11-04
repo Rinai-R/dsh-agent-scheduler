@@ -83,7 +83,7 @@ export const inputDefinition = {
 }
 
 /** What a request steered into a running member's round shows. */
-interface RequestCard { readonly seq: number; readonly id: string; readonly from: string; readonly text: string }
+interface RequestCard { readonly seq: number; readonly id: string; readonly from: string; readonly text: string; /** False when the runtime already shows it (it opened its own turn). */ readonly steered: boolean }
 interface MessageEvent { type: string; seq: number; time: number; data: { id?: unknown; content?: unknown; source?: { kind?: unknown } } }
 interface Located { location?: { kind?: string; step?: { step?: number } } }
 
@@ -92,7 +92,7 @@ interface Located { location?: { kind?: string; step?: { step?: number } } }
  * @param event - a `user/message` event of the member's log.
  * @returns the request, or undefined for any other message.
  */
-export function requestOf(event: MessageEvent): Omit<RequestCard, 'seq'> | undefined {
+export function requestOf(event: MessageEvent): Omit<RequestCard, 'seq' | 'steered'> | undefined {
   if (event.type !== 'user/message' || event.data.source?.kind !== 'agent-message' || !Array.isArray(event.data.content)) return undefined
   for (const block of event.data.content as { type?: unknown; text?: unknown }[]) {
     if (block.type !== 'text' || typeof block.text !== 'string') continue
@@ -112,14 +112,15 @@ export const requestDefinition = {
   kind: REQUEST_KIND,
   target: 'chat',
   match: (event: MessageEvent) => requestOf(event) === undefined ? null : { id: String(event.data.id), role: 'start' as const },
-  start: (_context: unknown, match: { event: MessageEvent } & Located): RequestCard | undefined => {
+  // The engine requires a state from every start, so a request that needs no card is kept as
+  // one that builds no node.
+  start: (_context: unknown, match: { event: MessageEvent } & Located): RequestCard => {
     const step = match.location?.kind === 'step' ? match.location.step?.step : undefined
-    if (step === undefined || step < 2) return undefined
-    const request = requestOf(match.event)
-    return request === undefined ? undefined : { seq: match.event.seq, ...request }
+    const request = requestOf(match.event) ?? { id: '', from: '', text: '' }
+    return { seq: match.event.seq, ...request, steered: step !== undefined && step >= 2 }
   },
   update: (context: { state?: RequestCard }) => context.state,
-  buildViewNode: (context: { key: string; id: string; state?: RequestCard | undefined; start?: { location: unknown } }) => context.state === undefined ? null : {
+  buildViewNode: (context: { key: string; id: string; state?: RequestCard | undefined; start?: { location: unknown } }) => context.state?.steered !== true ? null : {
     key: context.key,
     kind: REQUEST_KIND,
     id: context.id,
