@@ -209,6 +209,19 @@ describe('worker tools', () => {
     await expect(scheduler.createWorker(lead, { name: 'infra', role: 'x' })).rejects.toThrow(/taken/)
   })
 
+  it('keeps one active worker per directory, and frees it on archive', async () => {
+    const { ctx, lead } = await setup(() => textResponse('ready'))
+    const scheduler = install(ctx)
+    const dir = mkdtempSync(join(tmpdir(), 'wt-'))
+    await scheduler.createWorker(lead, { name: 'push-a', role: 'x', cwd: dir })
+    await expect(scheduler.createWorker(lead, { name: 'push-b', role: 'y', cwd: dir })).rejects.toThrow(/"push-a" already works in/)
+    // Continuing a worker does not silently reuse its directory.
+    const b = await scheduler.createWorker(lead, { name: 'push-c', role: 'z', from: 'push-a' }).catch((e: Error) => e)
+    expect(b instanceof Error ? b.message : '').not.toMatch(/already works in/)
+    await scheduler.archive(lead, 'push-a')
+    await scheduler.createWorker(lead, { name: 'push-d', role: 'w', cwd: dir })
+  })
+
   it('roles: the lead\'s role reaches the lead and forks with one identical system prompt; a worker has its own', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(isFork(o) ? 'FORK' : 'X'))
     const scheduler = install(ctx)

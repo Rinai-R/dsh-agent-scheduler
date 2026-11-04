@@ -41,7 +41,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       parameters: {
         name: { type: 'string', required: true, description: 'Unique lower-kebab-case name, never reused.' },
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },
-        cwd: { type: 'string', description: 'Working directory or worktree; omit to use the current one.' },
+        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s.' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the configured worker model, then the runtime default.' },
         from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset).' },
@@ -115,7 +115,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'report',
-      description: 'Give the conclusion of this round explicitly. It replaces your final message as what is sent back to whoever asked.',
+      description: 'Give the conclusion of this round explicitly. It replaces your final message as what goes to the lead.',
       parameters: { summary: { type: 'string', required: true } },
       output: { schema: OK, render: json },
       // The call itself is the record: the scheduler reads the summary from this round's log.
@@ -143,7 +143,6 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
         '# Agent Scheduler',
         'The user talks to a lead; every user message is handled by a fresh fork of the lead, and the lead receives the forks\' conclusions as "The user said: ... Its conclusion: ...".',
         'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one, agent_send to delegate. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
-        'As the lead, keep a concise map of the user\'s requirements and their state; act on conclusions when needed.',
       ]
   if (role !== undefined && role !== '') lines.push(`Role:\n${role}`)
   return lines.join('\n')

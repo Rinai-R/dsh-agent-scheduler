@@ -10,6 +10,7 @@
  * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
 import { randomUUID } from 'node:crypto'
+import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -367,7 +368,14 @@ export class Scheduler {
     const id = SessionId(`session-${randomUUID()}`)
     const selection = args.model ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
-    const cwd = args.cwd ?? source?.cwd
+    // One worker per directory: this is what keeps two writers out of the same tree. A worker
+    // continued from another gets no default directory, since its source still works in its own.
+    const base = main.session.header.cwd ?? process.cwd()
+    const cwd = args.cwd === undefined ? undefined : isAbsolute(args.cwd) ? args.cwd : resolve(base, args.cwd)
+    if (cwd !== undefined) {
+      const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
+      if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
+    }
     const model = selection === undefined ? undefined : `${selection.provider}/${selection.model}`
     this.record(main, s => appendAgent(s, {
       action: 'created', id, name: args.name, role: args.role,
