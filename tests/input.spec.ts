@@ -43,6 +43,22 @@ describe('input rule', () => {
     expect(body(forkReq)).not.toContain('Your parent agent id is')
   })
 
+  it('the routing rule is in the system prompt of both the lead and its fork, which stay identical', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
+    install(ctx)
+    lead.followup(user('add a feature'))
+    await until(lead, 'Its conclusion')
+    const forkReq = adapter.requests.find(r => r.sessionId !== 'lead')!
+    const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
+    // Same bytes in both system prompts (message ids aside), so the fork keeps the lead's cache prefix.
+    expect(leadReq.messages[0]!.role).toBe('system')
+    expect(JSON.stringify(leadReq.messages[0]!.content)).toBe(JSON.stringify(forkReq.messages[0]!.content))
+    for (const rule of ['goes by agent_send to the worker that did it', 'agent_create with from: <owner>', 'state \\"running\\" in agent_list', 'agent_create without from']) {
+      expect(JSON.stringify(leadReq.messages[0])).toContain(rule)
+      expect(JSON.stringify(forkReq.messages[0])).toContain(rule)
+    }
+  })
+
   it('a conclusion carries its input into the lead, and a later fork inherits both', async () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD ACK' : 'FORK CONCLUSION'))
     install(ctx)

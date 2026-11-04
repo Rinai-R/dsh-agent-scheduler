@@ -499,11 +499,11 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
               </button>
             )}
         </span>
-        {members.length === 0 ? null : (
-          <button type="button" className="sch-agents-btn" aria-label="打开 Agents" title="打开 Agents：查看、打开或归档分身和 worker" onClick={deps.openAgents}>
+        {members.length === 0 && !on ? null : (
+          <button type="button" className="sch-agents-btn" aria-label="打开 Agents" title="打开 Agents：查看、打开或归档分身和 worker，设置分身模型" onClick={deps.openAgents}>
             {label.tone === 'idle' ? null : <span className="sch-dot" data-row={label.tone} />}
             Agents
-            {label.text === '' ? <span className="sch-agents-n">{members.length}</span> : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
+            {label.text === '' ? (members.length === 0 ? null : <span className="sch-agents-n">{members.length}</span>) : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
           </button>
         )}
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}

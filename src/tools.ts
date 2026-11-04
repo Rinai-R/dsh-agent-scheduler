@@ -51,7 +51,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
         cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s.' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the configured worker model, then the runtime default.' },
-        from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset).' },
+        from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset). Use it for a new task in that worker\'s area that should run in parallel (the owner is running, or the task needs its own branch or worktree): fork the owner and give the new worker its own cwd.' },
         task: { type: 'string', description: 'Optional first request.' },
       },
       output: { schema: OK, render: json },
@@ -62,7 +62,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_send',
-      description: 'Send a request to a worker or fork by name. Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it.',
+      description: 'Send a request to a worker or fork by name. Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. If the target is running, the request queues behind its current work; for a new task in the same area, agent_create with from: <that worker> instead, so it runs in parallel.',
       parameters: {
         to: { type: 'string', required: true, description: 'Name of the worker or fork.' },
         message: { type: 'string', required: true, description: 'Self-contained request.' },
