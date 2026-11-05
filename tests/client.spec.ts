@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -199,5 +199,22 @@ describe('agent chat tabs', () => {
 describe('sidebar tab strip', () => {
   it('is a no-op without a document', () => {
     expect(() => { steadyTabStrips(undefined)() }).not.toThrow()
+  })
+})
+
+describe('roster subline', () => {
+  const fork = { id: 'f', name: 'fork-1', kind: 'fork', state: 'running', text: '  补充\n架构  说明 ' } as never
+  it('flattens the ask, and leads with the oldest open request', () => {
+    expect(subline(fork)).toBe('补充 架构 说明')
+    expect(subline(fork, [{ id: 'r-3', text: '改\n方向' }, { id: 'r-4', text: 'x' }])).toBe('r-3：改 方向')
+  })
+  it('a worker shows its directory, then its oldest open request or else its duty', () => {
+    const worker = { id: 'w', name: 'w', kind: 'worker', state: 'running', text: 'first task', role: 'docs\nowner', cwd: '/x/repo/' } as never
+    expect(subline(worker)).toBe('repo · docs owner')
+    expect(subline(worker, [{ id: 'r-2', text: 'fix\nit' }])).toBe('repo · r-2：fix it')
+    expect(subline({ ...(worker as object), cwd: undefined, role: undefined } as never)).toBe('first task')
+  })
+  it('says why a member failed before anything else', () => {
+    expect(subline({ ...(fork as object), state: 'failed', detail: 'quota\nexhausted' } as never, [{ id: 'r-1', text: 'x' }])).toBe('quota exhausted')
   })
 })
