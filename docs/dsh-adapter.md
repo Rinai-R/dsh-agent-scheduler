@@ -414,7 +414,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 ### 4.1 时机
 
-`feat/worker-split`（需求三）、`feat/roster-overflow`、`fix/create-lock`（#10）都在改 `src/scheduler.ts`、`src/tools.ts`、`src/rule-plugin.ts`、`src/client/index.tsx`，正好是迁移要动的文件。**建议等这三个合进 main 之后再开始第 2 步以后的工作。** 第 1 步只新增文件，可以先做。feat/user-workers 已经在 03ba296 合入，本稿已经以它为基线。
+`feat/worker-split`（需求三）、`feat/roster-overflow`、`fix/create-lock`（#10）都在改 `src/scheduler.ts`、`src/tools.ts`、`src/rule-plugin.ts`、`src/client/index.tsx`，正好是迁移要动的文件。**等这三个合进 main 之后再开始，整套迁移一起做。**feat/user-workers 已经在 03ba296 合入，本稿已经以它为基线。
 
 ### 4.2 步骤（每步一个 commit，行为不变，现有测试只改 import 路径）
 
@@ -427,7 +427,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 | 5 | 侧栏与 DOM：`retainChatTabs`、`steadyTabStrips`、`chatPlacement`、`SidebarFace`、`arrangeRoster / openAgentsPage / narrowRoster` 的宿主调用、STYLE 里的宿主选择器 → `client/sidebar.ts`、`client/dom.ts`；slot / 事件注册 → `client/ui.ts` | client/index.tsx、client/layout.ts、client/recovery-config.tsx | **高**：roster-overflow 正在改 Agents 页 |
 | 6 | 收口：host-api、host-behaviour、adapter、boundary 四组契约测试；`/agents doctor`；README 加一节「兼容的 DSH 版本」 | tests/contract/*、rule-plugin.ts（一条命令）、README*.md | 低 |
 
-建议拆成两个 PR：**PR-1 = 第 1 步**（现在就能合，立刻拿到 `@next` 预警）；**PR-2 = 第 2-6 步**（等在途分支合完后一次做完，避免中途反复 rebase）。估计 PR-2 的 diff 以移动代码为主，±1200 行。
+已定：第 1-6 步**合成一个 PR**，等 worker-split / roster-overflow / create-lock 合进 main 后一次做完，每步一个 commit。估计 diff 以移动代码为主，±1200 行。
 
 ### 4.3 风险
 
@@ -437,7 +437,87 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 ## 5. 待确认
 
-1. ~~**P3 预设覆盖**~~ 已定：先按现有能力做，继续整段拷贝 standard 预设，由 `packaging.spec.ts` 在拷贝与已安装的 `standard` 不一致时让 CI 失败，每次 DSH 发版都重新生成（`npm run gen:preset`）。已在 DSH 的 [#9431](https://github.com/deepseek-ai/deepseek-harness/discussions/9431#discussioncomment-19417759) 提出需求（`extends`，或让 `insert` 能插进预设的 `config.plugins`）并 cc 了维护者；等他们回复后再决定要不要改成追加一行。
-2. 关键能力缺失时**直接禁用调度**（本稿方案），还是尽量跑、只告警？
+1. **P3 预设覆盖**：原定「先按现有能力做，继续整段拷贝 standard，靠 `packaging.spec.ts` 守门，等 DSH 回复 [#9431](https://github.com/deepseek-ai/deepseek-harness/discussions/9431#discussioncomment-19417759)」。调研（第 6 节）发现**现有能力就能不拷贝**：把 rule 改成 profile 顶层 `- insert:` 的 host 行。另外实测：现在这份拷贝**在 DSH 0.2.2-rc.1 上会让 standard 预设加载失败**。待用户确认是否改走 6.3 的方案。
+2. ~~关键能力缺失~~ 已定：**直接禁用调度**，不跑不兼容的组合（见 2.1）。
 3. 是否同意为了做契约探针，加 6 个客户端包作为 devDependencies？
-4. 是否先单独合 PR-1（骨架 + 契约测试 + CI），其余等在途分支合完再做？
+4. ~~PR 拆分~~ 已定：**不拆**，第 1-6 步做成一个 PR，等在途分支合完后一起做（见 4.2）。
+
+## 6. 调研：rule 怎么挂进 standard 预设（P3）
+
+> 只读调研，结论待确认。DSH 源码以本机 0.2.1-rc.5 为准（`app.asar`，以及仓库 `node_modules` 里同版本的包）；对照版本 npm `@next` = 0.2.2-rc.1。
+> 所有实测都在隔离的 `DSH_HOME=/tmp/dshhome-probe` 下做，没有碰 `~/.dsh`。
+
+### 6.1 现状
+
+- **挂法**：调度 rule 必须出现在每个普通会话里，现在靠 `cordis.patch.yml` 第 3–169 行 `- id: preset-standard` 把 standard 预设的 `config` **整段覆盖**。内容是 rc.5 standard 预设全部 22 行原样拷一份，再在最前面加一行 `agent-scheduler-rule`。第 170 行起，`- insert:` 插入 host 行 `dsh-agent-scheduler`，外加一份同样是整段拷贝的「调度（旧会话）」预设（rule 带 `defaultOn: true`）。
+- **生成**：`scripts/gen-preset.mjs` 读 `dsh --profile web --dump-default-config` 的输出，截出 `- id: preset-standard` 那一段，去掉 `name / description`，插入 rule 行，再拼上 host 行和旧会话预设。版本号 `0.2.1-rc.5` 写死在生成文件的头注释里。
+- **守门**：`tests/packaging.spec.ts` **目前不存在**，它是第 3.1 节提议的契约测试，还没写。现在没有任何东西会发现这份拷贝过时了。
+
+### 6.2 DSH 现有能力逐条核对
+
+| 设想 | 结论 | 证据 |
+|---|---|---|
+| `insert` 插进某个预设内部（某 id 之后或末尾） | **不行**。`insert` 带 `id` 时，只能往 `group: true` 的条目里 push，只能追加到末尾，没有「某 id 之后」。`preset-standard` 不是 group | `@deepseek-ai/cordis-plugin-include` `src/index.ts` `applyEntryPatches` 第 79–91 行。实测补丁 `- id: preset-standard` + `insert: [...]` 输出 `patch insert: entry "preset-standard" is not a group`，预设仍是 22 行 |
+| id 覆盖时只追加 `plugins`，不整体替换 | **不行**。按 id 覆盖是浅赋值 `target[key] = value`，`config` 整个被换掉 | 同文件第 120–123 行。实测覆盖成只有 1 行 `plugins` 的 config，dump 出来 standard 只剩那 1 行 |
+| 按 id 直接改预设里的某个子行 | **不行**。id 索引只会深入 `group && Array.isArray(config)` 的条目，预设内部的行不进索引；同名的 host 行会被误命中 | 同文件第 66–73 行。实测补丁 `- id: tool-todo` 改的是**顶层 host 行** `tool-todo`，预设里的 `tool-todo` 没变（与 DSH [#8547](https://github.com/deepseek-ai/deepseek-harness/discussions/8547) 描述一致） |
+| `!!js` 在加载时读原 standard 的 plugins 再 concat | **不行**，有两个原因。① 预设行的插件类 `AgentPreset` 声明了 `EntryGroup.key`，Loader 对这种「树载体」的 config **不做插值**，`plugins: !!js …` 会原样变成 `{ __jsExpr }`，过不了 `z.array`。② 即使插值，`!!js` 的作用域是 `with (ctx) eval(expr)`，只有当前 fiber 的 ctx，拿不到被覆盖之前的那份行列表；patch 本身是在插值之前、对纯数据做的 | `@deepseek-ai/dsh-agent-preset` `lib/index.js` `static [EntryGroup.key] = true`；`@deepseek-ai/cordis-plugin-loader` `src/index.ts` 第 103–112 行（`if (plugin?.[EntryGroup.key]) return config`）、`src/config/utils.ts` 第 5–9 行（`evaluate`）。实测 dump 中 `config: !!js …` 保持字面量 |
+| 预设注册表的运行时 API：往已注册的 standard 追加，或注册「继承 standard + 额外行」 | **没有**。`AgentPresetRegistry` 只有 `register(definition)`，同 id 重复注册直接抛 `Duplicate agent preset`；`PresetDefinition` 只有 `id / name / description / order / plugins`，没有 `extends`；`definitions` 是私有的；`readDocument` 只读，供查看用 | `@deepseek-ai/dsh-agent-preset-registry` `lib/types/index.d.ts` 第 22–136 行、`lib/types/definition.d.ts` 第 4–13 行、`lib/index.js` `register()` 第 470–493 行 |
+| **rule 不进预设，作为 profile 顶层 host 行插入** | **可以**，这正是 DSH 官方 bundle 的做法。顶层注册的工具、守卫、事件监听对**所有** agent 生效，预设里同名的注册离得更近，优先 | `@deepseek-ai/dsh-scope` README：「Untagged listeners stay global」「Child scopes inherit ancestor contributions, with the nearest definition taking precedence」；registry README：「Plugin registrations inherit the preset scope, and the Agent scope's parent link controls visibility」。官方 bundle `dsh-experimental-tool-worktree`、`dsh-experimental-auto-review`（在 host 层挂 `tools/pre-execute`）、`dsh-experimental-badge-skill-bundle` 的 `cordis.patch.yml` 全部只有一句顶层 `- insert:`，不碰任何预设。我们自己的测试（tests/support/scheduler.ts 第 15–38 行）本来就把整套调度挂在根 ctx 上、不进预设，16 个 spec 全部通过 |
+
+### 6.3 用户升级 DSH 后具体怎么坏（已实测对比）
+
+把本机 rc.5 的 `dsh-web-app/presets/standard.patch.yml` 和 npm `@deepseek-ai/dsh-web-app@0.2.2-rc.1` 的同一个文件做 diff，我们这份拷贝在 0.2.2-rc.1 上会出现：
+
+1. **预设加载失败**：0.2.2-rc.1 删掉了 `tool-subagent-list-agents` 这一行。`@deepseek-ai/dsh-tool-subagent-control@0.2.2-rc.1` 的 `exports` 只剩 `.`、`./src/*`，**没有 `./list-agents` 了**，而我们的拷贝第 132–133 行、第 306–307 行还引用 `'@deepseek-ai/dsh-tool-subagent-control/list-agents'`。预设注册表的规则是「Import failures … reject the mount. Failure prevents new bindings to that definition」（registry README），所以 **standard 预设整个不可用，默认预设下的所有新会话都起不来**。0.2.2-rc.1 在我们的 `engines.dsh`（`<0.3.0`）范围内，用户升级不会收到任何警告。
+   - 在 rc.5 上复现：用同一份拷贝、只把这一行改成一个不存在的子路径，用 `--patch` 叠加启动 web profile，服务能起来，但注册表的 warn 只进 logger，没有输出到终端，所以这一步我只拿到了源码层面的证据。
+2. **功能悄悄丢失**：
+   - `tool-subagent` 的 `modelSelectionSettings: true` 在 0.2.2-rc.1 改名为 `modelSelection` / `modelDiscovery`。schemastery 会静默丢掉未知键，于是 subagent 工具的模型选择没了，也不报错。
+   - `tool-fs` 新增的 `applyPatch` 配置、`tool-plugin-manager` 从 `disabled: true` 改为 `!!js "!ctx.get('profileContext')"`，这两处我们都拿不到。
+3. **与其他插件冲突**：别的 bundle 也覆盖 `preset-standard` 时，后一个会把整段冲掉。
+
+「调度（旧会话）」预设是同一份拷贝，问题完全相同，只是只影响旧会话。
+
+### 6.4 结论与建议
+
+**现有能力可以做到不再拷贝**：rule 不再挂在 standard 里，改成 profile 顶层的 host 行。
+
+`cordis.patch.yml` 改成：
+
+```yaml
+- insert:
+    - id: dsh-agent-scheduler
+      name: dsh-agent-scheduler
+      config: {}
+    - id: agent-scheduler-rule
+      name: dsh-agent-scheduler/rule
+      config: {}
+```
+
+不再出现 `preset-standard`，也就不再需要 `gen-preset.mjs` 和对 DSH 版本的跟版。
+
+需要处理的副作用：
+
+1. **对所有预设生效**：ptc、minimal、cordis 和用户自定义的预设都会多出 `agent_*` 工具、`/schedule` 和调度开关。行为上无害（开关默认关；关着的时候 system prompt 段为空、工具会拒绝），但 minimal 预设的工具列表会变长。可选的收紧办法：在 `agent/created` 时用 `ctx.agentPresets.composedPreset(agent.ctx)`（公开 API）判断，不是 standard 的 agent 用 `tools.restrict(agent.ctx, …)` 去掉这些工具。这个办法需要原型验证。
+2. **旧会话预设**：必须删掉它里面的 rule 行，否则那个预设里的 agent 会被 host 和预设各挂一套，消息被交接两次。`defaultOn` 改成在 rule 里按 `composedPreset(agent.ctx) === 'scheduler'` 判断。旧会话预设本身仍是一份会过时的拷贝，有两个选择：
+   - a. 保留，每次 DSH 发版重新生成。它坏了只影响旧会话，不影响默认预设。
+   - b. 下一个版本删掉。注册表找不到定义时会拒绝恢复，所以旧会话会打不开。
+   需要用户选。
+3. **防止重复挂载**：rule 加一个进程级单例保护。用户自己的 profile 补丁里如果还留着旧的 standard 覆盖，第二个实例自动 no-op 并 warn。
+4. **prompt cache 不受影响**：lead 和分身看到的是同一套全局注册，工具列表和 system prompt 段依旧一致。
+
+**迁移步骤**（并入第 4.2 节的同一个 PR，作为第 0 步，与在途分支不冲突，因为只改 `cordis.patch.yml`、`scripts/`、`rule-plugin.ts` 的 `defaultOn` 判断）：
+
+1. 原型验证（只用隔离 DSH_HOME）：把插件装进 `/tmp/dshhome-probe` 的 web profile，用上面的 patch 启动，确认以下几点：
+   - standard 会话里 `agent_*` 工具可见、守卫生效、`agent/pre-step` 能交接用户消息；
+   - ptc 和 minimal 预设里的表现；
+   - 旧会话预设不重复挂载。
+2. 改 `cordis.patch.yml`、删 `gen-preset.mjs`（如果旧会话预设选 a，就保留脚本，只生成旧会话预设）、`rule-plugin.ts` 改用 `composedPreset` 判断 `defaultOn`、加单例保护。
+3. 契约测试 `packaging.spec.ts` 改为断言：`cordis.patch.yml` 不再覆盖任何 DSH 自带的预设；旧会话预设（如果保留）的每一行在当前 DSH 里都能 import。
+4. README 「Preset and switch」一节改写。
+
+**如果原型发现 host 层挂不住**（例如某个钩子只在预设作用域内派发），就退回整段拷贝的方案。届时：
+
+- **给 DSH 的需求**（补充到 #9431）：让 `applyEntryPatches` 的 `insert` 可以以「插件类声明了 `EntryGroup.key`、config 里有数组 `plugins`」的条目为目标，按 row id 追加到 `config.plugins`，同 id 覆盖。最小改动点是 `@deepseek-ai/cordis-plugin-include` `src/index.ts` 第 66–91 行，`buildMap` 和 `insert` 分支各加一种情况。另一个办法是在 `dsh-agent-preset-registry` 的 `PresetDefinition` 上加 `extends`。
+- **`packaging.spec.ts` 守门够不够**：**不够**。它只能在我们这边的 CI 里发现过时（`@next` 档），保护不了已经先升级 DSH 的用户；而且照 6.3 第 1 条，过时的后果是默认预设整个起不来。即便退回这个方案，也必须同时做两件事：
+  - `engines.dsh` 的上界收紧到当前验证过的 patch 版本（例如 `<=0.2.1`），而不是 `<0.3.0`；
+  - DSH 每次发版当天重新生成并发版。
