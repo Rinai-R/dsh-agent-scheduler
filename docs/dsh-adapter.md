@@ -498,22 +498,18 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 需要处理的副作用：
 
 1. **对所有预设生效**：ptc、minimal、cordis 和用户自定义的预设都会多出 `agent_*` 工具、`/schedule` 和调度开关。行为上无害（开关默认关；关着的时候 system prompt 段为空、工具会拒绝），但 minimal 预设的工具列表会变长。可选的收紧办法：在 `agent/created` 时用 `ctx.agentPresets.composedPreset(agent.ctx)`（公开 API）判断，不是 standard 的 agent 用 `tools.restrict(agent.ctx, …)` 去掉这些工具。这个办法需要原型验证。
-2. **旧会话预设**：必须删掉它里面的 rule 行，否则那个预设里的 agent 会被 host 和预设各挂一套，消息被交接两次。`defaultOn` 改成在 rule 里按 `composedPreset(agent.ctx) === 'scheduler'` 判断。旧会话预设本身仍是一份会过时的拷贝，有两个选择：
-   - a. 保留，每次 DSH 发版重新生成。它坏了只影响旧会话，不影响默认预设。
-   - b. 下一个版本删掉。注册表找不到定义时会拒绝恢复，所以旧会话会打不开。
-   需要用户选。
+2. **旧会话预设**：已定**删掉**。`cordis.patch.yml` 不再带 `preset-scheduler`（「调度（旧会话）」）。用它创建的会话（本机 7 个，1 主 6 子，均为 11 月 3–4 日）从此打不开，因为注册表找不到预设定义就拒绝恢复；新会话不受影响。随之可删：rule 的 `defaultOn` 配置项（rule-plugin.ts:32、49、240，只为这个预设存在）；`SchedulerDeps.defaultOn`（scheduler.ts:82、326）测试还在用（tests/support/scheduler.ts 默认开），保留为内部参数。`schedulingOn` 对「开关出现之前的老日志」的推断保留，它不依赖这个预设。
 3. **防止重复挂载**：rule 加一个进程级单例保护。用户自己的 profile 补丁里如果还留着旧的 standard 覆盖，第二个实例自动 no-op 并 warn。
 4. **prompt cache 不受影响**：lead 和分身看到的是同一套全局注册，工具列表和 system prompt 段依旧一致。
 
-**迁移步骤**（并入第 4.2 节的同一个 PR，作为第 0 步，与在途分支不冲突，因为只改 `cordis.patch.yml`、`scripts/`、`rule-plugin.ts` 的 `defaultOn` 判断）：
+**迁移步骤**（并入第 4.2 节的同一个 PR，作为第 0 步，与在途分支冲突小：主要改 `cordis.patch.yml`、`scripts/`，以及 `rule-plugin.ts` / `scheduler.ts` 里 `defaultOn` 的几行）：
 
 1. 原型验证（只用隔离 DSH_HOME）：把插件装进 `/tmp/dshhome-probe` 的 web profile，用上面的 patch 启动，确认以下几点：
    - standard 会话里 `agent_*` 工具可见、守卫生效、`agent/pre-step` 能交接用户消息；
    - ptc 和 minimal 预设里的表现；
-   - 旧会话预设不重复挂载。
-2. 改 `cordis.patch.yml`、删 `gen-preset.mjs`（如果旧会话预设选 a，就保留脚本，只生成旧会话预设）、`rule-plugin.ts` 改用 `composedPreset` 判断 `defaultOn`、加单例保护。
-3. 契约测试 `packaging.spec.ts` 改为断言：`cordis.patch.yml` 不再覆盖任何 DSH 自带的预设；旧会话预设（如果保留）的每一行在当前 DSH 里都能 import。
-4. README 「Preset and switch」一节改写。
+2. `cordis.patch.yml` 只留顶层 `- insert:`（host 行 + rule 行），删掉 `preset-standard` 覆盖和 `preset-scheduler`；删 `scripts/gen-preset.mjs` 和 `npm run gen:preset`；删 rule 的 `defaultOn` 配置项；加单例保护。
+3. 契约测试 `packaging.spec.ts` 改为断言：`cordis.patch.yml` 只含顶层 `insert`，不覆盖也不声明任何预设。
+4. README 「Preset and switch」一节改写，发版说明写明：「调度（旧会话）」预设已移除，用它创建的旧会话无法再打开。
 
 **如果原型发现 host 层挂不住**（例如某个钩子只在预设作用域内派发），就退回整段拷贝的方案。届时：
 
