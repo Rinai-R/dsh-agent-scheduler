@@ -31,10 +31,12 @@ lead — the only agent whose replies you read.
 - **One pipeline, ending at the lead.** A fork's conclusion, a worker's answer, a `report` and a
   failed request all go straight to the lead, tagged with who asked and for which input. No agent is
   woken again just to relay a result.
-- **Busy worker, new worktree.** A follow-up goes to the worker that already has the request. A new
-  task in an area whose worker is running or already has open requests goes to a new worker
-  continued from that owner (`from`), with its own worktree as `cwd`, so it runs in parallel
-  instead of queueing. A fork never waits for its workers.
+- **Coarse workers that split on a collision.** A new area gets one worker for the whole repository
+  or module. A follow-up goes to the worker that already has the request, and a new task to an idle
+  owner. A new task in an area whose worker is running or already has open requests splits it:
+  `agent_split` renames the owner to the work it keeps and forks a new worker for the new task in
+  its own worktree, both sharing the area, so it runs in parallel instead of queueing. A fork never
+  waits for its workers.
 - **A roster in the sidebar.** The Agents page lists forks and workers with live state and open
   requests, and opens any of them as an embedded conversation beside the roster. Both the page and
   the chats stay mounted, so switching tabs does not reload a conversation.
@@ -93,13 +95,21 @@ prompt cache) and refuse while scheduling is off.
 Open the page from the Agents button. A handed-off message's status card opens that fork directly
 (「查看」). The page groups 「分身」 (forks), 「Worker」, 「已交回」 (concluded forks), and 「已归档」
 (archived). A row shows live state — 在跑, 在等你, 空闲, 已交回, 排队中, 失败, 已归档 — the requests
-it still owes (`N 个请求待回答`), and for a worker its directory and duty.
+it still owes (`N 个请求待回答`), and a second line: why it failed, else its oldest open request,
+else what a fork was asked or a worker's duty (prefixed with its area after a split); a worker's
+directory is in the row's tooltip. Archived rows are one compact line, and past eight of them the
+rest fold behind 「再显示 N 个」. When the list runs past the bottom, a pinned hint says
+「下面还有 N 个 · M 个等你 · K 个未读」; clicking it scrolls to the first hidden row.
 
 Click a row to open that agent's own native conversation in the other pane, with the roster keeping
 a narrow column of its own. At most two horizontal panes are allowed, so the page arranges the split
 the way you could by hand: the roster on the left, agent chats as tabs on the right. Both the Agents
 page and the chats are `keepMounted`: switching tabs or closing a neighbour does not remount a chat
 and reload its conversation from the top.
+
+The **+** at the top opens a small form (name, duty, optional directory) that runs `/agents new`;
+the pencil on a worker row renames it in place (`/agents rename`; Enter saves, Esc cancels). A
+renamed worker keeps its old names reserved, and they still reach it.
 
 Archive a row from the button that appears on hover; archived names are never reused. 「全部归档」
 (or `/agents archive done`) archives every concluded fork that owes no answer. The 「Worker 默认模型」
@@ -135,6 +145,8 @@ All of these run in the main session.
 | Command | Purpose |
 |---|---|
 | `/schedule [on \| off]` | Turn scheduling on (bare is on) or off for this session. |
+| `/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role>` | Create a worker you name yourself, with no task; talk to it in its chat, or the lead sends it requests. The Agents page's **+** does the same. |
+| `/agents rename <name> <new-name>` | Rename a worker (not a fork, not an archived one). The old name stays reserved and still reaches it. The pencil on a worker row does the same. |
 | `/agents archive <name>` | Archive a fork or worker; requests it still owes fail and the lead is told. |
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
@@ -152,6 +164,7 @@ All of these run in the main session.
 | Tool | Purpose |
 |---|---|
 | `agent_create` | Start a worker: `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on); `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
+| `agent_split` | Split a busy worker's area for a new task: `owner`, `ownerName` + `ownerRole` (the narrower work it keeps), `name` + `role` + `task` for the new worker, `cwd` (or `repo` + `branch`), `rosterVersion`, and `for` from the lead. The owner is renamed like `/agents rename` (its old names stay reserved); the new worker continues its conversation, or starts fresh while the owner has no completed round. Both carry the `area`; the Agents page keeps them together. |
 | `agent_send` | Send a request to a fork or worker, with `rosterVersion`; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
 | `agent_list` | The workers (with `createdFor`) and the open requests, with `open` counts and the `rosterVersion`; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |

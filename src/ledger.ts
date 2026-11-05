@@ -67,7 +67,26 @@ export class Ledger {
    * @returns the member.
    */
   find(key: string): RosterMember | undefined {
-    return this.members.get(key) ?? this.current.members.find(m => m.name === key)
+    // A renamed worker is still found by an old name: names are never reused, so it is unambiguous,
+    // and a lead or fork that learned the old name keeps reaching it.
+    return this.members.get(key) ?? this.current.members.find(m => m.name === key) ?? this.current.members.find(m => m.formerNames?.includes(key) === true)
+  }
+
+  /**
+   * A former name that a split shared between several live workers: it no longer says which
+   * one is meant, so a request to it is refused with the halves to choose from.
+   * @param name - the name used.
+   * @returns e.g. `"hub" was split in area hub; it is now "hub-asr" (…) and "hub-image" (…)…`, or undefined
+   *   when the name is current, unknown, or reaches one worker unambiguously.
+   */
+  splitHint(name: string): string | undefined {
+    if (this.current.members.some(m => m.name === name) || this.members.has(name)) return undefined
+    const owner = this.current.members.find(m => m.formerNames?.includes(name) === true)
+    if (owner?.area === undefined) return undefined
+    const live = this.current.members.filter(m => m.kind === 'worker' && m.area === owner.area && m.state !== 'archived' && m.state !== 'failed')
+    if (live.filter(m => m.id !== owner.id).length === 0) return undefined
+    const parts = (live.some(m => m.id === owner.id) ? live : [owner, ...live]).map(m => `"${m.name}" (${(m.role ?? '').replace(/\s+/gu, ' ').slice(0, 80)})`)
+    return `"${name}" was split in area ${owner.area}; it is now ${parts.join(' and ')}. Send to the one whose work this is`
   }
 
   /** @returns the display name of a Session id; `lead` for the main Session. */

@@ -30,6 +30,10 @@ export interface RosterMember {
   /** Worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly detail?: string | undefined
+  /** Names a renamed worker had before; reserved, and still found by name. */
+  readonly formerNames?: readonly string[] | undefined
+  /** Repository or module this worker shares with the workers split from it; absent: none yet. */
+  readonly area?: string | undefined
   /** Worker: Session id of the agent that created it. */
   readonly createdBy?: string | undefined
   /** Worker: the input (`fork-N`) or reply (`r-N`) it was created for. */
@@ -159,19 +163,33 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     const members = agent.action === 'created'
       ? state.members.filter(m => !(m.kind === 'worker' && m.state === 'failed' && m.name === agent.name && m.id !== agent.id))
       : state.members
+    if (agent.action === 'renamed') {
+      const known = state.members.find(m => m.id === agent.id && m.kind === 'worker')
+      if (known === undefined || (known.name === agent.name && agent.role === undefined && agent.area === undefined)) return state
+      const former = known.name === agent.name ? known.formerNames ?? [] : [...(known.formerNames ?? []), ...(agent.previousName === undefined ? [known.name] : [agent.previousName])]
+      // A split (agent_split) also narrows the role and sets the area; a plain rename keeps both.
+      return { ...state, members: upsert(state.members, agent.id, m => compact({
+        ...m!, name: agent.name,
+        formerNames: former.length === 0 ? undefined : [...new Set(former)].filter(n => n !== agent.name),
+        role: agent.role ?? m!.role, text: agent.role ?? m!.text, area: agent.area ?? m!.area,
+      })) }
+    }
     return {
       ...state,
       members: upsert(members, agent.id, existing => compact({
         id: agent.id,
-        name: agent.name,
+        // A record written under a name it has since been renamed from does not undo the rename.
+        name: existing?.formerNames?.includes(agent.name) === true ? existing.name : agent.name,
         kind: 'worker' as const,
-        state: WORKER_STATE[agent.action],
+        state: WORKER_STATE[agent.action as Exclude<typeof agent.action, 'renamed'>],
         text: agent.role ?? existing?.text ?? '',
         role: agent.role ?? existing?.role,
         cwd: agent.cwd ?? existing?.cwd,
         model: agent.model ?? existing?.model,
         from: agent.from ?? existing?.from,
         detail: agent.detail,
+        formerNames: existing?.formerNames,
+        area: agent.area ?? existing?.area,
         createdBy: agent.action === 'created' ? agent.by : existing?.createdBy,
         createdFor: agent.action === 'created' ? agent.for : existing?.createdFor,
         createdAt: agent.action === 'created' ? agent.at : existing?.createdAt,
@@ -284,8 +302,9 @@ function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
-  for (const key of ['role', 'cwd', 'model', 'from', 'detail', 'createdBy', 'createdFor', 'createdAt']) if (!optionalString(m[key])) fail(`member ${key}`)
+  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
+  if (m.formerNames !== undefined && !(Array.isArray(m.formerNames) && m.formerNames.every(isString))) fail('member formerNames')
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
   if (m.reportedAt !== undefined && typeof m.reportedAt !== 'number') fail('member reportedAt')
   if (m.reportFailed !== undefined && m.reportFailed !== true) fail('member reportFailed')
