@@ -46,12 +46,17 @@ export const forksOf = (lead: Agent) => lead.session.snapshotEvents().flatMap(e 
 export const leadSaw = (lead: Agent, needle: string) =>
   lead.session.snapshotEvents().filter(e => e.type === 'user/message' && text(e).includes(needle)).length
 
-/** Wait until the lead has seen `n` messages containing `needle` and is idle. */
+/**
+ * Wait until the lead has seen `n` messages containing `needle` and is idle.
+ *
+ * A resumed round re-runs a whole turn after a simulated restart, which takes several seconds on
+ * a two-core CI runner; 15 s was close enough to the real duration to fail intermittently there.
+ */
 export async function until(lead: Agent, needle: string, n = 1): Promise<void> {
   await vi.waitFor(async () => {
     await lead.whenIdle()
     expect(leadSaw(lead, needle)).toBeGreaterThanOrEqual(n)
-  }, { timeout: 15_000 })
+  }, { timeout: 30_000 })
   await lead.whenIdle()
 }
 
