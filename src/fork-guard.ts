@@ -20,6 +20,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 export const FORK_TOOLS: ReadonlySet<string> = new Set([
   // routing
   'agent_list', 'agent_send', 'agent_create', 'agent_interrupt', 'agent_archive', 'report',
+  // every user message reaches a fork first, so "set the role" from the user is the fork's to carry out
+  'role_set',
   // reading
   'read', 'glob', 'grep', 'read_image', 'web_search', 'web_fetch',
   'session_search', 'session_trace', 'session_event_search', 'session_event_read', 'session_event_trace',

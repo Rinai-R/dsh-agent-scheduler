@@ -80,10 +80,12 @@ describe('fork guard', () => {
     expect(guard({ name: 'bash', agent: { id: 'other', session: { header: { parentSession: lead.id } } } as never })).toBeUndefined()
     // A child of a main Session this process does not hold is left alone, and no empty ledger is cached for it.
     expect(scheduler.forkNameOf({ id: 'x', session: { header: { parentSession: 'gone' } } } as never)).toBeUndefined()
+    // A subagent of the fork itself (parent: the fork, not a main Session) is not looked up either.
+    expect(scheduler.forkNameOf({ id: 'y', session: { header: { parentSession: forkId } } } as never)).toBeUndefined()
   })
 
   it('allows only reading and routing tools', () => {
-    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'report', 'read', 'grep', 'glob', 'web_fetch']) expect(FORK_TOOLS.has(tool)).toBe(true)
+    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'agent_interrupt', 'agent_archive', 'role_set', 'report', 'read', 'grep', 'glob', 'web_fetch']) expect(FORK_TOOLS.has(tool)).toBe(true)
     for (const tool of ['bash', 'edit', 'write', 'subagent', 'subagent_fork', 'workflow', 'send_message', 'remote_send_message', 'create_goal', 'schedule_create', 'cua_driver_native__click', 'some_new_tool']) expect(FORK_TOOLS.has(tool)).toBe(false)
   })
 

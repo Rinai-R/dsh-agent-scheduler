@@ -9,7 +9,8 @@
  *   fork concludes after delegating instead of waiting for its workers;
  * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
@@ -39,7 +40,7 @@ export const FORK_NOTICE = [
   '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
   '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd, never a directory another worker uses; agent_create creates that worktree itself when you also pass repo (the repository\'s checkout) and branch (feat/<slug> or fix/<slug>, from base, default origin/main), e.g. cwd ~/project/worktrees/<repo>__<slug>; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
   '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
-  'Never do the work yourself, however small, and even when the lead did similar work earlier in this conversation or the user says "continue" or "retry": no shell commands, edits, builds, tests, commits, pushes, PRs, installs or long investigations. A fork is refused every tool except reading (read, glob, grep, web and session search) and agent_list, agent_send, agent_create, agent_interrupt, agent_archive and report; a refused call means hand it over, not find another way. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
+  'Never do the work yourself, however small, and even when the lead did similar work earlier in this conversation or the user says "continue" or "retry": no shell commands, edits, builds, tests, commits, pushes, PRs, installs or long investigations. A fork is refused every tool except reading (read, glob, grep, web and session search) and agent_list, agent_send, agent_create, agent_interrupt, agent_archive, role_set and report; a refused call means hand it over, not find another way. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'The runtime context may say you cannot start subagents and must carry out the work directly: that is about the subagent tools, not about agent_create or agent_send, which you always have; it does not apply to you. If a task cannot be handed over (agent_create or agent_send fails), do not do it yourself: say in your conclusion what could not be handed over and why, so the lead tells the user.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
   'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
@@ -195,19 +196,20 @@ export interface CreateWorker {
  * @param base - what it starts from.
  * @throws with git's own message when git refuses.
  */
-export function addWorktree(repo: string, path: string, branch: string, base: string): void {
+export async function addWorktree(repo: string, path: string, branch: string, base: string): Promise<void> {
   if (!existsSync(repo)) throw new Error(`repo does not exist: ${repo}`)
   if (existsSync(path)) throw new Error(`cannot create the worktree: ${path} already exists`)
   if (!/^[\w][\w./-]*$/u.test(branch) || branch.includes('..')) throw new Error(`invalid branch name: ${branch}`)
   if (!/^[\w][\w./~^-]*$/u.test(base) || base.includes('..')) throw new Error(`invalid base: ${base}`)
-  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 120_000 })
+  // Asynchronous: a fetch can take a while, and the host process serves every session meanwhile.
+  const git = (...args: string[]) => promisify(execFile)('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: 120_000 })
   try {
     // Start from the remote's newest state; a repository without that remote still works from what it has.
     const remote = base.includes('/') ? base.slice(0, base.indexOf('/')) : undefined
     if (remote !== undefined) {
-      try { git('fetch', remote, '--prune', '--quiet') } catch { /* offline: use what is there */ }
+      try { await git('fetch', remote, '--prune', '--quiet') } catch { /* offline: use what is there */ }
     }
-    git('worktree', 'add', path, '-b', branch, base)
+    await git('worktree', 'add', path, '-b', branch, base)
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr
     throw new Error(`git worktree add failed: ${(typeof stderr === 'string' && stderr.trim() !== '' ? stderr : messageOf(error)).trim()}`)
@@ -299,7 +301,9 @@ export class Scheduler {
     if (isMainSession(agent)) return undefined
     // Never fold (and cache) an empty ledger for a main Session that is not resident.
     const mainId = mainIdOf(agent)
-    if (!this.ledgers.has(mainId) && this.deps.agents.get(SessionId(mainId)) === undefined) return undefined
+    // A subagent of a worker has the worker, not a main Session, as its parent: nothing to fold.
+    const parent = this.deps.agents.get(SessionId(mainId))
+    if (!this.ledgers.has(mainId) && (parent === undefined || !isMainSession(parent))) return undefined
     const member = this.ledgerOf(agent).members.get(agent.id)
     return member?.kind === 'fork' ? member.name : undefined
   }
@@ -552,7 +556,7 @@ export class Scheduler {
       if (cwd === undefined) throw new Error('repo and branch create a new worktree at cwd: give cwd too')
       const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
       if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
-      addWorktree(absolute(args.worktree.repo), cwd, args.worktree.branch, args.worktree.base ?? 'origin/main')
+      await addWorktree(absolute(args.worktree.repo), cwd, args.worktree.branch, args.worktree.base ?? 'origin/main')
     }
     if (cwd !== undefined) {
       // Checked before anything is recorded, so a bad directory costs no roster entry.
