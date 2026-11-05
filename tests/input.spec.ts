@@ -57,10 +57,12 @@ describe('input rule', () => {
     // Same bytes in both system prompts (message ids aside), so the fork keeps the lead's cache prefix.
     expect(leadReq.messages[0]!.role).toBe('system')
     expect(JSON.stringify(leadReq.messages[0]!.content)).toBe(JSON.stringify(forkReq.messages[0]!.content))
-    for (const rule of ['goes by agent_send to the worker that did it', 'agent_create with from: <owner>', 'state \\"running\\" in agent_list', 'agent_create without from']) {
+    for (const rule of ['only a follow-up to one request already given', 'even in the same files or feature', 'already has open requests', 'agent_create with from: <owner>', 'its own new worktree as cwd', 'never a directory another worker uses', 'still do not queue it', 'agent_create without from']) {
       expect(JSON.stringify(leadReq.messages[0])).toContain(rule)
       expect(JSON.stringify(forkReq.messages[0])).toContain(rule)
     }
+    // No exception lets a new task queue behind a worker's uncommitted changes.
+    expect(FORK_NOTICE).not.toMatch(/agent_send it|build on the owner/u)
   })
 
   it('a conclusion carries its input into the lead, and a later fork inherits both', async () => {

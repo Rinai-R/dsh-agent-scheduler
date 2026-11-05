@@ -34,8 +34,8 @@ import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type Ch
 export const FORK_NOTICE = [
   'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
   'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first:',
-  '(1) a follow-up to work already given (rework, a question about it, review comments) goes by agent_send to the worker that did it;',
-  '(2) a new task in an area a worker already owns, when that worker is running (state "running" in agent_list) or the task needs its own branch or worktree, goes to a new worker forked from the owner so it runs in parallel instead of queueing: agent_create with from: <owner>, name: <area>-<feature>, its own cwd (a new worktree), role and task;',
+  '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
+  '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd (git worktree add ~/project/worktrees/<repo>__<slug> -b feat/<slug> or fix/<slug> from the repository\'s base branch, e.g. origin/main), never a directory another worker uses; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
   '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
   'Do not do the work yourself: no edits, builds, tests or long investigations. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
@@ -493,6 +493,9 @@ export class Scheduler {
       if (source.kind !== 'worker') throw new Error(`"${args.from}" is a fork; only a worker can be continued`)
       if (gone(source)) throw new Error(`"${args.from}" is ${source.state}`)
       if (args.preset !== undefined) throw new Error('a worker that continues another worker keeps its preset')
+      // A worker continued from one that has its own directory must get a new one (a new
+      // worktree): without a cwd it would fall back to the session's directory, not a tree of its own.
+      if (source.cwd !== undefined && args.cwd === undefined) throw new Error(`"${source.name}" works in ${source.cwd}; give "${args.name}" its own new worktree as cwd (git worktree add …), not a shared directory`)
       seed = forkSeed((await this.logOf(source.id)).events, source.name)
       checkName()
     }
@@ -568,7 +571,7 @@ export class Scheduler {
    * @returns the request id, and whether delivery waits for a slot.
    * @throws when the target is unknown or gone, or delivery failed.
    */
-  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; note: string }> {
+  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string }> {
     const main = this.mainOf(caller)
     const ledger = this.ledgerOf(main)
     const target = ledger.find(to)
@@ -594,12 +597,17 @@ export class Scheduler {
     })
     if (outcome === 'failed') throw new Error(`request ${id} to "${target.name}" was not delivered: ${failure}`)
     const queued = outcome === 'queued'
-    const note = queued
+    // Requests the target already had before this one: what this one waits behind.
+    const ahead = ledger.openTo(target.id).filter(r => r.id !== id).map(r => r.id)
+    const parallel = target.kind === 'worker' && (busy || ahead.length > 0)
+      ? ` Only a follow-up to ${ahead.length > 0 ? ahead.join(', ') : 'its current work'} (rework, a question, review comments, a change of direction) belongs here. A new task, even in the same files, must run in parallel: agent_create with from: ${target.name} and a new worktree of its own as cwd.`
+      : ''
+    const note = (queued
       ? `${target.name} has not started yet (no free slot); ${id} is delivered when it starts.`
       : busy
-        ? `${target.name} is busy; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
-        : `${target.name} was idle and starts on ${id} now.`
-    return { request: id, to: target.name, queued, busy, note }
+        ? `${target.name} is busy${ahead.length > 0 ? ` with ${ahead.join(', ')}` : ''}; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
+        : `${target.name} was idle and starts on ${id} now.`) + parallel
+    return { request: id, to: target.name, queued, busy, ahead, note }
   }
 
   /**

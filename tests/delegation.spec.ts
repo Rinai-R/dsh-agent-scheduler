@@ -209,8 +209,14 @@ describe('sending to a busy worker', () => {
     await scheduler.createWorker(lead, { name: 'hub', role: 'owns hub', task: 'smoke test asr' })
     await vi.waitFor(() => { expect(ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('hub')!.id))?.status).toBe('running') })
     const sent = await scheduler.send(lead, 'hub', 'then look at gpt_image')
-    expect(sent).toMatchObject({ request: 'r-2', to: 'hub', queued: false, busy: true })
-    expect(sent.note).toMatch(/busy.*after its current step/u)
+    expect(sent).toMatchObject({ request: 'r-2', to: 'hub', queued: false, busy: true, ahead: ['r-1'] })
+    expect(sent.note).toMatch(/busy with r-1.*after its current step/u)
+    // A busy worker: the answer says how to run a new task beside it instead of behind it.
+    expect(sent.note).toContain('agent_create with from: hub and a new worktree')
+    expect(sent.note).not.toMatch(/uncommitted/u)
+    // agent_list shows the backlog, so a router sees the pile before adding to it.
+    const listed = await ctx.tools.get('agent_list', lead)!.execute({}, { agent: lead, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; state: string; open?: number }> }
+    expect(listed.agents.find(a => a.name === 'hub')).toMatchObject({ state: 'running', open: 2 })
     hold.open()
     await until(lead, '[reply to r-2 from hub]')
     const reqs = scheduler.ledgerOf(lead).requests
@@ -218,8 +224,10 @@ describe('sending to a busy worker', () => {
     expect(reqs.get('r-1')).toMatchObject({ state: 'answered', answer: 'HUB ANSWER covering both' })
     expect(reqs.get('r-2')).toMatchObject({ state: 'answered', answer: 'HUB ANSWER covering both' })
     const idle = await scheduler.send(lead, 'hub', 'one more')
-    expect(idle).toMatchObject({ busy: false, queued: false })
+    expect(idle).toMatchObject({ busy: false, queued: false, ahead: [] })
     expect(idle.note).toMatch(/idle/u)
+    // Idle with nothing open: a plain send, no fork hint.
+    expect(idle.note).not.toContain('agent_create')
   })
 })
 
@@ -291,9 +299,16 @@ describe('worker tools', () => {
     const dir = mkdtempSync(join(tmpdir(), 'wt-'))
     await scheduler.createWorker(lead, { name: 'push-a', role: 'x', cwd: dir })
     await expect(scheduler.createWorker(lead, { name: 'push-b', role: 'y', cwd: dir })).rejects.toThrow(/"push-a" already works in/)
-    // Continuing a worker does not silently reuse its directory.
-    const b = await scheduler.createWorker(lead, { name: 'push-c', role: 'z', from: 'push-a' }).catch((e: Error) => e)
-    expect(b instanceof Error ? b.message : '').not.toMatch(/already works in/)
+    // Continuing a worker that has a directory needs a new one: not its directory, not none.
+    await expect(scheduler.createWorker(lead, { name: 'push-c', role: 'z', from: 'push-a' })).rejects.toThrow(/give "push-c" its own new worktree/)
+    const aId = SessionId(scheduler.ledgerOf(lead).find('push-a')!.id)
+    await vi.waitFor(async () => { expect((await stored(ctx, aId)).events.some(e => e.type === 'turn/end')).toBe(true) })
+    await expect(scheduler.createWorker(lead, { name: 'push-c', role: 'z', from: 'push-a', cwd: dir })).rejects.toThrow(/"push-a" already works in/)
+    // Neither refusal recorded anything, so the name is still free.
+    expect(scheduler.ledgerOf(lead).find('push-c')).toBeUndefined()
+    const dir2 = mkdtempSync(join(tmpdir(), 'wt-'))
+    await scheduler.createWorker(lead, { name: 'push-c', role: 'z', from: 'push-a', cwd: dir2 })
+    expect(scheduler.ledgerOf(lead).find('push-c')).toMatchObject({ cwd: dir2 })
     await scheduler.archive(lead, 'push-a')
     await scheduler.createWorker(lead, { name: 'push-d', role: 'w', cwd: dir })
   })

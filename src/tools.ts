@@ -48,10 +48,10 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       parameters: {
         name: { type: 'string', required: true, description: 'Unique lower-kebab-case name, never reused.' },
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },
-        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s.' },
+        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s. Required with from when the source worker has one: a new worktree of its own (git worktree add from the repository\'s base branch).' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the configured worker model, then the runtime default.' },
-        from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset). Use it for a new task in that worker\'s area that should run in parallel (the owner is running, or the task needs its own branch or worktree): fork the owner and give the new worker its own cwd.' },
+        from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset). Use it for a new task in that worker\'s area that should run in parallel (the owner is running or has open requests, or the task needs its own branch): fork the owner and give the new worker a new worktree of its own as cwd, never the owner\'s directory.' },
         task: { type: 'string', description: 'Optional first request.' },
       },
       output: { schema: OK, render: json },
@@ -62,7 +62,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_send',
-      description: 'Send a request to a worker or fork by name. Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. If the target is running, the request queues behind its current work; for a new task in the same area, agent_create with from: <that worker> instead, so it runs in parallel.',
+      description: 'Send a request to a worker or fork by name. Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. Use it only for a follow-up to a request the target already has (rework, a question, review comments, a change of direction). If the target is running or has open requests, anything else piles up behind that work: for a new task in the same area, even in the same files, agent_create with from: <that worker> and a new worktree as cwd instead, so it runs in parallel.',
       parameters: {
         to: { type: 'string', required: true, description: 'Name of the worker or fork.' },
         message: { type: 'string', required: true, description: 'Self-contained request.' },
@@ -75,7 +75,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_list',
-      description: 'List forks and workers of this session with their state, and open requests.',
+      description: 'List forks and workers of this session with their state (and "open": how many requests each has not answered yet), and open requests.',
       parameters: {},
       output: { schema: OK, render: json },
       execute: async (_args, exec) => {
@@ -86,6 +86,8 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
             ...(m.kind === 'fork' ? { input: m.text.slice(0, 120) } : { role: m.role ?? '' }),
             ...(m.cwd === undefined ? {} : { cwd: m.cwd }),
             ...(m.model === undefined ? {} : { model: m.model }),
+            // Requests it has not answered yet: a backlog to fork around, not to add to.
+            ...(() => { const open = ledger.openTo(m.id).length; return open > 0 ? { open } : {} })(),
           })),
           openRequests: [...ledger.requests.values()].filter(r => r.state === 'sent').map(r => ({ id: r.id, from: ledger.nameOf(r.from), to: ledger.nameOf(r.to), text: r.text.slice(0, 120) })),
           queued: scheduler.queued(ledger.mainId),
