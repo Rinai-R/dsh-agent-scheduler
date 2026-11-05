@@ -75,13 +75,16 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_list',
-      description: 'List forks and workers of this session with their state (and "open": how many requests each has not answered yet), and open requests.',
-      parameters: {},
+      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet), and the open requests. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
+      parameters: {
+        forks: { type: 'boolean', description: 'Also list forks, archived ones included: a debugging view, not part of routing.' },
+      },
       output: { schema: OK, render: json },
-      execute: async (_args, exec) => {
+      execute: async (args, exec) => {
+        const withForks = (args as { forks?: boolean }).forks === true
         const ledger = scheduler.ledgerOf(caller(exec))
         return {
-          agents: [...ledger.members.values()].map(m => ({
+          agents: [...ledger.members.values()].filter(m => withForks || m.kind === 'worker').map(m => ({
             name: m.name, kind: m.kind, state: m.state === 'started' ? status(m.id) : m.state,
             ...(m.kind === 'fork' ? { input: m.text.slice(0, 120) } : { role: m.role ?? '' }),
             ...(m.cwd === undefined ? {} : { cwd: m.cwd }),
