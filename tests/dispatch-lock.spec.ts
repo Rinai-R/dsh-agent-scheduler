@@ -119,7 +119,7 @@ describe('the dispatch lock', () => {
   })
 
   it('tells a fork not to work when it cannot delegate', () => {
-    expect(FORK_NOTICE).toContain('not even when agent_create or agent_send is refused or scheduling is off')
+    expect(FORK_NOTICE).toContain('If a task cannot be handed over (agent_create or agent_send fails), do not do it yourself')
     expect(FORK_NOTICE).toContain('rosterVersion')
     expect(FORK_NOTICE).toContain('at most one worker for your message')
   })
