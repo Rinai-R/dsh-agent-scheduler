@@ -22,11 +22,12 @@ import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, workerModelOf,
+  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
   type ForkModelSelection,
 } from './records.js'
 import { schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
+import { unread } from './review.js'
 import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type ChildTrace } from './recovery.js'
 
 /**
@@ -875,6 +876,28 @@ export class Scheduler {
     const done = ledger.state.members.filter(m => m.kind === 'fork' && m.state === 'done' && ledger.openTo(m.id).length === 0 && this.deps.agents.get(SessionId(m.id))?.status !== 'running')
     for (const fork of done) await this.archive(main, fork.id)
     return done.map(m => m.name)
+  }
+
+  /**
+   * Mark a member's latest report as read: the user opened its chat. Recorded only when there is
+   * an unread report, so opening a chat again writes nothing.
+   * @param caller - the agent asking.
+   * @param name - the member, by name or Session id, or `all` for every member with an unread report.
+   * @returns whether a report was marked read.
+   */
+  markSeen(caller: Agent, name: string): boolean {
+    const main = this.mainOf(caller)
+    if (name === 'all') {
+      // A log from before review marks existed has every past report unread: one click reads them.
+      const marked = this.ledgerOf(main).state.members.filter(m => unread(m))
+      for (const m of marked) this.record(main, s => appendSeen(s, { agent: m.id }))
+      return marked.length > 0
+    }
+    const target = this.ledgerOf(main).find(name)
+    if (target === undefined) throw new Error(`no agent named "${name}"`)
+    if (!unread(target)) return false
+    this.record(main, s => appendSeen(s, { agent: target.id }))
+    return true
   }
 
   /**

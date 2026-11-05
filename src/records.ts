@@ -14,6 +14,14 @@ export const REQUEST_RECORD = 'plugin:dsh-agent-scheduler/request'
 export const ROLE_RECORD = 'plugin:dsh-agent-scheduler/role'
 export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
+export const SEEN_RECORD = 'plugin:dsh-agent-scheduler/seen'
+
+/** The user opened a member's chat: its latest report is read (`/agents seen`). */
+export interface SeenRecord {
+  readonly version: 1
+  /** The member's Session id. */
+  readonly agent: string
+}
 
 /** Whether this Session hands each user message to a fork, switched by `/schedule on|off`. */
 export interface ModeRecord {
@@ -121,6 +129,7 @@ declare module '@deepseek-ai/dsh-session/types' {
     'plugin:dsh-agent-scheduler/role': RoleRecord
     'plugin:dsh-agent-scheduler/settled': SettledRecord
     'plugin:dsh-agent-scheduler/mode': ModeRecord
+    'plugin:dsh-agent-scheduler/seen': SeenRecord
   }
 }
 
@@ -143,6 +152,8 @@ export const appendRole = (session: Session, record: Fields<RoleRecord>): Sessio
   appendPluginRecord(session, ROLE_RECORD, { version: 1, ...record })
 export const appendMode = (session: Session, on: boolean): SessionSeq =>
   appendPluginRecord(session, MODE_RECORD, { version: 1, on })
+export const appendSeen = (session: Session, record: Fields<SeenRecord>): SessionSeq =>
+  appendPluginRecord(session, SEEN_RECORD, { version: 1, ...record })
 export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
   appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
@@ -208,6 +219,7 @@ export const recordReaders = {
   request: (e: SessionEvent) => dataOf<RequestRecord>(e, REQUEST_RECORD),
   role: (e: SessionEvent) => dataOf<RoleRecord>(e, ROLE_RECORD),
   settled: (e: SessionEvent) => dataOf<SettledRecord>(e, SETTLED_RECORD),
+  seen: (e: SessionEvent) => { const d = dataOf<SeenRecord>(e, SEEN_RECORD); return typeof d?.agent === 'string' ? d : undefined },
   forkModel: (e: SessionEvent) => modelRecord(e, FORK_MODEL_RECORD),
   workerModel: (e: SessionEvent) => modelRecord(e, WORKER_MODEL_RECORD),
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },

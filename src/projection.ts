@@ -8,6 +8,7 @@ import type { SessionEvent, SessionHeader, SessionLogOffset } from '@deepseek-ai
 import type { ZodType } from 'zod'
 import { inputOf, recordReaders as R, type ForkModelSelection } from './records.js'
 import { memberModelRecordOf } from './member-model.js'
+import { unread } from './review.js'
 
 /** Projection key registered with the session-projection registry. */
 export const SCHEDULER_PROJECTION = 'agentScheduler'
@@ -39,6 +40,13 @@ export interface RosterMember {
   readonly pickedModel?: ForkModelSelection | undefined
   /** Seq of the last `turn/end` of this member's log already attributed. */
   readonly settledThrough?: number | undefined
+  /** Time (ms) of this member's latest report: an answered or failed request, a fork's
+   * conclusion, a failed start. The Agents page marks it for review until the user opens it. */
+  readonly reportedAt?: number | undefined
+  /** The latest report is a failure. */
+  readonly reportFailed?: true | undefined
+  /** Time (ms) the user opened this member since its latest report (see src/review.ts). */
+  readonly seenAt?: number | undefined
 }
 
 /** One piece of delegated work with its latest state. */
@@ -103,6 +111,12 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T
 }
 
+/** A member with a fresh report stamped on it: unread again until the user opens it. */
+function reported(m: RosterMember, at: number, failed: boolean): RosterMember {
+  const { reportFailed: _, seenAt: __, ...rest } = m
+  return failed ? { ...rest, reportedAt: at, reportFailed: true } : { ...rest, reportedAt: at }
+}
+
 function upsert<T extends { readonly id: string }>(rows: readonly T[], id: string, next: (row: T | undefined) => T): readonly T[] {
   const index = rows.findIndex(row => row.id === id)
   if (index < 0) return [...rows, next(undefined)]
@@ -132,7 +146,11 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   const fork = R.forkState(event)
   if (fork !== undefined) {
     if (!state.members.some(m => m.id === fork.forkId)) return state
-    return { ...state, members: upsert(state.members, fork.forkId, m => compact({ ...m!, state: fork.state, detail: fork.detail })) }
+    const concluded = fork.state === 'done' || fork.state === 'failed'
+    return { ...state, members: upsert(state.members, fork.forkId, m => {
+      const next = compact({ ...m!, state: fork.state, detail: fork.detail })
+      return concluded ? reported(next, event.time, fork.state === 'failed') : next
+    }) }
   }
   const agent = R.agent(event)
   if (agent !== undefined) {
@@ -158,6 +176,9 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         createdFor: agent.action === 'created' ? agent.for : existing?.createdFor,
         createdAt: agent.action === 'created' ? agent.at : existing?.createdAt,
         settledThrough: existing?.settledThrough,
+        ...(agent.action === 'failed'
+          ? { reportedAt: event.time, reportFailed: true as const }
+          : { reportedAt: existing?.reportedAt, reportFailed: existing?.reportFailed, seenAt: existing?.seenAt }),
       })),
     }
   }
@@ -165,8 +186,16 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   if (request !== undefined) {
     const known = state.requests.find(r => r.id === request.id)
     if (known === undefined && request.action !== 'sent') return state
+    // An answer or a failure is something the user should look at, on the member that owes it.
+    // Archiving fails what the member still owed; the user did that themselves, nothing to review.
+    const owner = request.action === 'sent' ? undefined : (request.to ?? known?.to)
+    const archived = request.action === 'failed' && state.members.some(m => m.id === owner && m.state === 'archived')
+    const members = owner !== undefined && !archived && state.members.some(m => m.id === owner)
+      ? upsert(state.members, owner, m => reported(m!, event.time, request.action === 'failed'))
+      : state.members
     return {
       ...state,
+      members,
       requests: upsert(state.requests, request.id, r => compact({
         id: request.id,
         from: request.from ?? r?.from ?? '',
@@ -199,6 +228,13 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     // Only a worker has a model of its own; an older pick for a fork is history only.
     if (!state.members.some(m => m.id === picked.agent && m.kind === 'worker')) return state
     return { ...state, members: upsert(state.members, picked.agent, m => { const { pickedModel: _, ...rest } = m!; return picked.selection === null ? rest : { ...rest, pickedModel: compact({ ...picked.selection }) } }) }
+  }
+  const seen = R.seen(event)
+  if (seen !== undefined) {
+    // Only an unread report is marked: opening a member with nothing new changes nothing.
+    const member = state.members.find(m => m.id === seen.agent)
+    if (member === undefined || !unread(member)) return state
+    return { ...state, members: upsert(state.members, seen.agent, m => ({ ...m!, seenAt: event.time })) }
   }
   const settled = R.settled(event)
   if (settled !== undefined) {
@@ -251,6 +287,9 @@ function checkMember(m: unknown, view: boolean): void {
   for (const key of ['role', 'cwd', 'model', 'from', 'detail', 'createdBy', 'createdFor', 'createdAt']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
+  if (m.reportedAt !== undefined && typeof m.reportedAt !== 'number') fail('member reportedAt')
+  if (m.reportFailed !== undefined && m.reportFailed !== true) fail('member reportFailed')
+  if (m.seenAt !== undefined && typeof m.seenAt !== 'number') fail('member seenAt')
 }
 
 /**

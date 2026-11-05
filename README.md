@@ -38,6 +38,10 @@ lead — the only agent whose replies you read.
 - **A roster in the sidebar.** The Agents page lists forks and workers with live state and open
   requests, and opens any of them as an embedded conversation beside the roster. Both the page and
   the chats stay mounted, so switching tabs does not reload a conversation.
+- **Know what to review.** A member that reported and that you have not opened yet keeps a solid
+  dot: green for a result, red for a failure; yellow while a permission prompt or question waits for
+  you. Opening it clears the mark, and the read is recorded in the session, so a restart does not
+  bring it back.
 - **Models where they belong.** Forks always run on the lead's model, so they reuse its prompt
   cache. A worker takes an explicit `model`, then the `/worker model` default (also in the Agents
   page), then the plugin config, then the runtime default; each worker can override its own from
@@ -101,6 +105,14 @@ Archive a row from the button that appears on hover; archived names are never re
 (or `/agents archive done`) archives every concluded fork that owes no answer. The 「Worker 默认模型」
 menu at the top sets the `/worker model` default.
 
+**Unread reports.** After a member reports (an answer or failure, a fork's conclusion, a failed
+start) its dot turns solid with a halo until you open it (or its pill in the main chat): green for
+a result, red for a failure; yellow while it waits for you on a permission prompt or question, read
+or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not light it again;
+「全部已读」 at the top (`/agents seen all`) reads them all at once.
+Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
+titles and the composer's Agents button count them.
+
 ### Models
 
 **Forks always use the lead's model.** A fork replays the lead's history, so sharing the model also
@@ -125,6 +137,8 @@ All of these run in the main session.
 | `/schedule [on \| off]` | Turn scheduling on (bare is on) or off for this session. |
 | `/agents archive <name>` | Archive a fork or worker; requests it still owes fail and the lead is told. |
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
+| `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
+| `/agents seen all` | Mark every unread report read (the Agents page's 「全部已读」). A session from before review marks shows its past reports unread once. |
 | `/worker` | Show the model later workers start with. |
 | `/worker model <provider>/<model> [effort]` | Set the default model for later workers. |
 | `/worker model default` | Back to the runtime default. |
