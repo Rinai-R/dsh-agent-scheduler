@@ -125,7 +125,7 @@ export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'
 }
 
 /** What `/agents` accepts. */
-export const AGENTS_USAGE = 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done'
+export const AGENTS_USAGE = 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all'
 
 /**
  * Split a command line into words; a double-quoted word may hold spaces.
@@ -175,15 +175,16 @@ export function parseNewWorker(raw: string): { name: string; role: string; cwd?:
 }
 
 /**
- * Execute `/agents`: create or rename a worker the user names, archive a fork or worker, or
- * archive every fork that has concluded. A worker the user creates gets no task; the user talks
+ * Execute `/agents`: create or rename a worker the user names, archive a fork or worker, archive
+ * every fork that has concluded, or mark a member's report read (`seen`, sent by the Agents page
+ * when the user opens a member). A worker the user creates gets no task; the user talks
  * to it in its own chat, or the lead sends it requests like any other worker.
  * @param scheduler - the scheduler of this preset.
  * @param invocation - the parsed command.
  * @param validate - checks a `--model` selection is routable.
  * @returns the command's outcome.
  */
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/agents only applies in the main session.' }
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -204,7 +205,12 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       return { kind: 'success', text: done.from === done.to ? `${done.to} already has that name.` : `Renamed ${done.from} to ${done.to}.` }
     }
     const [target, ...extra] = words(rest)
-    if (verb !== 'archive' || target === undefined || extra.length > 0) return { kind: 'error', text: AGENTS_USAGE }
+    if ((verb !== 'archive' && verb !== 'seen') || target === undefined || extra.length > 0) return { kind: 'error', text: AGENTS_USAGE }
+    if (verb === 'seen') {
+      const marked = scheduler.markSeen(invocation.agent, target)
+      if (target === 'all') return { kind: 'success', text: marked ? 'Marked every report as read.' : 'Nothing unread.' }
+      return { kind: 'success', text: marked ? `Marked ${target} as read.` : `Nothing new from ${target}.` }
+    }
     if (target === 'done') {
       const names = await scheduler.archiveConcluded(invocation.agent)
       return { kind: 'success', text: names.length === 0 ? 'No concluded fork to archive.' : `Archived ${names.join(', ')}.` }
@@ -290,8 +296,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
     name: 'agents',
-    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded',
-    input: { hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done' },
+    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read',
+    input: { hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all' },
     handler: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
   ctx.commands.register({
