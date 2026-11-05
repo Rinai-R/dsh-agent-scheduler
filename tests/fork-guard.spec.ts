@@ -8,7 +8,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { setup, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
-import { body, forksOf, install, leadSaw, until, user } from './support/scheduler.js'
+import { body, forksOf, install, leadSaw, listThen, until, user } from './support/scheduler.js'
 import { FORK_TOOLS, forkGuard } from '../src/fork-guard.js'
 import { FORK_NOTICE } from '../src/scheduler.js'
 
@@ -38,7 +38,7 @@ describe('fork guard', () => {
       }
       if (isWorker(o)) return called(o, 'bash') ? textResponse('WORKER DONE') : toolCallResponse('w1', 'bash', { command: 'npm run build' })
       for (const tool of WORKING) if (!JSON.stringify(o.messages).includes(`"f-${tool}"`)) return toolCallResponse(`f-${tool}`, tool, { command: 'git push' })
-      if (!called(o, 'agent_create')) return toolCallResponse('f-create', 'agent_create', { name: 'builder', role: 'builds', task: 'run the build' })
+      if (!called(o, 'agent_create')) return listThen(o, 'f-create', 'agent_create', { name: 'builder', role: 'builds', task: 'run the build' })
       return textResponse('FORK CONCLUSION: handed to builder')
     })
     for (const tool of workingTools(ran)) ctx.tools.register(tool)
@@ -132,13 +132,15 @@ describe('agent_create worktrees', () => {
     const cwd = join(mkdtempSync(join(tmpdir(), 'sched-wt-')), 'repo__feat')
     const create = ctx.tools.get('agent_create', lead)!
     const exec = { agent: lead, signal: new AbortController().signal } as never
-    await create.execute({ name: 'feat', role: 'feature', cwd, repo: checkout, branch: 'feat/x', base: 'main' }, exec)
+    // The tool's own lock, version and for rules are covered in dispatch-lock.spec.ts; call the scheduler directly.
+    const make = (name: string, dir: string, branch: string) => scheduler.createWorker(lead, { name, role: 'r', cwd: dir, worktree: { repo: checkout, branch, base: 'main' } })
+    await make('feat', cwd, 'feat/x')
     expect(existsSync(join(cwd, 'a.txt'))).toBe(true)
     expect(git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('feat/x')
     expect(scheduler.ledgerOf(lead).find('feat')).toMatchObject({ cwd })
     // An existing directory is never reused, and git's refusal is reported as is.
-    await expect(create.execute({ name: 'feat2', role: 'r', cwd, repo: checkout, branch: 'feat/y', base: 'main' }, exec)).rejects.toThrow(/already exists|already works/)
-    await expect(create.execute({ name: 'feat3', role: 'r', cwd: `${cwd}-2`, repo: checkout, branch: 'feat/x', base: 'main' }, exec)).rejects.toThrow(/git worktree add failed/)
+    await expect(make('feat2', cwd, 'feat/y')).rejects.toThrow(/already exists|already works/)
+    await expect(make('feat3', `${cwd}-2`, 'feat/x')).rejects.toThrow(/git worktree add failed/)
     await expect(create.execute({ name: 'feat4', role: 'r', cwd: `${cwd}-3`, repo: checkout }, exec)).rejects.toThrow(/go together/)
     expect(scheduler.ledgerOf(lead).find('feat3')).toBeUndefined()
   })

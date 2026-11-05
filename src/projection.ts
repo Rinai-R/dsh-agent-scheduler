@@ -30,6 +30,12 @@ export interface RosterMember {
   /** Worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly detail?: string | undefined
+  /** Worker: Session id of the agent that created it. */
+  readonly createdBy?: string | undefined
+  /** Worker: the input (`fork-N`) or reply (`r-N`) it was created for. */
+  readonly createdFor?: string | undefined
+  /** Worker: ISO time it was created. */
+  readonly createdAt?: string | undefined
   /** Model chosen for this member from its chat (`/agent-model`); absent uses its start model. */
   readonly pickedModel?: ForkModelSelection | undefined
   /** Seq of the last `turn/end` of this member's log already attributed. */
@@ -166,6 +172,9 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         model: agent.model ?? existing?.model,
         from: agent.from ?? existing?.from,
         detail: agent.detail,
+        createdBy: agent.action === 'created' ? agent.by : existing?.createdBy,
+        createdFor: agent.action === 'created' ? agent.for : existing?.createdFor,
+        createdAt: agent.action === 'created' ? agent.at : existing?.createdAt,
         settledThrough: existing?.settledThrough,
         ...(agent.action === 'failed'
           ? { reportedAt: event.time, reportFailed: true as const }
@@ -275,7 +284,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
-  for (const key of ['role', 'cwd', 'model', 'from', 'detail']) if (!optionalString(m[key])) fail(`member ${key}`)
+  for (const key of ['role', 'cwd', 'model', 'from', 'detail', 'createdBy', 'createdFor', 'createdAt']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
   if (m.reportedAt !== undefined && typeof m.reportedAt !== 'number') fail('member reportedAt')

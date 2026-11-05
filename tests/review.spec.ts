@@ -6,7 +6,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { gate, setup, stored, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
-import { body, forksOf, install, leadSaw, records, until, user } from './support/scheduler.js'
+import { body, forksOf, install, leadSaw, listThen, records, rosterVersionIn, until, user } from './support/scheduler.js'
 import { FORK_STATE_RECORD, REQUEST_RECORD } from '../src/records.js'
 
 afterEach(teardown)
@@ -19,7 +19,7 @@ describe('review regressions', () => {
     let sent = false
     const { ctx, lead } = await setup(o => {
       if (isWorker('docs')(o)) return textResponse(body(o).includes('[request r-1 from lead]') ? 'DOCS: build is green' : 'docs ready')
-      if (o.sessionId === 'lead' && !sent && body(o).includes('ask docs')) { sent = true; return toolCallResponse('s1', 'agent_send', { to: 'docs', message: 'is the build green?' }) }
+      if (o.sessionId === 'lead' && !sent && body(o).includes('ask docs')) { sent = rosterVersionIn(o) !== undefined; return listThen(o, 's1', 'agent_send', { to: 'docs', message: 'is the build green?' }) }
       return textResponse('LEAD')
     })
     const scheduler = install(ctx)
@@ -102,7 +102,7 @@ describe('review regressions', () => {
         if (o.sessionId === 'lead') return textResponse('LEAD OK')
         if (isWorker('billing')(o)) return called(o, 'report') ? textResponse('chatty') : toolCallResponse('r1', 'report', { summary: 'REPORTED' })
         if (isFork(o)) {
-          return called(o, 'agent_create') ? textResponse('FORK FINAL') : toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
+          return called(o, 'agent_create') ? textResponse('FORK FINAL') : listThen(o, 'c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
         }
         return textResponse('OTHER')
       })
@@ -156,7 +156,7 @@ describe('review regressions', () => {
     const { ctx, lead, adapter } = await setup(async o => {
       if (o.sessionId === 'lead') return textResponse('LEAD')
       if (isWorker('billing')(o)) { await hold.promise; return textResponse('never heard') }
-      return called(o, 'agent_create') ? textResponse('CONCLUDED') : toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
+      return called(o, 'agent_create') ? textResponse('CONCLUDED') : listThen(o, 'c1', 'agent_create', { name: 'billing', role: 'r', task: 't' })
     })
     const scheduler = install(ctx)
     lead.followup(user('look at billing retries'))
@@ -167,8 +167,8 @@ describe('review regressions', () => {
     await archiving
     await until(lead, '[request r-1 to billing failed')
     expect(leadSaw(lead, 'asked by fork-1')).toBe(1)
-    // One conclusion for one input, and the fork made only its two original model calls.
+    // One conclusion for one input, and the fork made only its three original model calls (list, create, conclude).
     expect(leadSaw(lead, 'Its conclusion')).toBe(1)
-    expect(adapter.requests.filter(r => r.sessionId === forksOf(lead)[0])).toHaveLength(2)
+    expect(adapter.requests.filter(r => r.sessionId === forksOf(lead)[0])).toHaveLength(3)
   })
 })

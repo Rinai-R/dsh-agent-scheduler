@@ -85,6 +85,12 @@ export interface AgentRecord {
   /** Worker whose conversation this one was forked from. */
   readonly from?: string
   readonly detail?: string
+  /** On `created`: Session id of the agent that created it (the main Session's for the lead). */
+  readonly by?: string
+  /** On `created`: what it was created for, `fork-N` (that fork's input) or `r-N` (a reply); one creation each. */
+  readonly for?: string
+  /** On `created`: ISO time of the creation. */
+  readonly at?: string
 }
 
 /** One piece of delegated work, or what became of it. */
