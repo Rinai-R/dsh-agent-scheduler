@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, openLabel, requestDefinition, requestOf, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -79,26 +79,31 @@ describe('client activation', () => {
   })
 })
 
-describe('fork model picker', () => {
+describe('worker default model picker', () => {
   const groups = [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'v4', name: 'V4' }] }, { id: 'glm-gateway', name: 'GLM', models: [{ id: 'claude/opus', name: 'Opus' }] }]
-  it('maps options to /fork commands the host parses back to the same selection', () => {
-    expect(forkModelValue(null)).toBe(SAME_AS_LEAD)
-    expect(forkModelCommand(SAME_AS_LEAD)).toBe('/fork model default')
-    expect(parseForkCommand(forkModelCommand(SAME_AS_LEAD).slice('/fork '.length))).toBeNull()
-    const value = forkModelValue({ provider: 'glm-gateway', model: 'claude/opus' })
-    expect(forkModelCommand(value)).toBe('/fork model glm-gateway/claude/opus')
-    expect(parseForkCommand(forkModelCommand(value).slice('/fork '.length))).toEqual({ provider: 'glm-gateway', model: 'claude/opus' })
-    // Re-picking the current model keeps the effort set by command; another model drops it.
-    const current = { provider: 'glm-gateway', model: 'claude/opus', reasoningEffort: 'high' }
-    expect(forkModelCommand(value, current)).toBe('/fork model glm-gateway/claude/opus high')
-    expect(forkModelCommand(forkModelValue({ provider: 'deepseek', model: 'v4' }), current)).toBe('/fork model deepseek/v4')
+  it('maps menu choices to /worker commands the host parses back to the same selection', () => {
+    expect(workerModelValue(null)).toBe('')
+    expect(workerModelCommand(null)).toBe('/worker model default')
+    expect(parseForkCommand(workerModelCommand(null).slice('/worker '.length))).toBeNull()
+    const opus = { provider: 'glm-gateway', model: 'claude/opus' }
+    expect(workerModelCommand(opus)).toBe('/worker model glm-gateway/claude/opus')
+    expect(parseForkCommand(workerModelCommand(opus).slice('/worker '.length))).toEqual(opus)
+    // The reasoning level picked in the menu goes into the command.
+    const high = { ...opus, reasoningEffort: 'high' }
+    expect(workerModelCommand(high)).toBe('/worker model glm-gateway/claude/opus high')
+    expect(parseForkCommand(workerModelCommand(high).slice('/worker '.length))).toEqual(high)
+    // Values differ by level, so the attribute the GUI test reads shows it.
+    expect(workerModelValue(high)).not.toBe(workerModelValue(opus))
   })
-  it('keeps an override the catalog no longer lists visible instead of showing another value', () => {
-    expect(forkModelGroups(groups, null)).toBe(groups)
-    expect(forkModelGroups(groups, { provider: 'deepseek', model: 'v4' })).toBe(groups)
-    const shown = forkModelGroups(groups, { provider: 'gone', model: 'm' })
+  it('keeps a default the catalog no longer lists visible instead of showing another value', () => {
+    expect(workerModelGroups(groups, null)).toBe(groups)
+    expect(workerModelGroups(groups, { provider: 'deepseek', model: 'v4' })).toBe(groups)
+    const shown = workerModelGroups(groups, { provider: 'gone', model: 'm' })
     expect(shown).toHaveLength(3)
     expect(shown[2]).toMatchObject({ id: 'gone', models: [{ id: 'm' }] })
+    expect(workerModelLabel(groups, null)).toBe('默认')
+    expect(workerModelLabel(groups, { provider: 'glm-gateway', model: 'claude/opus', reasoningEffort: 'high' })).toBe('Opus')
+    expect(workerModelLabel(shown, { provider: 'gone', model: 'm' })).toBe('m')
   })
 })
 
@@ -135,5 +140,58 @@ describe('input card when the message is logged', () => {
     expect(def.start({ key: 'k', id: 'f2' }, { event: logged })).toMatchObject({ logged: true, text: 'with image' })
     // Older records have no flag: the card still draws the user's words itself.
     expect(def.start({ key: 'k', id: 'f1' }, { event: input })).not.toHaveProperty('logged')
+  })
+})
+
+describe('hand-off status line', () => {
+  it('names the fork and where the message is, in every state', () => {
+    const say = (fork: Parameters<typeof statusLine>[0]['fork'], extra: { detail?: string } = {}) => {
+      const l = statusLine({ fork, name: 'fork-7', ...extra })
+      return `${l.lead}${l.name}${l.tail} · ${l.open}`
+    }
+    expect(say('running')).toBe('已交给 fork-7 · 处理中 · 查看')
+    expect(say('queued')).toBe('已交给 fork-7 · 排队等空位 · 查看')
+    expect(say('done')).toBe('fork-7 已交回 · 查看')
+    // Forks archive themselves right after handing back; the line keeps saying so.
+    expect(say('archived')).toBe('fork-7 已交回 · 查看')
+    expect(say('failed', { detail: 'at capacity' })).toBe('fork-7 启动失败：at capacity · 查看')
+    // The oldest records carry no name.
+    expect(statusLine({ fork: 'running' }).name).toBe('分身')
+  })
+  it('carries the fork name from the input record into the card state', () => {
+    const logged = { type: 'plugin:dsh-agent-scheduler/input', seq: 7, time: 9, data: { forkId: 'f2', text: 't', name: 'fork-7', logged: true } }
+    expect(def.start({ key: 'k', id: 'f2' }, { event: logged })).toMatchObject({ name: 'fork-7', fork: 'running', logged: true })
+  })
+  it('renders one clickable line that opens the fork, under the native bubble when the message is logged', () => {
+    const opened: string[][] = []
+    const Card = createInputCard((parent, child) => { opened.push([parent, child]) }) as unknown as { type: (props: unknown) => { props: { children: unknown[] } } }
+    const tree = Card.type({ node: { data: { seq: 1, time: 1, text: 'hi', forkId: 'f2', fork: 'running', logged: true, name: 'fork-7' } }, sessionId: 'main' })
+    const [bubble, button] = tree.props.children as [unknown, { props: { onClick: () => void; 'aria-label': string; 'data-state': string } }]
+    expect(bubble).toBeNull()
+    expect(button.props['aria-label']).toBe('已交给 fork-7 · 处理中，查看')
+    expect(button.props['data-state']).toBe('running')
+    button.props.onClick()
+    expect(opened).toEqual([['main', 'f2']])
+  })
+})
+
+describe('agent chat tabs', () => {
+  it('keeps the native chat type mounted, follows re-registration, and undoes on dispose', () => {
+    const listeners = new Set<() => void>()
+    let definition: { kind: string; keepMounted?: boolean } = { kind: 'subagentchat' }
+    const tabs = { get: (kind: string) => (kind === 'subagentchat' ? definition : undefined), subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } } }
+    const undo = retainChatTabs(tabs)
+    expect(definition.keepMounted).toBe(true)
+    const first = definition
+    definition = { kind: 'subagentchat' }
+    for (const l of listeners) l()
+    expect(definition.keepMounted).toBe(true)
+    undo()
+    expect(listeners.size).toBe(0)
+    expect('keepMounted' in first).toBe(false)
+    expect('keepMounted' in definition).toBe(false)
+  })
+  it('does nothing without a registry', () => {
+    expect(() => { retainChatTabs(undefined)() }).not.toThrow()
   })
 })

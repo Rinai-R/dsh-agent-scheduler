@@ -57,15 +57,16 @@ dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
 
 | 命令 | 作用 |
 |---|---|
-| `/fork model <provider>/<model> [effort]` | 之后的分身用这个模型（默认同 lead）。 |
-| `/fork model default` | 回到默认。 |
+| `/fork` | 说明分身始终和 lead 同模型（共享 lead 的提示缓存），不能单独设置。 |
+| `/worker model <provider>/<model> [effort]` | 之后新建的 worker 在 lead 没指定模型时用这个模型（默认用运行时默认模型）。 |
+| `/worker model default` | 回到默认。 |
 | `/role [text]` | 查看或设置 lead 的 role。 |
 
 ## 配置
 
 | 字段 | 含义 | 默认 |
 |---|---|---|
-| `fork` | 分身的 `{ provider, model, reasoningEffort? }` | 同 lead |
+| `fork` | 已停用、被忽略：分身始终和 lead 同模型 | — |
 | `worker` | worker 的 `{ provider, model, reasoningEffort? }` | 运行时默认 |
 | `workerPreset` | 新 worker 的 preset | 本会话的 preset |
 

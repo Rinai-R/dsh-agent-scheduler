@@ -132,7 +132,11 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
   if (parsed === undefined) return { kind: 'error', text: `Usage: /${MEMBER_MODEL_COMMAND} <name> <provider>/<model> [effort] | <name> default` }
   const member = scheduler.ledgerOf(main).find(parsed.member)
   if (member === undefined) return { kind: 'error', text: `no fork or worker named "${parsed.member}"` }
-  if (member.state === 'archived' || member.state === 'failed') return { kind: 'error', text: `${member.name} is ${member.state}` }
+  // An archived member is released but still answers when spoken to in its chat; the choice
+  // applies when that wakes it (agent/created restores it). One that failed never started.
+  if (member.state === 'failed') return { kind: 'error', text: `${member.name} is ${member.state}` }
+  // A fork always runs on the lead's model (it replays the lead's history and its prompt cache).
+  if (member.kind === 'fork') return { kind: 'error', text: `${member.name} is a fork: forks always use the lead's model. Give the task to a worker to run it on another model.` }
   let selection = parsed.selection
   if (selection !== null && validate !== undefined) {
     try {

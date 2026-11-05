@@ -19,7 +19,7 @@ import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, forkModelOf,
+  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, workerModelOf,
   type ForkModelSelection,
 } from './records.js'
 import { schedulingOn } from './projection.js'
@@ -34,8 +34,8 @@ import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type Ch
 export const FORK_NOTICE = [
   'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
   'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first:',
-  '(1) a follow-up to work already given (rework, a question about it, review comments) goes by agent_send to the worker that did it;',
-  '(2) a new task in an area a worker already owns, when that worker is running (state "running" in agent_list) or the task needs its own branch or worktree, goes to a new worker forked from the owner so it runs in parallel instead of queueing: agent_create with from: <owner>, name: <area>-<feature>, its own cwd (a new worktree), role and task;',
+  '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
+  '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd (git worktree add ~/project/worktrees/<repo>__<slug> -b feat/<slug> or fix/<slug> from the repository\'s base branch, e.g. origin/main), never a directory another worker uses; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
   '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
   'Do not do the work yourself: no edits, builds, tests or long investigations. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
@@ -63,8 +63,6 @@ export interface SchedulerDeps {
   readonly agents: { get(id: SessionId): Agent | undefined }
   /** Read a Session's log whether or not it is resident. */
   readonly readLog: (id: SessionId) => Promise<SessionLog>
-  /** Configured model for forks; undefined means the lead's own model. */
-  readonly configuredModel?: ForkModelSelection | undefined
   /** Configured default model for workers; undefined inherits the runtime default. */
   readonly configuredWorkerModel?: ForkModelSelection | undefined
   /** Preset for new workers; undefined inherits the main Session's preset. */
@@ -162,17 +160,6 @@ export const textOf = (content: readonly ContentBlock[]): string =>
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const gone = (member: Member | undefined): boolean => member !== undefined && (member.state === 'archived' || member.state === 'failed')
-
-/**
- * Resolve the model a new fork uses: Session override, then plugin config, then the lead's.
- * @param agent - the lead.
- * @param configured - plugin configuration.
- * @returns options for the fork, or undefined to inherit the lead's and keep its cache prefix.
- */
-export function forkAgentOptions(agent: Agent, configured: ForkModelSelection | undefined): AgentOptions | undefined {
-  const selection = forkModelOf(agent.session.snapshotEvents()) ?? configured
-  return selection === undefined ? undefined : selectionOptions(selection)
-}
 
 /**
  * @param selection - a provider/model pair.
@@ -335,11 +322,12 @@ export class Scheduler {
     const logged = admitHidden(main.session, message, `[A user message was handed to ${name}; its conclusion will come to you.]`)
     main.inbox.remove(message.id)
     this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name, ...(logged ? { logged: true as const } : {}) }))
-    const agentOptions = forkAgentOptions(main, this.deps.configuredModel)
+    // A fork always runs on the lead's model: it replays the lead's history, which then hits the
+    // lead's prompt cache. There is no per-fork model (any `/fork model` record is history only).
     void this.run(main, forkId, name, async () => {
       await this.deps.subagents.startActivation({
         provider: 'fork', label: `${name}: ${text.slice(0, 50)}`, childId: forkId, signal: new AbortController().signal, delivery: 'parent',
-        request: { parent: main, prompt: [...message.content], ...(agentOptions === undefined ? {} : { agentOptions }) },
+        request: { parent: main, prompt: [...message.content] },
       })
       if (this.ledgerOf(main).members.get(forkId)?.state === 'queued') this.record(main, s => appendForkState(s, { forkId, state: 'started' }))
     }, {
@@ -493,11 +481,15 @@ export class Scheduler {
       if (source.kind !== 'worker') throw new Error(`"${args.from}" is a fork; only a worker can be continued`)
       if (gone(source)) throw new Error(`"${args.from}" is ${source.state}`)
       if (args.preset !== undefined) throw new Error('a worker that continues another worker keeps its preset')
+      // A worker continued from one that has its own directory must get a new one (a new
+      // worktree): without a cwd it would fall back to the session's directory, not a tree of its own.
+      if (source.cwd !== undefined && args.cwd === undefined) throw new Error(`"${source.name}" works in ${source.cwd}; give "${args.name}" its own new worktree as cwd (git worktree add …), not a shared directory`)
       seed = forkSeed((await this.logOf(source.id)).events, source.name)
       checkName()
     }
     const id = SessionId(`session-${randomUUID()}`)
-    const selection = args.model ?? this.deps.configuredWorkerModel
+    // The lead's explicit model, then the Agents page's 「Worker 模型」 (/worker model), then config.
+    const selection = args.model ?? workerModelOf(main.session.snapshotEvents()) ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
     // One worker per directory: this is what keeps two writers out of the same tree. A worker
     // continued from another gets no default directory, since its source still works in its own.
@@ -568,7 +560,7 @@ export class Scheduler {
    * @returns the request id, and whether delivery waits for a slot.
    * @throws when the target is unknown or gone, or delivery failed.
    */
-  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; note: string }> {
+  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string }> {
     const main = this.mainOf(caller)
     const ledger = this.ledgerOf(main)
     const target = ledger.find(to)
@@ -594,12 +586,17 @@ export class Scheduler {
     })
     if (outcome === 'failed') throw new Error(`request ${id} to "${target.name}" was not delivered: ${failure}`)
     const queued = outcome === 'queued'
-    const note = queued
+    // Requests the target already had before this one: what this one waits behind.
+    const ahead = ledger.openTo(target.id).filter(r => r.id !== id).map(r => r.id)
+    const parallel = target.kind === 'worker' && (busy || ahead.length > 0)
+      ? ` Only a follow-up to ${ahead.length > 0 ? ahead.join(', ') : 'its current work'} (rework, a question, review comments, a change of direction) belongs here. A new task, even in the same files, must run in parallel: agent_create with from: ${target.name} and a new worktree of its own as cwd.`
+      : ''
+    const note = (queued
       ? `${target.name} has not started yet (no free slot); ${id} is delivered when it starts.`
       : busy
-        ? `${target.name} is busy; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
-        : `${target.name} was idle and starts on ${id} now.`
-    return { request: id, to: target.name, queued, busy, note }
+        ? `${target.name} is busy${ahead.length > 0 ? ` with ${ahead.join(', ')}` : ''}; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
+        : `${target.name} was idle and starts on ${id} now.`) + parallel
+    return { request: id, to: target.name, queued, busy, ahead, note }
   }
 
   /**

@@ -76,15 +76,16 @@ start with the switch on.
 
 | Command | Purpose |
 |---|---|
-| `/fork model <provider>/<model> [effort]` | Model for later forks (default: the lead's). |
-| `/fork model default` | Back to the default. |
+| `/fork` | Explains that forks always use the lead's model (and its prompt cache); forks have no model setting. |
+| `/worker model <provider>/<model> [effort]` | Model for later workers when the lead names none (default: the runtime default). |
+| `/worker model default` | Back to the default. |
 | `/role [text]` | Show or set the lead's role. |
 
 ## Configuration
 
 | Field | Meaning | Default |
 |---|---|---|
-| `fork` | `{ provider, model, reasoningEffort? }` for forks | the lead's model |
+| `fork` | Retired and ignored: forks always use the lead's model | — |
 | `worker` | `{ provider, model, reasoningEffort? }` for workers | the runtime default |
 | `workerPreset` | preset for new workers | the session's preset |
 

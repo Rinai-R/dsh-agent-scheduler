@@ -54,8 +54,10 @@ export interface Roster {
   /** Scheduling switch as last recorded; null before any `/schedule`. */
   readonly enabled: boolean | null
   readonly role: string | null
-  /** `/fork model` override for later forks; null uses the plugin config, else the lead's model. */
+  /** Retired: forks always use the lead's model. Kept (always null) so saved states still parse. */
   readonly forkModel: ForkModelSelection | null
+  /** `/worker model` default for later workers; absent in states saved before it existed. */
+  readonly workerModel?: ForkModelSelection | null
   readonly members: readonly RosterMember[]
   readonly requests: readonly RosterRequest[]
 }
@@ -65,7 +67,10 @@ export interface RosterView {
   /** Whether user messages go to forks now (see {@link schedulingOn}). */
   readonly enabled: boolean
   readonly role: string | null
+  /** Retired, always null: forks use the lead's model. Kept for clients built against it. */
   readonly forkModel: ForkModelSelection | null
+  /** `/worker model` default; null uses the plugin config, else the runtime default (the lead's). */
+  readonly workerModel: ForkModelSelection | null
   readonly members: readonly Omit<RosterMember, 'settledThrough'>[]
   readonly openRequests: readonly Pick<RosterRequest, 'id' | 'from' | 'to' | 'text'>[]
 }
@@ -174,14 +179,16 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const mode = R.mode(event)
   if (mode !== undefined) return mode.on === state.enabled ? state : { ...state, enabled: mode.on }
-  const forkModel = R.forkModel(event)
-  if (forkModel !== undefined) {
-    const next = forkModel.selection === null ? null : compact({ ...forkModel.selection })
-    return JSON.stringify(next) === JSON.stringify(state.forkModel) ? state : { ...state, forkModel: next }
+  // `/fork model` records from before forks lost their own model are history only: not folded.
+  const workerModel = R.workerModel(event)
+  if (workerModel !== undefined) {
+    const next = workerModel.selection === null ? null : compact({ ...workerModel.selection })
+    return JSON.stringify(next) === JSON.stringify(state.workerModel ?? null) ? state : { ...state, workerModel: next }
   }
   const picked = memberModelRecordOf(event)
   if (picked !== undefined) {
-    if (!state.members.some(m => m.id === picked.agent)) return state
+    // Only a worker has a model of its own; an older pick for a fork is history only.
+    if (!state.members.some(m => m.id === picked.agent && m.kind === 'worker')) return state
     return { ...state, members: upsert(state.members, picked.agent, m => { const { pickedModel: _, ...rest } = m!; return picked.selection === null ? rest : { ...rest, pickedModel: compact({ ...picked.selection }) } }) }
   }
   const settled = R.settled(event)
@@ -205,7 +212,8 @@ export function rosterView(state: Roster): RosterView {
     view = {
       enabled: schedulingOn(state),
       role: state.role,
-      forkModel: state.forkModel ?? null,
+      forkModel: null,
+      workerModel: state.workerModel ?? null,
       members: state.members.map(({ settledThrough: _, ...member }) => member),
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
     }
@@ -245,6 +253,7 @@ export const rosterSchema = {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.requests)) fail('state')
     if (value.enabled !== null && typeof value.enabled !== 'boolean') fail('state enabled')
     checkForkModel(value.forkModel)
+    if (value.workerModel !== undefined) checkForkModel(value.workerModel)
     for (const m of value.members) checkMember(m, false)
     for (const r of value.requests) {
       if (!isRecord(r) || !isString(r.id) || !isString(r.from) || !isString(r.to) || !isString(r.text)) fail('request')
@@ -260,6 +269,7 @@ export const rosterViewSchema = {
     if (!isRecord(value) || !(value.role === null || isString(value.role)) || !Array.isArray(value.members) || !Array.isArray(value.openRequests)) fail('view')
     if (typeof value.enabled !== 'boolean') fail('view enabled')
     checkForkModel(value.forkModel)
+    if (value.workerModel !== undefined) checkForkModel(value.workerModel)
     for (const m of value.members) checkMember(m, true)
     return value as unknown as RosterView
   },
