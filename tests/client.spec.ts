@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle, hiddenBelow, hiddenLabel } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -208,13 +208,37 @@ describe('roster subline', () => {
     expect(subline(fork)).toBe('补充 架构 说明')
     expect(subline(fork, [{ id: 'r-3', text: '改\n方向' }, { id: 'r-4', text: 'x' }])).toBe('r-3：改 方向')
   })
-  it('a worker shows its directory, then its oldest open request or else its duty', () => {
-    const worker = { id: 'w', name: 'w', kind: 'worker', state: 'running', text: 'first task', role: 'docs\nowner', cwd: '/x/repo/' } as never
-    expect(subline(worker)).toBe('repo · docs owner')
-    expect(subline(worker, [{ id: 'r-2', text: 'fix\nit' }])).toBe('repo · r-2：fix it')
+  it('a worker shows only its oldest open request or else its duty; the directory goes to the tooltip', () => {
+    const worker = { id: 'w', name: 'w', kind: 'worker', state: 'running', text: 'first task', role: 'docs\nowner', cwd: '/x/dsh-agent-scheduler__roster-lead-workers/' } as never
+    expect(subline(worker)).toBe('docs owner')
+    expect(subline(worker, [{ id: 'r-2', text: 'fix\nit' }])).toBe('r-2：fix it')
+    expect(subline(worker)).not.toContain('roster-lead-workers')
     expect(subline({ ...(worker as object), cwd: undefined, role: undefined } as never)).toBe('first task')
+    expect(rowTitle(worker)).toBe('w\n目录：/x/dsh-agent-scheduler__roster-lead-workers/')
+    expect(rowTitle({ ...(worker as object), cwd: undefined } as never)).toBe('w')
   })
   it('says why a member failed before anything else', () => {
     expect(subline({ ...(fork as object), state: 'failed', detail: 'quota\nexhausted' } as never, [{ id: 'r-1', text: 'x' }])).toBe('quota exhausted')
+  })
+})
+
+describe('roster rows below the fold', () => {
+  const rows = [
+    { bottom: 50 }, { bottom: 100, review: 'reported' as const }, { bottom: 150 },
+    { bottom: 200, review: 'failed' as const }, { bottom: 250, review: 'approval' as const }, { bottom: 300 },
+  ]
+  it('counts the rows not wholly visible, and their marks', () => {
+    expect(hiddenBelow(rows, 120)).toEqual({ n: 4, unread: 1, waiting: 1, first: 2 })
+    expect(hiddenLabel(hiddenBelow(rows, 120))).toBe('下面还有 4 个 · 1 个等你 · 1 个未读')
+  })
+  it('a row cut in half is still below; a sub-pixel overhang is not', () => {
+    expect(hiddenBelow(rows, 140).first).toBe(2)
+    expect(hiddenBelow(rows, 299.5).n).toBe(0)
+  })
+  it('says nothing once the end is in sight', () => {
+    expect(hiddenBelow(rows, 300)).toEqual({ n: 0, unread: 0, waiting: 0, first: -1 })
+    expect(hiddenLabel(hiddenBelow(rows, 300))).toBe('')
+    expect(hiddenLabel(hiddenBelow(rows.slice(0, 3), 60))).toBe('下面还有 2 个 · 1 个未读')
+    expect(hiddenLabel(hiddenBelow([{ bottom: 10 }, { bottom: 20 }], 5))).toBe('下面还有 2 个')
   })
 })

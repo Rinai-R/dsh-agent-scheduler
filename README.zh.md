@@ -26,9 +26,10 @@ worker 负责干活，每条请求、答复和结论都回到 lead——你只�
   `[reply to r-N from name, asked by …]` 回到 lead。
 - **一条管道，终点是 lead。** 分身的结论、worker 的答复、`report` 和失败的请求都直接到 lead，并
   注明是谁、为哪条输入派的活。不会为了转交结果再唤醒任何 agent。
-- **worker 忙，就另开一个。** 跟进请求交给已经拿着它的 worker；同一领域的新任务，如果那个 worker
-  在跑或还有未回答的请求，就交给从它续出来的新 worker（`from`），并给它自己的 worktree 作为
-  `cwd`，两条线并行，而不是排队。分身不等 worker。
+- **先粗后细，撞上才拆。** 新领域先建一个管整个仓库或模块的 worker。跟进请求交给已经拿着它的
+  worker，新任务在 owner 空闲时也直接交给它；owner 在跑或还有未回答的请求时，新任务就用
+  `agent_split` 拆分：owner 改名为它手上那部分工作，再从它续出一个新 worker 去做新任务，用自己的
+  worktree，两者共享同一个 area，并行而不是排队。分身不等 worker。
 - **右侧栏一份名单。** Agents 页列出分身和 worker 的实时状态与在途请求，点一行就在名单旁边嵌入它的
   对话。页面和对话都保持挂载，切换标签不会让对话重新加载。
 - **哪些该看一眼。** 上报之后、你还没点开的成员，行首是醒目的实心点：绿＝有新结论，红＝失败；
@@ -69,9 +70,9 @@ dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，所以 lead 的下一次请求不命中一次提示缓存。
 
 开关只管一件事：用户消息是否自动交给一个新分身。关着时，用户直接和 lead 对话，lead 自己回答，但
-worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_send`、`agent_interrupt`、
+worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_split`、`agent_send`、`agent_interrupt`、
 `agent_archive`、`role_set`、`report`——派活锁和 `rosterVersion` 校验照样生效，worker 的回答、上报和
-失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create` 时 `for` 可以不填（填了 `fork-N`
+失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create`、`agent_split` 时 `for` 可以不填（填了 `fork-N`
 或 `r-N` 仍会校验，每个仍只建一个 worker）；开着时 lead 照旧必须填。开调度时建的分身，关掉之后仍只能
 路由。调度工具注册在预设的每个会话里（工具列表不变才能命中缓存）；关着且还没有分身或 worker 的会话，
 系统提示里没有调度段，建出第一个 worker 后多出一段只给 lead 的简短说明。
@@ -80,7 +81,10 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 
 从 Agents 按钮打开；主会话消息下的状态卡则直接打开那个分身（「查看」）。名单分「分身」「Worker」
 「已交回」「已归档」。每行显示实时状态——在跑、在等你、空闲、已交回、排队中、失败、已归档——还欠着
-的请求（`N 个请求待回答`），worker 还显示目录和职责。
+的请求（`N 个请求待回答`），以及第二行：失败原因；否则最早一个未答请求；否则分身被问的话或 worker 的
+职责（拆分后前面带 area）；worker 的目录在悬停提示里。已归档的行只占紧凑的一行，超过八个后其余收进
+「再显示 N 个」。名单超出底部时，底部固定一条「下面还有 N 个 · M 个等你 · K 个未读」，点它滚到第一个
+看不见的行。
 
 点一行就在另一栏打开这个 agent 自己的原生对话，名单保留自己的一窄栏。右侧栏最多两个水平 pane，所以
 页面按你手动会做的手势自己分栏：名单在左，agent 对话作为标签在右。Agents 页和 agent 对话都设了
@@ -136,6 +140,7 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 | 工具 | 作用 |
 |---|---|
 | `agent_create` | 建 worker：`name`、`role`、`rosterVersion`（取自 `agent_list`），可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；lead 还要传 `for`（它依据的 `fork-N` 或 `r-N`）；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
+| `agent_split` | 拆分忙着的 worker 的领域：`owner`，`ownerName` + `ownerRole`（它保留的那部分工作），新 worker 的 `name` + `role` + `task`，`cwd`（或 `repo` + `branch`），`rosterVersion`，lead 还要传 `for`。owner 的改名和 `/agents rename` 是同一套（旧名字保留）；新 worker 接着 owner 的对话，owner 还没完成过一轮时则全新启动。两者带同一个 `area`，Agents 页把它们排在一起。 |
 | `agent_send` | 给分身或 worker 派活，带 `rosterVersion`；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
 | `agent_list` | 当前 worker（含 `createdFor`）与在途请求，带 `open` 计数和 `rosterVersion`；加 `forks: true` 才连一次性分身一起列出。 |
 | `agent_interrupt` | 停当前这一轮；它待处理的收件箱保留。 |

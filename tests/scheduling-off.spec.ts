@@ -75,6 +75,17 @@ describe('scheduling off', () => {
     expect(forksOf(lead)).toEqual([])
   })
 
+  it('agent_split runs without for while off', async () => {
+    const { ctx, lead } = await setup(() => textResponse('OK'))
+    const scheduler = install(ctx, { defaultOn: false })
+    const made = await create(ctx, lead, { name: 'hub', role: 'develops hub', task: 'smoke-test ASR', rosterVersion: (await list(ctx, lead)).rosterVersion })
+    const split = await tool(ctx, 'agent_split', lead).execute({ owner: 'hub', ownerName: 'hub-asr', ownerRole: 'smoke-tests ASR in hub', name: 'hub-image', role: 'fixes gpt_image in hub', task: 'fix gpt_image', rosterVersion: made.rosterVersion }, exec(lead)) as { name: string }
+    expect(split.name).toBe('hub-image')
+    expect(scheduler.ledgerOf(lead).find('hub-asr')?.kind).toBe('worker')
+    scheduler.setMode(lead, true)
+    await expect(tool(ctx, 'agent_split', lead).execute({ owner: 'hub-asr', ownerName: 'hub-asr2', ownerRole: 'x', name: 'hub-x', role: 'x', task: 'x', rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) }, exec(lead))).rejects.toThrow(/must say what the new worker is for/)
+  })
+
   it('switched back on, the lead must name what it creates for again', async () => {
     const { ctx, lead } = await setup(() => textResponse('OK'))
     const scheduler = install(ctx, { defaultOn: false })
