@@ -147,6 +147,7 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   const lines = isWorker
     ? [
         '# Agent Scheduler: worker',
+        `Your name is "${scheduler.ledgerOf(agent).members.get(agent.id)?.name ?? ''}" (the user may rename you; this is the current one).`,
         'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead. Do not use send_message.',
       ]
     : [

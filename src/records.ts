@@ -65,12 +65,15 @@ export interface ForkModelSelection {
   readonly reasoningEffort?: string
 }
 
-/** A worker's creation, start, or archival. Names are never reused, archived or not. */
+/** A worker's creation, start, archival, or new name. Names are never reused, archived, renamed away, or not. */
 export interface AgentRecord {
   readonly version: 1
-  readonly action: 'created' | 'started' | 'queued' | 'archived' | 'failed'
+  readonly action: 'created' | 'started' | 'queued' | 'archived' | 'failed' | 'renamed'
   readonly id: string
+  /** The worker's name from this record on; for `renamed`, its new name. */
   readonly name: string
+  /** `renamed` only: the name it had before. That name stays reserved. */
+  readonly previousName?: string
   readonly role?: string
   readonly cwd?: string
   readonly model?: string

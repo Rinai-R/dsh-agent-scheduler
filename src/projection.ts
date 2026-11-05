@@ -29,6 +29,8 @@ export interface RosterMember {
   /** Worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly detail?: string | undefined
+  /** Names a renamed worker had before; reserved, and still found by name. */
+  readonly formerNames?: readonly string[] | undefined
   /** Model chosen for this member from its chat (`/agent-model`); absent uses its start model. */
   readonly pickedModel?: ForkModelSelection | undefined
   /** Seq of the last `turn/end` of this member's log already attributed. */
@@ -135,19 +137,27 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     const members = agent.action === 'created'
       ? state.members.filter(m => !(m.kind === 'worker' && m.state === 'failed' && m.name === agent.name && m.id !== agent.id))
       : state.members
+    if (agent.action === 'renamed') {
+      const known = state.members.find(m => m.id === agent.id && m.kind === 'worker')
+      if (known === undefined || known.name === agent.name) return state
+      const former = [...(known.formerNames ?? []), ...(agent.previousName === undefined ? [known.name] : [agent.previousName])]
+      return { ...state, members: upsert(state.members, agent.id, m => ({ ...m!, name: agent.name, formerNames: [...new Set(former)].filter(n => n !== agent.name) })) }
+    }
     return {
       ...state,
       members: upsert(members, agent.id, existing => compact({
         id: agent.id,
-        name: agent.name,
+        // A record written under a name it has since been renamed from does not undo the rename.
+        name: existing?.formerNames?.includes(agent.name) === true ? existing.name : agent.name,
         kind: 'worker' as const,
-        state: WORKER_STATE[agent.action],
+        state: WORKER_STATE[agent.action as Exclude<typeof agent.action, 'renamed'>],
         text: agent.role ?? existing?.text ?? '',
         role: agent.role ?? existing?.role,
         cwd: agent.cwd ?? existing?.cwd,
         model: agent.model ?? existing?.model,
         from: agent.from ?? existing?.from,
         detail: agent.detail,
+        formerNames: existing?.formerNames,
         settledThrough: existing?.settledThrough,
       })),
     }
@@ -241,6 +251,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
   for (const key of ['role', 'cwd', 'model', 'from', 'detail']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
+  if (m.formerNames !== undefined && !(Array.isArray(m.formerNames) && m.formerNames.every(isString))) fail('member formerNames')
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
 }
 
