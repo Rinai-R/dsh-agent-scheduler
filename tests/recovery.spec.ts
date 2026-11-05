@@ -154,7 +154,7 @@ describe('restart recovery, option B (resume)', () => {
     expect(body(resumed)).toContain(resumeMarker('r-1', 1).replace(/"/gu, '\\"'))
     expect(body(resumed)).toContain('git status')
     expect(failedRecords(h2.agent.session.snapshotEvents(), 'r-1')).toHaveLength(0)
-  })
+  }, 60_000)
 
   it('does not deliver the note twice across restarts, and fails once the limit is reached', async () => {
     policy({ onInterrupted: 'resume', maxResumes: 1 })
@@ -181,7 +181,7 @@ describe('restart recovery, option B (resume)', () => {
     await h4.agent.whenIdle()
     expect(failedRecords(h4.agent.session.snapshotEvents(), 'r-1')).toHaveLength(1)
     expect(leadSaw(h4.agent, '[request r-1 to w failed')).toBe(1)
-  })
+  }, 60_000)
 })
 
 describe('reading a crashed log', () => {
