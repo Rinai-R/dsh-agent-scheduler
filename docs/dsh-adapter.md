@@ -437,7 +437,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 ## 5. 待确认
 
-1. **P3 预设覆盖**：现在整段拷贝 standard 预设，是最脆弱的一点。能不能请 DSH 支持「往已有预设的 plugins 末尾插一行」的 patch 语法（或者 rule 改由 host 行在运行时挂到 standard 预设上）？在那之前，只能靠 `packaging.spec.ts` 每次发版强制重新生成。
+1. ~~**P3 预设覆盖**~~ 已定：先按现有能力做，继续整段拷贝 standard 预设，由 `packaging.spec.ts` 在拷贝与已安装的 `standard` 不一致时让 CI 失败，每次 DSH 发版都重新生成（`npm run gen:preset`）。已在 DSH 的 [#9431](https://github.com/deepseek-ai/deepseek-harness/discussions/9431#discussioncomment-19417759) 提出需求（`extends`，或让 `insert` 能插进预设的 `config.plugins`）并 cc 了维护者；等他们回复后再决定要不要改成追加一行。
 2. 关键能力缺失时**直接禁用调度**（本稿方案），还是尽量跑、只告警？
 3. 是否同意为了做契约探针，加 6 个客户端包作为 devDependencies？
 4. 是否先单独合 PR-1（骨架 + 契约测试 + CI），其余等在途分支合完再做？
