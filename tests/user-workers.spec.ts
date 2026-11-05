@@ -7,11 +7,11 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { setup, stored, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
-import { body, install, last, records, until, user } from './support/scheduler.js'
+import { body, install, last, listThen, records, until, user } from './support/scheduler.js'
 import { AGENT_RECORD } from '../src/records.js'
 import { parseNewWorker, runAgentsCommand } from '../src/rule-plugin.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema, rosterView, rosterViewSchema } from '../src/projection.js'
-import { needsRestartFor, newWorkerCommand, renameCommand } from '../src/client/index.js'
+import { commandFailure, needsRestartFor, newWorkerCommand, renameCommand } from '../src/client/index.js'
 
 afterEach(teardown)
 
@@ -79,9 +79,11 @@ describe('/agents rename', () => {
       if (o.sessionId === 'lead') {
         step += 1
         if (step === 1) return toolCallResponse('l1', 'agent_list', {})
-        if (step === 2) { listed = body(o); return toolCallResponse('s1', 'agent_send', { to: 'docs', message: 'first' }) }
+        if (step === 2) { listed = body(o); return listThen(o, 's1', 'agent_send', { to: 'docs', message: 'first' }) }
         if (step === 3) return textResponse('LEAD SENT')
-        if (step === 4) return toolCallResponse('s2', 'agent_send', { to: 'site', message: 'second' })
+        // r-1 was answered since the first list: read the roster again for a current rosterVersion.
+        if (step === 4) return toolCallResponse('l2', 'agent_list', {})
+        if (step === 5) return listThen(o, 's2', 'agent_send', { to: 'site', message: 'second' })
         return textResponse('LEAD')
       }
       return textResponse('OTHER')
@@ -177,5 +179,15 @@ describe('Agents page commands', () => {
     expect(renameCommand('docs', 'Site')).toHaveProperty('error')
     expect(needsRestartFor('Usage: /agents archive <name> | /agents archive done')).toBe(true)
     expect(needsRestartFor('"x" is already taken (names are never reused)')).toBe(false)
+  })
+})
+
+describe('command results in the browser', () => {
+  it('reads an error from the wrapped result the server sends, and from the older bare shape', () => {
+    expect(commandFailure({ commandId: 'c', result: { kind: 'error', text: 'taken' } }, '/agents new x y')).toBe('taken')
+    expect(commandFailure({ commandId: 'c', result: { kind: 'success', text: 'ok' } }, '/agents new x y')).toBeNull()
+    expect(commandFailure({ kind: 'error', text: 'old' }, '/agents new x y')).toBe('old')
+    expect(commandFailure({ kind: 'success' }, '/x')).toBeNull()
+    expect(commandFailure(undefined, '/agents new x')).toBe('unknown command: /agents')
   })
 })

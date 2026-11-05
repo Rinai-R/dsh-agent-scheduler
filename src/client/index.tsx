@@ -862,6 +862,20 @@ export function renameCommand(from: string, to: string): { line: string } | { er
   return { line: `/agents rename ${from} ${next}` }
 }
 
+/**
+ * The failure text of a remote command's result, or null when it succeeded. The server answers
+ * `{ commandId, result: { kind, text } }`; older servers answered `{ kind, text }` directly.
+ * @param value - `result.value` of `remote.commands.execute`.
+ * @param line - the command line, for the unknown-command message.
+ * @returns the error text, or null.
+ */
+export function commandFailure(value: unknown, line: string): string | null {
+  if (value === undefined || value === null) return `unknown command: ${line.split(' ')[0]}`
+  const outer = value as { kind?: string; text?: string; result?: { kind?: string; text?: string } }
+  const inner = outer.result !== undefined && typeof outer.result === 'object' ? outer.result : outer
+  return inner.kind === 'error' ? (inner.text ?? 'failed') : null
+}
+
 /** A host that predates `/agents new` and `/agents rename` answers with its old usage line. */
 export function needsRestartFor(error: string): boolean {
   return /^Usage: \/agents archive/u.test(error)
@@ -1356,9 +1370,7 @@ export function apply(ctx: any): void {
   const run = async (sessionId: string, line: string): Promise<string | null> => {
     const result = await ctx.remote.commands.execute(sessionId, line, [])
     if (!result.ok) return `${result.error.message} (${result.error.code})`
-    const value = result.value as { kind?: string; text?: string } | undefined
-    if (value === undefined) return `unknown command: ${line.split(' ')[0]}`
-    return value.kind === 'error' ? (value.text ?? 'failed') : null
+    return commandFailure(result.value, line)
   }
   /** Whether the Session's host half knows a command: it lags the browser half until a restart. */
   const has = async (sessionId: string, name: string): Promise<boolean> => {
