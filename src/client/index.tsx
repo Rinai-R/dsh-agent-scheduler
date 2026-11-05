@@ -235,7 +235,7 @@ const STYLE = `
 .sch-roster-item .sch-roster-row{width:calc(100% - 16px)}
 .sch-roster-archive{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-item:hover .sch-roster-archive,.sch-roster-archive:focus-visible{display:inline-flex}
-.sch-roster-item:hover .sch-roster-end{visibility:hidden}
+.sch-roster-item:has(.sch-roster-archive):hover .sch-roster-end{visibility:hidden}
 .sch-roster-archive:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
