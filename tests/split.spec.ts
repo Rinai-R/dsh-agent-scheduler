@@ -229,7 +229,9 @@ describe('Agents page', () => {
       { id: '1', name: 'hub-asr', area: 'hub' }, { id: '2', name: 'billing' }, { id: '3', name: 'hub-image', area: 'hub' }, { id: '4', name: 'docs' },
     ]
     expect(byArea(rows).map(r => r.name)).toEqual(['hub-asr', 'hub-image', 'billing', 'docs'])
-    expect(subline({ id: '1', name: 'hub-asr', kind: 'worker', state: 'started', text: 'asr', role: 'asr', area: 'hub', cwd: '/w/hub__asr/' })).toBe('hub · hub__asr · asr')
+    // The directory is in the row's tooltip, not the subline (#12); the area stays as a short prefix.
+    expect(subline({ id: '1', name: 'hub-asr', kind: 'worker', state: 'started', text: 'asr', role: 'asr', area: 'hub', cwd: '/w/hub__asr/' })).toBe('hub · asr')
+    expect(subline({ id: '1', name: 'hub-asr', kind: 'worker', state: 'started', text: 'asr', role: 'asr', area: 'hub' }, [{ id: 'r-4', text: 'rerun' }])).toBe('hub · r-4：rerun')
   })
 })
 

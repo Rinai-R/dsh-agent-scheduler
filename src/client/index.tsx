@@ -5,7 +5,7 @@
  * source of "waiting for you"); opening a fork or worker reuses the native subagent-chat
  * resource, so the embedded conversation, its composer and its stop action are the product's own.
  */
-import { memo, useEffect, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
@@ -218,7 +218,9 @@ const STYLE = `
 .sch-mode-error{margin-left:6px;color:var(--dsw-alias-state-error-primary);font-size:12px}
 
 /* Agents page: its own narrow column at the left of the right sidebar, a list of agents. */
-.sch-roster{display:flex;flex-direction:column;height:100%;overflow:auto;padding:0 0 12px;font-size:13px}
+.sch-roster{display:flex;flex-direction:column;height:100%;overflow:auto;padding:0;font-size:13px}
+.sch-roster::after{content:'';flex:none;height:12px}
+.sch-roster:has(> .sch-roster-below)::after{order:-1;display:none}
 .sch-roster-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:12px 12px 10px 18px;border-bottom:1px solid var(--dsw-alias-border-l1,transparent)}
 .sch-roster-title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600;line-height:20px}
 .sch-roster-summary{margin-top:2px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
@@ -260,6 +262,15 @@ textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:ver
 .sch-roster-primary{border:0;padding:4px 10px;border-radius:8px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-on-color,#fff);font:var(--dsw-font-xxs-12);cursor:pointer}
 .sch-roster-primary:disabled{opacity:.5;cursor:default}
 .sch-roster-form-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12);overflow-wrap:anywhere}
+.sch-roster-below{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;justify-content:center;gap:4px;flex:none;margin:auto 0 0;border:0;border-top:1px solid var(--dsw-alias-border-l1,transparent);padding:7px 12px 8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;box-shadow:0 -8px 12px -6px color-mix(in srgb,var(--dsw-alias-bg-layer-1) 90%,transparent)}
+.sch-roster-below:hover{color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-interactive-bg-hover) 60%,var(--dsw-alias-bg-layer-1))}
+.sch-roster-below svg{transform:rotate(90deg)}
+.sch-roster-below[data-review=approval]{color:var(--dsw-alias-state-warn-primary)}
+.sch-roster-below[data-review=reported]{color:var(--dsw-alias-label-primary)}
+.sch-roster-below[data-review]::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
+.sch-roster-below[data-review=approval]::before{background:var(--dsw-alias-state-warn-primary)}
+.sch-roster-item[data-flash] .sch-roster-row{animation:sch-flash 1.4s ease-out}
+@keyframes sch-flash{0%,35%{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}100%{background:transparent}}
 .sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-foldrow{display:flex;align-items:center;justify-content:space-between;margin:6px 8px 0}
@@ -814,7 +825,9 @@ function flat(text: string): string {
  * The second line of a row: why it failed, what it is working on right now, or what it was asked.
  *
  * A running agent's own requests say more than the message that created it, so the oldest still
- * unanswered one leads; a fork with nothing open shows the ask, a worker its directory and duty.
+ * unanswered one leads; a fork with nothing open shows the ask, a worker its duty. A worker's
+ * directory is left to the row's tooltip ({@link rowTitle}): worktree names are long and pushed
+ * the duty out of the narrow column.
  * @param member - a roster row.
  * @param pending - the member's unanswered requests, oldest first.
  * @returns the line, or '' when there is nothing worth saying.
@@ -823,10 +836,135 @@ export function subline(member: Member, pending: readonly { readonly id: string;
   const failure = member.state === 'failed' ? member.detail : undefined
   if (failure !== undefined) return flat(failure)
   const oldest = pending[0]
-  if (member.kind === 'fork') return oldest === undefined ? flat(member.text) : `${oldest.id}：${flat(oldest.text)}`
-  const dir = member.cwd === undefined ? undefined : member.cwd.replace(/\/+$/u, '').split('/').pop()
-  const duty = oldest === undefined ? member.role ?? member.text : `${oldest.id}：${flat(oldest.text)}`
-  return [member.area, dir, duty === undefined ? undefined : flat(duty)].filter(part => part !== undefined && part !== '').join(' · ')
+  // A worker split from an area is prefixed with the area (a short repository or module name),
+  // so the halves read as one area; the directory stays in the tooltip ({@link rowTitle}).
+  const area = member.kind === 'worker' && member.area !== undefined ? `${member.area.slice(0, 16)} · ` : ''
+  if (oldest !== undefined) return `${area}${oldest.id}：${flat(oldest.text)}`
+  return area + flat(member.kind === 'fork' ? member.text : member.role ?? member.text)
+}
+
+/**
+ * A row's tooltip: its Session id, and the worker's directory, which the subline leaves out.
+ * @param member - a roster row.
+ * @returns the title text.
+ */
+export function rowTitle(member: Member): string {
+  return member.cwd === undefined ? member.id : `${member.id}\n目录：${member.cwd}`
+}
+
+/** What the roster has below its visible part: rows, and how many of them carry a mark. */
+export interface HiddenBelow {
+  /** Rows not wholly visible under the viewport's bottom edge. */
+  readonly n: number
+  /** Of those, rows with an unread report (green or red dot). */
+  readonly unread: number
+  /** Of those, rows waiting on the user (yellow dot). */
+  readonly waiting: number
+  /** Index of the first such row, or -1. */
+  readonly first: number
+}
+
+/**
+ * Count the rows below the visible part of a scrolled list.
+ * @param rows - each row's bottom edge in content coordinates, with its review mark, top to bottom.
+ * @param viewBottom - the content coordinate of the viewport's bottom edge (scrollTop + height).
+ * @returns the hidden rows and their marks.
+ */
+export function hiddenBelow(rows: readonly { readonly bottom: number; readonly review?: ReviewMark | undefined }[], viewBottom: number): HiddenBelow {
+  let n = 0
+  let unread = 0
+  let waiting = 0
+  let first = -1
+  // A pixel of slack: sub-pixel layouts leave the last row a fraction past a list scrolled to its end.
+  rows.forEach((row, index) => {
+    if (row.bottom <= viewBottom + 1) return
+    if (first < 0) first = index
+    n += 1
+    if (row.review === 'approval') waiting += 1
+    else if (row.review !== undefined) unread += 1
+  })
+  return { n, unread, waiting, first }
+}
+
+/**
+ * The bottom hint's words.
+ * @param below - what is hidden.
+ * @returns e.g. 「下面还有 3 个 · 1 个未读」, or '' when nothing is.
+ */
+export function hiddenLabel(below: HiddenBelow): string {
+  if (below.n === 0) return ''
+  return [`下面还有 ${below.n} 个`, below.waiting === 0 ? undefined : `${below.waiting} 个等你`, below.unread === 0 ? undefined : `${below.unread} 个未读`]
+    .filter(part => part !== undefined).join(' · ')
+}
+
+const NOTHING_BELOW: HiddenBelow = { n: 0, unread: 0, waiting: 0, first: -1 }
+const sameBelow = (a: HiddenBelow, b: HiddenBelow) => a.n === b.n && a.unread === b.unread && a.waiting === b.waiting && a.first === b.first
+
+/** The roster's member rows in DOM order. */
+const rosterItems = (list: HTMLElement) => [...list.querySelectorAll<HTMLElement>(':scope > .sch-roster-item')]
+
+/**
+ * Measure what a scrolled roster hides under its bottom edge.
+ * @param list - the `.sch-roster` scroll container.
+ * @returns the hidden rows; nothing while the page is not laid out (a hidden kept-mounted tab).
+ */
+function measureBelow(list: HTMLElement): HiddenBelow {
+  if (list.clientHeight === 0) return NOTHING_BELOW
+  const top = list.getBoundingClientRect().top - list.scrollTop
+  const rows = rosterItems(list).map(item => ({ bottom: item.getBoundingClientRect().bottom - top, review: (item.dataset.review || undefined) as ReviewMark | undefined }))
+  // The hint itself, pinned to the bottom, covers what is under it.
+  const hint = list.querySelector<HTMLElement>(':scope > .sch-roster-below')?.offsetHeight ?? 0
+  return hiddenBelow(rows, list.scrollTop + list.clientHeight - hint)
+}
+
+/**
+ * Bring the first row below the fold into view, smoothly, and flash it so the eye lands on it.
+ * It goes near the top, so the click shows a whole new screen of rows.
+ * @param list - the `.sch-roster` scroll container.
+ * @param index - the row's index among the member rows.
+ */
+function revealRow(list: HTMLElement, index: number): void {
+  const item = rosterItems(list)[index]
+  if (item === undefined) return
+  const offset = item.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop
+  // Leave the row above it in sight, for context.
+  list.scrollTo({ top: Math.max(0, offset - 56), behavior: 'smooth' })
+  item.dataset.flash = ''
+  window.setTimeout(() => { delete item.dataset.flash }, 1400)
+}
+
+/**
+ * Track the rows a roster hides below its bottom edge. Recomputed on scroll (one read per frame),
+ * on resize, and after every render (rows added, folds opened); never polled.
+ * @returns a ref callback for the scroll container, the list element, and what it hides.
+ */
+function useHiddenBelow(): [(node: HTMLDivElement | null) => void, HTMLDivElement | null, HiddenBelow] {
+  const [list, setList] = useState<HTMLDivElement | null>(null)
+  const [below, setBelow] = useState<HiddenBelow>(NOTHING_BELOW)
+  const update = useCallback(() => {
+    if (list === null) return
+    const next = measureBelow(list)
+    setBelow(prev => (sameBelow(prev, next) ? prev : next))
+  }, [list])
+  // After every render: cheap (one rect per row), and the only signal for rows that came or went.
+  useEffect(update)
+  useEffect(() => {
+    if (list === null) return undefined
+    let frame = 0
+    const onScroll = () => {
+      if (frame !== 0) return
+      frame = window.requestAnimationFrame(() => { frame = 0; update() })
+    }
+    list.addEventListener('scroll', onScroll, { passive: true })
+    const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(onScroll)
+    resize?.observe(list)
+    return () => {
+      list.removeEventListener('scroll', onScroll)
+      resize?.disconnect()
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+    }
+  }, [list, update])
+  return [setList, list, below]
 }
 
 /**
@@ -1212,6 +1350,7 @@ export function createAgentsPage(ctx: {
       else if (selectedIn === 'done') setShowDone(true)
     }, [selected, selectedIn])
     const openTo = (id: string) => (roster?.openRequests ?? []).filter(r => r.to === id)
+    const [listRef, list, below] = useHiddenBelow()
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
       const pendingRequests = openTo(member.id)
@@ -1246,8 +1385,8 @@ export function createAgentsPage(ctx: {
         )
       }
       return (
-        <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
-        <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
+        <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
+        <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={rowTitle(member)}>
           <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: REVIEW_TITLE[review] })} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
@@ -1275,7 +1414,7 @@ export function createAgentsPage(ctx: {
       )
     }
     return (
-      <div className="sch-roster" data-scheduler-roster="">
+      <div className="sch-roster" data-scheduler-roster="" ref={listRef}>
         {failure === null ? null : <div className="sch-roster-failure" role="status">{failure}</div>}
         {canArchiveHere ? null : <div className="sch-roster-notice" role="status" data-scheduler-restart="">插件已更新，但 DeepSeek Harness 还在用旧版本运行，暂时不能归档。按 ⌘Q 完全退出再打开即可。</div>}
         <div className="sch-roster-head">
@@ -1342,6 +1481,18 @@ export function createAgentsPage(ctx: {
               )}
             </>
           )}
+        {below.n === 0 ? null : (
+          <button
+            type="button"
+            className="sch-roster-below"
+            data-scheduler-below={below.n}
+            {...(below.waiting > 0 ? { 'data-review': 'approval' } : below.unread > 0 ? { 'data-review': 'reported' } : {})}
+            title="滚到下面还没看到的 agent"
+            onClick={() => { if (list !== null) revealRow(list, below.first) }}
+          >
+            {ICON.chevron}{hiddenLabel(below)}
+          </button>
+        )}
       </div>
     )
   })

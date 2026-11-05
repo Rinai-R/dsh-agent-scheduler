@@ -95,7 +95,11 @@ prompt cache) and refuse while scheduling is off.
 Open the page from the Agents button. A handed-off message's status card opens that fork directly
 (「查看」). The page groups 「分身」 (forks), 「Worker」, 「已交回」 (concluded forks), and 「已归档」
 (archived). A row shows live state — 在跑, 在等你, 空闲, 已交回, 排队中, 失败, 已归档 — the requests
-it still owes (`N 个请求待回答`), and for a worker its directory and duty.
+it still owes (`N 个请求待回答`), and a second line: why it failed, else its oldest open request,
+else what a fork was asked or a worker's duty (prefixed with its area after a split); a worker's
+directory is in the row's tooltip. Archived rows are one compact line, and past eight of them the
+rest fold behind 「再显示 N 个」. When the list runs past the bottom, a pinned hint says
+「下面还有 N 个 · M 个等你 · K 个未读」; clicking it scrolls to the first hidden row.
 
 Click a row to open that agent's own native conversation in the other pane, with the roster keeping
 a narrow column of its own. At most two horizontal panes are allowed, so the page arranges the split
