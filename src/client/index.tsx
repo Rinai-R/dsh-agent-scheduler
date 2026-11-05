@@ -276,6 +276,44 @@ export function rowStateOf(member: Member, statuses: Statuses | undefined): RowS
   return status?.running === true ? 'running' : 'idle'
 }
 
+/** The parts of `ctx.sidebarRightTabs` used to keep agent chats mounted. */
+export interface TabTypesFace {
+  get?: (kind: string) => { keepMounted?: boolean } | undefined
+  subscribe?: (listener: () => void) => () => void
+}
+
+/**
+ * Keep the native subagent chat tabs mounted while another tab of their pane is in front.
+ * The dock renders only each pane's active tab unless its type says `keepMounted`, so closing one
+ * chat (or switching tabs) brought the neighbour back as a fresh mount: its conversation reloaded
+ * from the top. The type is the product's own (`subagentchat`, builtin band); taking it over with
+ * an extension would mean re-implementing its body, so the flag is set on the registered
+ * definition, again whenever the registry changes, and put back on dispose.
+ * @param tabs - `ctx.sidebarRightTabs`.
+ * @returns undo.
+ */
+export function retainChatTabs(tabs: TabTypesFace | undefined): () => void {
+  if (tabs?.get === undefined) return () => undefined
+  const touched = new Map<object, boolean | undefined>()
+  const apply = () => {
+    const definition = tabs.get?.('subagentchat')
+    if (definition === undefined || definition.keepMounted === true || touched.has(definition)) return
+    touched.set(definition, definition.keepMounted)
+    try { definition.keepMounted = true } catch { touched.delete(definition) }
+  }
+  apply()
+  const unsubscribe = tabs.subscribe?.(apply)
+  return () => {
+    unsubscribe?.()
+    for (const [definition, before] of touched) {
+      try {
+        if (before === undefined) delete (definition as { keepMounted?: boolean }).keepMounted
+        else (definition as { keepMounted?: boolean }).keepMounted = before
+      } catch { /* frozen after the fact: leave it */ }
+    }
+  }
+}
+
 /**
  * Address of one child's native sidebar chat, preferring the controller's known mode.
  * @param ctx - client plugin context.
@@ -1002,6 +1040,7 @@ export function apply(ctx: any): void {
     title: () => 'Agents',
     keepMounted: true,
   }), 'agent-scheduler: agents tab type')
+  ctx.effect(() => retainChatTabs(ctx.sidebarRightTabs), 'agent-scheduler: keep agent chats mounted')
   /** Run one command line; returns null on success, otherwise what went wrong. */
   const run = async (sessionId: string, line: string): Promise<string | null> => {
     const result = await ctx.remote.commands.execute(sessionId, line, [])

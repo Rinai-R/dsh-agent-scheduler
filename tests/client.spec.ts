@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, openLabel, requestDefinition, requestOf, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
+import { chatPlacement, openLabel, requestDefinition, requestOf, forkModelCommand, forkModelGroups, forkModelValue, inputDefinition as def, retainChatTabs, rowStateOf, SAME_AS_LEAD } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -135,5 +135,26 @@ describe('input card when the message is logged', () => {
     expect(def.start({ key: 'k', id: 'f2' }, { event: logged })).toMatchObject({ logged: true, text: 'with image' })
     // Older records have no flag: the card still draws the user's words itself.
     expect(def.start({ key: 'k', id: 'f1' }, { event: input })).not.toHaveProperty('logged')
+  })
+})
+
+describe('agent chat tabs', () => {
+  it('keeps the native chat type mounted, follows re-registration, and undoes on dispose', () => {
+    const listeners = new Set<() => void>()
+    let definition: { kind: string; keepMounted?: boolean } = { kind: 'subagentchat' }
+    const tabs = { get: (kind: string) => (kind === 'subagentchat' ? definition : undefined), subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } } }
+    const undo = retainChatTabs(tabs)
+    expect(definition.keepMounted).toBe(true)
+    const first = definition
+    definition = { kind: 'subagentchat' }
+    for (const l of listeners) l()
+    expect(definition.keepMounted).toBe(true)
+    undo()
+    expect(listeners.size).toBe(0)
+    expect('keepMounted' in first).toBe(false)
+    expect('keepMounted' in definition).toBe(false)
+  })
+  it('does nothing without a registry', () => {
+    expect(() => { retainChatTabs(undefined)() }).not.toThrow()
   })
 })
