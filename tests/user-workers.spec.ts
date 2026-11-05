@@ -140,7 +140,7 @@ describe('/agents rename', () => {
     const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
     const scheduler = install(ctx, { defaultOn: false })
     await scheduler.createWorker(h1.agent, { name: 'docs', role: 'r' })
-    scheduler.rename(h1.agent, 'docs', 'site')
+    await scheduler.rename(h1.agent, 'docs', 'site')
     await h1.dispose()
     scheduler.forget('main')
     const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)

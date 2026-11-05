@@ -72,8 +72,7 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 
 从 Agents 按钮打开；主会话消息下的状态卡则直接打开那个分身（「查看」）。名单分「分身」「Worker」
 「已交回」「已归档」。每行显示实时状态——在跑、在等你、空闲、已交回、排队中、失败、已归档——还欠着
-的请求（`N 个请求待回答`），以及第二行：失败原因；否则最早一个未答请求；否则分身被问的话、worker 的
-目录和职责。已归档的行只占紧凑的一行，超过八个后其余收进「再显示 N 个」。
+的请求（`N 个请求待回答`），worker 还显示目录和职责。
 
 点一行就在另一栏打开这个 agent 自己的原生对话，名单保留自己的一窄栏。右侧栏最多两个水平 pane，所以
 页面按你手动会做的手势自己分栏：名单在左，agent 对话作为标签在右。Agents 页和 agent 对话都设了
@@ -121,13 +120,17 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 
 | 工具 | 作用 |
 |---|---|
-| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
-| `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
-| `agent_list` | 当前 worker 与在途请求，带 `open` 计数；加 `forks: true` 才连一次性分身一起列出。 |
+| `agent_create` | 建 worker：`name`、`role`、`rosterVersion`（取自 `agent_list`），可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；lead 还要传 `for`（它依据的 `fork-N` 或 `r-N`）；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
+| `agent_send` | 给分身或 worker 派活，带 `rosterVersion`；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
+| `agent_list` | 当前 worker（含 `createdFor`）与在途请求，带 `open` 计数和 `rosterVersion`；加 `forks: true` 才连一次性分身一起列出。 |
 | `agent_interrupt` | 停当前这一轮；它待处理的收件箱保留。 |
 | `agent_archive` | 归档一个 agent；会话保留，名字不再复用。 |
 | `role_set` | 改 lead 或某个 worker 的 role，只在用户要求时用。 |
 | `report` | 显式交这一轮的结论，替代最后一条消息。 |
+
+### 派活锁
+
+同一主会话里的 `agent_create` / `agent_send`（lead、分身、worker 都一样）按到达顺序逐个执行：读名单 → 校验 → 创建/投递 → 写记录都在锁内完成，异常也会释放。两者都必须带 `agent_list`（或上一次派活返回）的 `rosterVersion`；worker 增加或变状态、请求发出或结清时它就变，拿旧版本派活会被拒，并附上最新名单（worker、状态、积压、最近新建的成员及谁为哪条输入建的）。每条输入最多建一个 worker：分身只能为自己那条消息建一个；lead 建时用 `for` 指明依据的 `fork-N` 或 `r-N`，所以分身已建过的 worker 不会因其结论再被建一次。
 
 ## 工作方式
 

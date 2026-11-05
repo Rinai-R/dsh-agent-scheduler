@@ -200,7 +200,7 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
     if (verb === 'rename') {
       const [from, to, ...extra] = words(rest)
       if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: 'Usage: /agents rename <name> <new-name>' }
-      const done = scheduler.rename(invocation.agent, from, to)
+      const done = await scheduler.rename(invocation.agent, from, to)
       return { kind: 'success', text: done.from === done.to ? `${done.to} already has that name.` : `Renamed ${done.from} to ${done.to}.` }
     }
     const [target, ...extra] = words(rest)
