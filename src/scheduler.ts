@@ -19,7 +19,7 @@ import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agen
 import { boundContextSummary, createDeveloperMessage, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
-import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
+import { FORK_FROM_PROVIDER, ForkSeedError, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
   appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
@@ -37,12 +37,12 @@ import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type Ch
  */
 export const FORK_NOTICE = [
   'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
-  'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first: agent_create and agent_send take the rosterVersion it returns and are refused when the roster changed since (someone else just created or delegated); read the roster they return with the refusal and decide again, never by creating the same worker under another name.',
+  'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first: agent_create, agent_split and agent_send take the rosterVersion it returns and are refused when the roster changed since (someone else just created or delegated); read the roster they return with the refusal and decide again, never by creating the same worker under another name. Workers start coarse and split only on a collision, like a hash trie that grows a branch only where two keys meet:',
   '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
-  '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd, never a directory another worker uses; agent_create creates that worktree itself when you also pass repo (the repository\'s checkout) and branch (feat/<slug> or fix/<slug>, from base, default origin/main), e.g. cwd ~/project/worktrees/<repo>__<slug>; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
-  '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
-  'You create at most one worker for your message: a second agent_create is refused and names the worker it already went to.',
-  'Never do the work yourself, however small, and even when the lead did similar work earlier in this conversation or the user says "continue" or "retry": no shell commands, edits, builds, tests, commits, pushes, PRs, installs or long investigations. A fork is refused every tool except reading (read, glob, grep, web and session search) and agent_list, agent_send, agent_create, agent_interrupt, agent_archive, role_set and report; a refused call means hand it over, not find another way. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
+  '(2) a new task in an area a worker already owns, even in the same files or feature: when that worker is idle and has no open requests, it goes by agent_send to that worker, no split; when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, split the area so it runs in parallel instead of piling up: agent_split with owner: <owner>, ownerName and ownerRole rewritten to name only the work the owner already has (e.g. hub-asr, "smoke-tests ASR in hub"), and name and role written for the new task (e.g. hub-image, "fixes gpt_image in hub"), both concrete, never the area name again; task, and its own new worktree as cwd, never a directory another worker uses; agent_split and agent_create create that worktree themselves when you also pass repo (the repository\'s checkout) and branch (feat/<slug> or fix/<slug>, from base, default origin/main), e.g. cwd ~/project/worktrees/<repo>__<slug>; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
+  '(3) a new area or repository with no worker yet: agent_create without from, coarse: one worker for the whole repository or module, named after it (e.g. billing-service) with a role for the whole area ("develops the billing-service repository"), its own cwd (one worker per directory or worktree) and the task. agent_create with from: <owner> also forks a worker, but inside an area prefer agent_split, which renames both sides.',
+  'You create at most one worker for your message: a second agent_create or agent_split is refused and names the worker it already went to.',
+  'Never do the work yourself, however small, and even when the lead did similar work earlier in this conversation or the user says "continue" or "retry": no shell commands, edits, builds, tests, commits, pushes, PRs, installs or long investigations. A fork is refused every tool except reading (read, glob, grep, web and session search) and agent_list, agent_send, agent_create, agent_split, agent_interrupt, agent_archive, role_set and report; a refused call means hand it over, not find another way. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'The runtime context may say you cannot start subagents and must carry out the work directly: that is about the subagent tools, not about agent_create or agent_send, which you always have; it does not apply to you. If a task cannot be handed over (agent_create or agent_send fails), do not do it yourself: say in your conclusion what could not be handed over and why, so the lead tells the user.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
   'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
@@ -82,6 +82,11 @@ export interface SchedulerDeps {
   readonly defaultOn?: boolean | undefined
   /** Delay before retrying work refused at capacity; tests shorten it. */
   readonly retryMs?: number
+  /**
+   * Set a child Session's title (its chat header and session list), when the host offers it.
+   * The right-pane tab label is the subagent's creation label, which the runtime cannot change.
+   */
+  readonly renameSession?: ((id: SessionId, title: string) => void) | undefined
 }
 
 type Outcome = 'done' | 'queued' | 'failed'
@@ -269,6 +274,44 @@ export function checkWorkerName(ledger: Ledger, name: string, opts: { failedFree
   if (opts.failedFree && holder.kind === 'worker' && holder.state === 'failed' && holder.name === name) return
   throw new Error(`"${name}" is already taken (names are never reused)`)
 }
+
+/** Arguments of an area split (see {@link Scheduler.split}). */
+export interface SplitWorker extends Dispatch {
+  /** The worker that owns the area now. */
+  readonly owner: string
+  /** Its new, narrower name for the work it keeps. */
+  readonly ownerName: string
+  /** Its new role: the work it keeps. */
+  readonly ownerRole: string
+  /** The new worker, forked from the owner. */
+  readonly name: string
+  readonly role: string
+  /** A new worktree of its own; required when the owner has a directory. */
+  readonly cwd?: string | undefined
+  /** Create `cwd` as a new git worktree first, as for agent_create. */
+  readonly worktree?: CreateWorker['worktree']
+  readonly model?: ForkModelSelection | undefined
+  /** Its first request. */
+  readonly task: string
+  /** As for agent_create: what the new worker is for (the lead names a fork-N or r-N). */
+  readonly for?: string | undefined
+}
+
+/** A checked worker creation, ready to record and start. */
+interface WorkerPlan {
+  readonly id: SessionId
+  readonly source: Member | undefined
+  readonly seed: SessionEvent[] | undefined
+  readonly selection: ForkModelSelection | undefined
+  readonly preset: string | undefined
+  readonly cwd: string | undefined
+  /** What it is created for (`fork-N` / `r-N`), recorded on `created`. */
+  readonly key: string | undefined
+  /** Area the new worker shares with the worker it was split from. */
+  readonly area?: string | undefined
+}
+
+type Created = { name: string; id: string; request?: string; queued: boolean; rosterVersion: string }
 
 /** Scheduler state and rules for every main Session in one preset scope. */
 export class Scheduler {
@@ -684,27 +727,48 @@ export class Scheduler {
     return this.exclusive(main.id, () => this.createLocked(main, caller, args))
   }
 
-  private async createLocked(main: Agent, caller: Agent, args: CreateWorker): Promise<{ name: string; id: string; request?: string; queued: boolean; rosterVersion: string }> {
+  private async createLocked(main: Agent, caller: Agent, args: CreateWorker): Promise<Created> {
     const ledger = this.ledgerOf(main)
     this.checkVersion(ledger, args)
     const key = this.creationKey(ledger, caller, args.for)
     if (key !== undefined) this.checkOnce(ledger, key)
-    const checkName = (): void => { checkWorkerName(ledger, args.name, { failedFree: true }) }
+    const plan = await this.planWorker(main, args, key)
+    const source = plan.source
+    return this.launchWorker(main, caller, args, plan, source === undefined ? [] : [`You continue worker "${source.name}": its conversation so far is your context.`])
+  }
+
+  /**
+   * Check a worker creation and gather what starting it needs; records nothing (it may create
+   * the worktree it was asked for).
+   * @param reserved - names another part of the same operation takes.
+   * @param unseeded - a split may start the new worker fresh when the owner has no clean round.
+   */
+  private async planWorker(main: Agent, args: CreateWorker, key: string | undefined, reserved: readonly string[] = [], unseeded = false): Promise<WorkerPlan> {
+    const ledger = this.ledgerOf(main)
+    const checkName = (): void => {
+      checkWorkerName(ledger, args.name, { failedFree: true })
+      if (reserved.includes(args.name)) throw new Error('ownerName and name must differ')
+    }
     checkName()
-    const source = args.from === undefined ? undefined : ledger.find(args.from)
+    const source = args.from === undefined ? undefined : this.lookup(ledger, args.from)
     let seed: SessionEvent[] | undefined
-    if (args.from !== undefined) {
-      if (source === undefined) throw new Error(`no agent named "${args.from}"`)
+    if (source !== undefined) {
       if (source.kind !== 'worker') throw new Error(`"${args.from}" is a fork; only a worker can be continued`)
       if (gone(source)) throw new Error(`"${args.from}" is ${source.state}`)
       if (args.preset !== undefined) throw new Error('a worker that continues another worker keeps its preset')
       // A worker continued from one that has its own directory must get a new one (a new
       // worktree): without a cwd it would fall back to the session's directory, not a tree of its own.
       if (source.cwd !== undefined && args.cwd === undefined) throw new Error(`"${source.name}" works in ${source.cwd}; give "${args.name}" its own new worktree as cwd (git worktree add …), not a shared directory`)
-      seed = forkSeed((await this.logOf(source.id)).events, source.name)
+      const events = (await this.logOf(source.id)).events
+      try {
+        seed = forkSeed(events, source.name)
+      } catch (error) {
+        // A split may start its worker fresh when the owner has no clean round to continue from
+        // (it is still in its first round, or every round left a message it has not taken).
+        if (!unseeded || !(error instanceof ForkSeedError) || error.code === 'NON_CONTIGUOUS_LOG') throw error
+      }
       checkName()
     }
-    const id = SessionId(`session-${randomUUID()}`)
     // The lead's explicit model, then the Agents page's 「Worker 模型」 (/worker model), then config.
     const selection = args.model ?? workerModelOf(main.session.snapshotEvents()) ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
@@ -727,10 +791,17 @@ export class Scheduler {
       const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
       if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
     }
+    return { id: SessionId(`session-${randomUUID()}`), source, seed, selection, preset, cwd, key }
+  }
+
+  /** Record a planned worker and start it; its task becomes its first request. */
+  private async launchWorker(main: Agent, caller: Agent, args: Pick<CreateWorker, 'name' | 'role' | 'task'>, plan: WorkerPlan, intro: readonly string[]): Promise<Created> {
+    const ledger = this.ledgerOf(main)
+    const { id, source, seed, selection, preset, cwd, key, area } = plan
     const model = selection === undefined ? undefined : `${selection.provider}/${selection.model}`
     this.record(main, s => appendAgent(s, {
       action: 'created', id, name: args.name, role: args.role,
-      ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }), ...(source === undefined ? {} : { from: source.id }),
+      ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }), ...(source === undefined || seed === undefined ? {} : { from: source.id }), ...(area === undefined ? {} : { area }),
       by: caller.id, ...(key === undefined ? {} : { for: key }), at: new Date().toISOString(),
     }))
     const task = args.task
@@ -738,7 +809,7 @@ export class Scheduler {
     if (requestId !== undefined) this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: id, text: task! }))
     const first = [
       `You are worker "${args.name}" in an Agent Scheduler session.`,
-      ...(source === undefined ? [] : [`You continue worker "${source.name}": its conversation so far is your context.`]),
+      ...intro,
       `Your role: ${args.role}`,
       requestId === undefined ? 'No task yet: acknowledge briefly and wait for requests.' : this.requestText(requestId, ledger.nameOf(caller.id), task!),
     ].join('\n\n')
@@ -763,6 +834,8 @@ export class Scheduler {
       }
       if (ledger.members.get(id)?.state === 'queued') this.record(main, s => appendAgent(s, { action: 'started', id, name: nameNow() }))
       if (requestId !== undefined) this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: id, text: task!, messageId }))
+      // A worker split from another starts with that one's title; give it its own.
+      if (area !== undefined) this.retitle(id, nameNow(), args.role)
     }), {
       queued: () => { this.record(main, s => appendAgent(s, { action: 'queued', id, name: nameNow() })) },
       failed: error => {
@@ -773,6 +846,83 @@ export class Scheduler {
     })
     if (outcome === 'failed') throw new Error(`could not start "${args.name}": ${failure}`)
     return { name: args.name, id, queued: outcome === 'queued', ...(requestId === undefined ? {} : { request: requestId }), rosterVersion: this.rosterVersion(ledger) }
+  }
+
+  /**
+   * Split an area: the owner is renamed and narrowed to the work it has, and a new worker forked
+   * from it takes a new task in parallel. Like a hash trie, a node holds a whole area until two
+   * tasks collide in it; only then is it split, and both branches get a name and role of their own.
+   * Runs inside the dispatch lock with the same rosterVersion and for rules as agent_create, and
+   * checks everything before recording anything. The owner's rename reuses the `renamed` record
+   * of `/agents rename`, with the narrower role and the area added. Once the owner is renamed, a
+   * new worker that fails to start does not undo it (as for any worker whose start fails).
+   * @param caller - the agent asking.
+   * @param args - the owner, its new name and role, and the new worker as for {@link createWorker}.
+   * @returns both workers' names, the area, the new worker's id and request, and whether it waits for a slot.
+   */
+  async split(caller: Agent, args: SplitWorker): Promise<Created & { area: string; owner: string; formerName: string; ownerNotified: boolean; seeded: boolean }> {
+    const main = this.mainOf(caller)
+    return this.exclusive(main.id, () => this.splitLocked(main, caller, args))
+  }
+
+  private async splitLocked(main: Agent, caller: Agent, args: SplitWorker): Promise<Created & { area: string; owner: string; formerName: string; ownerNotified: boolean; seeded: boolean }> {
+    const ledger = this.ledgerOf(main)
+    this.checkVersion(ledger, args)
+    const owner = this.lookup(ledger, args.owner)
+    if (owner.kind !== 'worker') throw new Error(`"${owner.name}" is a fork; only a worker owns an area`)
+    if (gone(owner)) throw new Error(`"${owner.name}" is ${owner.state}`)
+    if (args.ownerName === owner.name) throw new Error(`give "${owner.name}" a new, narrower name for the work it keeps (ownerName), not its current one`)
+    if (args.ownerName === args.name) throw new Error('ownerName and name must differ')
+    if (args.ownerRole.trim() === '' || args.role.trim() === '') throw new Error('ownerRole and role must say what each worker now does')
+    checkWorkerName(ledger, args.ownerName, { failedFree: false })
+    const key = this.creationKey(ledger, caller, args.for)
+    if (key !== undefined) this.checkOnce(ledger, key)
+    const area = owner.area ?? owner.name
+    const formerName = owner.name
+    const plan = await this.planWorker(main, { name: args.name, role: args.role, cwd: args.cwd, worktree: args.worktree, model: args.model, from: owner.id, task: args.task }, key, [args.ownerName], true)
+    this.record(main, s => appendAgent(s, { action: 'renamed', id: owner.id, name: args.ownerName, previousName: formerName, role: args.ownerRole, area }))
+    this.retitle(owner.id, args.ownerName, args.ownerRole)
+    const intro = [plan.seed === undefined
+      ? `Area "${area}" was split because a new task came while worker "${formerName}" was busy; it is now "${args.ownerName}" and keeps its current work (${args.ownerRole}). You are its sibling in the area, started fresh: do only your own task, do not redo or finish its work.`
+      : `Area "${area}" was split because a new task came while "${formerName}" was busy. The conversation so far is "${formerName}"'s; it is now "${args.ownerName}" and keeps its current work (${args.ownerRole}). You are its sibling in the area: do only your own task, do not redo or finish its work.`]
+    const result = await this.launchWorker(main, caller, { name: args.name, role: args.role, task: args.task }, { ...plan, area }, intro)
+    // A running owner learns its new identity at its next step; an idle one is not woken for it:
+    // its system prompt and its next request carry the identity (see requestText).
+    let ownerNotified = false
+    if (this.deps.agents.get(SessionId(owner.id))?.status === 'running') {
+      try {
+        await this.deps.subagents.sendMessage(main, SessionId(owner.id), [{ type: 'text', text: [
+          '[note from the scheduler, not a request: you were renamed]',
+          `You are now worker "${args.ownerName}" (formerly "${formerName}") in area "${area}".`,
+          `Your role: ${args.ownerRole}`,
+          `A new worker "${args.name}": ${args.role} was split off for a new task in this area; leave that to it and carry on with your current work.`,
+        ].join('\n') }], { signal: new AbortController().signal })
+        ownerNotified = true
+      } catch (error) {
+        this.deps.log?.(`telling ${args.ownerName} about the split failed`, error)
+      }
+    }
+    return { ...result, area, owner: args.ownerName, formerName, ownerNotified, seeded: plan.seed !== undefined }
+  }
+
+  /** Find a member by name or id, or say what became of a name a split shared out. */
+  private lookup(ledger: Ledger, key: string): Member {
+    const hint = ledger.splitHint(key)
+    if (hint !== undefined) throw new Error(hint)
+    const member = ledger.find(key)
+    if (member === undefined) throw new Error(`no agent named "${key}"; use agent_list`)
+    return member
+  }
+
+  /** Session title of a worker's own chat, when the host can set it. */
+  private retitle(id: string, name: string, role: string): void {
+    if (this.deps.renameSession === undefined) return
+    const short = role.trim().replace(/\s+/gu, ' ')
+    try {
+      this.deps.renameSession(SessionId(id), (short === '' ? name : `${name} · ${short}`).slice(0, 60))
+    } catch (error) {
+      this.deps.log?.(`renaming the session of ${name} failed`, error)
+    }
   }
 
   /**
@@ -803,9 +953,16 @@ export class Scheduler {
     return { from: target.name, to: next }
   }
 
-  /** A request as the worker's chat shows it: who asks and what. How to answer is in its system prompt. */
-  private requestText(id: string, from: string, text: string): string {
-    return `[request ${id} from ${from}]\n${text}`
+  /**
+   * A request as the worker's chat shows it: who asks and what. How to answer is in its system
+   * prompt. A worker renamed in a split also gets who it is now, since its conversation still
+   * says its old name and role.
+   */
+  private requestText(id: string, from: string, text: string, to?: Member): string {
+    const identity = to?.area === undefined || to.formerNames === undefined || to.formerNames.length === 0
+      ? ''
+      : `[you are now worker "${to.name}" (formerly ${to.formerNames.map(n => `"${n}"`).join(', ')}) in area "${to.area}"; your role: ${(to.role ?? '').replace(/\s+/gu, ' ')}]\n`
+    return `[request ${id} from ${from}]\n${identity}${text}`
   }
 
   /**
@@ -824,8 +981,7 @@ export class Scheduler {
   private async sendLocked(main: Agent, caller: Agent, to: string, text: string, dispatch: Dispatch): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string; rosterVersion: string }> {
     const ledger = this.ledgerOf(main)
     this.checkVersion(ledger, dispatch)
-    const target = ledger.find(to)
-    if (target === undefined) throw new Error(`no agent named "${to}"; use agent_list`)
+    const target = this.lookup(ledger, to)
     if (target.id === caller.id) throw new Error('cannot send a request to yourself')
     if (gone(target)) throw new Error(`"${to}" is ${target.state}`)
     // A running target takes the message at its next step boundary, inside the round it is in;
@@ -837,7 +993,7 @@ export class Scheduler {
     let failure = ''
     // A target still waiting to start is ahead in the queue, so this delivery waits behind it.
     const outcome = await this.run(main, target.id, id, () => this.delivering(main, target.id, async () => {
-      const messageId = await this.deps.subagents.sendMessage(main, SessionId(target.id), [{ type: 'text', text: this.requestText(id, from, text) }], { signal: new AbortController().signal })
+      const messageId = await this.deps.subagents.sendMessage(main, SessionId(target.id), [{ type: 'text', text: this.requestText(id, from, text, ledger.members.get(target.id)) }], { signal: new AbortController().signal })
       this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text, messageId }))
     }), {
       failed: error => {
@@ -850,7 +1006,7 @@ export class Scheduler {
     // Requests the target already had before this one: what this one waits behind.
     const ahead = ledger.openTo(target.id).filter(r => r.id !== id).map(r => r.id)
     const parallel = target.kind === 'worker' && (busy || ahead.length > 0)
-      ? ` Only a follow-up to ${ahead.length > 0 ? ahead.join(', ') : 'its current work'} (rework, a question, review comments, a change of direction) belongs here. A new task, even in the same files, must run in parallel: agent_create with from: ${target.name} and a new worktree of its own as cwd.`
+      ? ` Only a follow-up to ${ahead.length > 0 ? ahead.join(', ') : 'its current work'} (rework, a question, review comments, a change of direction) belongs here. A new task, even in the same files, must run in parallel: agent_split with owner: ${target.name}, a narrower ownerName and ownerRole for what it is doing, and a new worker with its own new worktree as cwd.`
       : ''
     const note = (queued
       ? `${target.name} has not started yet (no free slot); ${id} is delivered when it starts.`
@@ -867,8 +1023,7 @@ export class Scheduler {
    */
   interrupt(caller: Agent, name: string): void {
     const main = this.mainOf(caller)
-    const target = this.ledgerOf(main).find(name)
-    if (target === undefined) throw new Error(`no agent named "${name}"`)
+    const target = this.lookup(this.ledgerOf(main), name)
     this.stopping.add(target.id)
     this.deps.subagents.interrupt(SessionId(target.id), { kind: 'ancestor', agent: main })
   }
@@ -882,8 +1037,7 @@ export class Scheduler {
   async archive(caller: Agent, name: string): Promise<void> {
     const main = this.mainOf(caller)
     const ledger = this.ledgerOf(main)
-    const target = ledger.find(name)
-    if (target === undefined) throw new Error(`no agent named "${name}"`)
+    const target = this.lookup(ledger, name)
     if (target.state === 'archived') return
     // Work still waiting for a slot is dropped: a start would create it again, a delivery would
     // reach an agent that is no longer listening. Their requests fail below.

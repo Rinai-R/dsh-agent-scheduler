@@ -212,7 +212,7 @@ describe('sending to a busy worker', () => {
     expect(sent).toMatchObject({ request: 'r-2', to: 'hub', queued: false, busy: true, ahead: ['r-1'] })
     expect(sent.note).toMatch(/busy with r-1.*after its current step/u)
     // A busy worker: the answer says how to run a new task beside it instead of behind it.
-    expect(sent.note).toContain('agent_create with from: hub and a new worktree')
+    expect(sent.note).toContain('agent_split with owner: hub')
     expect(sent.note).not.toMatch(/uncommitted/u)
     // agent_list shows the backlog, so a router sees the pile before adding to it.
     const listed = await ctx.tools.get('agent_list', lead)!.execute({}, { agent: lead, signal: new AbortController().signal } as never) as { agents: Array<{ name: string; state: string; open?: number }> }

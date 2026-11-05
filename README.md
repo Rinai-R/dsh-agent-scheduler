@@ -31,10 +31,12 @@ lead — the only agent whose replies you read.
 - **One pipeline, ending at the lead.** A fork's conclusion, a worker's answer, a `report` and a
   failed request all go straight to the lead, tagged with who asked and for which input. No agent is
   woken again just to relay a result.
-- **Busy worker, new worktree.** A follow-up goes to the worker that already has the request. A new
-  task in an area whose worker is running or already has open requests goes to a new worker
-  continued from that owner (`from`), with its own worktree as `cwd`, so it runs in parallel
-  instead of queueing. A fork never waits for its workers.
+- **Coarse workers that split on a collision.** A new area gets one worker for the whole repository
+  or module. A follow-up goes to the worker that already has the request, and a new task to an idle
+  owner. A new task in an area whose worker is running or already has open requests splits it:
+  `agent_split` renames the owner to the work it keeps and forks a new worker for the new task in
+  its own worktree, both sharing the area, so it runs in parallel instead of queueing. A fork never
+  waits for its workers.
 - **A roster in the sidebar.** The Agents page lists forks and workers with live state and open
   requests, and opens any of them as an embedded conversation beside the roster. Both the page and
   the chats stay mounted, so switching tabs does not reload a conversation.
@@ -158,6 +160,7 @@ All of these run in the main session.
 | Tool | Purpose |
 |---|---|
 | `agent_create` | Start a worker: `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on); `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
+| `agent_split` | Split a busy worker's area for a new task: `owner`, `ownerName` + `ownerRole` (the narrower work it keeps), `name` + `role` + `task` for the new worker, `cwd` (or `repo` + `branch`), `rosterVersion`, and `for` from the lead. The owner is renamed like `/agents rename` (its old names stay reserved); the new worker continues its conversation, or starts fresh while the owner has no completed round. Both carry the `area`; the Agents page keeps them together. |
 | `agent_send` | Send a request to a fork or worker, with `rosterVersion`; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
 | `agent_list` | The workers (with `createdFor`) and the open requests, with `open` counts and the `rosterVersion`; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |
