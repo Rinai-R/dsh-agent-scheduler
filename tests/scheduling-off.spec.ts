@@ -109,6 +109,17 @@ describe('scheduling off', () => {
     expect(forksOf(lead)).toHaveLength(1)
   })
 
+  it('an ordinary subagent of the lead is still refused, on or off', async () => {
+    const { ctx, lead } = await setup(() => textResponse('OK'))
+    const scheduler = install(ctx, { defaultOn: false })
+    const sub = { id: 'plain-subagent', session: { header: { parentSession: lead.id } } } as never
+    for (const on of [false, true]) {
+      scheduler.setMode(lead, on)
+      await expect(tool(ctx, 'agent_list', lead).execute({}, exec(sub))).rejects.toThrow(/not part of scheduling/)
+      await expect(create(ctx, sub, { name: 'x', role: 'x', rosterVersion: (await list(ctx, lead)).rosterVersion })).rejects.toThrow(/not part of scheduling/)
+    }
+  })
+
   it('the lead notice says the switch only decides who takes user messages', () => {
     expect(LEAD_NOTICE).toContain('decides only whether their messages go to forks')
     expect(LEAD_OFF_NOTICE).toContain('for is optional')
