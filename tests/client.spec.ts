@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, subline } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline } from '../src/client/index.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -193,6 +193,12 @@ describe('agent chat tabs', () => {
   })
   it('does nothing without a registry', () => {
     expect(() => { retainChatTabs(undefined)() }).not.toThrow()
+  })
+})
+
+describe('sidebar tab strip', () => {
+  it('is a no-op without a document', () => {
+    expect(() => { steadyTabStrips(undefined)() }).not.toThrow()
   })
 })
 
