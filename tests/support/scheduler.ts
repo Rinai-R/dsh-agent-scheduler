@@ -9,6 +9,7 @@ import { schedulerTools, sectionFor } from '../../src/tools.js'
 import { inputOf } from '../../src/records.js'
 import { restoreMemberModel } from '../../src/member-model.js'
 import { stored, text } from './harness.js'
+import { toolCallResponse } from './mock-adapter.js'
 
 export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Scheduler {
   const scheduler = new Scheduler({
@@ -52,4 +53,15 @@ export async function until(lead: Agent, needle: string, n = 1): Promise<void> {
     expect(leadSaw(lead, needle)).toBeGreaterThanOrEqual(n)
   }, { timeout: 15_000 })
   await lead.whenIdle()
+}
+
+/** The rosterVersion of the newest agent_list (or dispatch) result a request carries. */
+export function rosterVersionIn(o: GenerateOptions): string | undefined {
+  return [...body(o).matchAll(/rosterVersion\\+":\\+"([0-9a-f.]+)/gu)].at(-1)?.[1]
+}
+
+/** As a model does: agent_list first, then `tool` with the rosterVersion it returned. */
+export function listThen(o: GenerateOptions, id: string, tool: string, args: Record<string, unknown>) {
+  const version = rosterVersionIn(o)
+  return version === undefined ? toolCallResponse(`${id}-list`, 'agent_list', {}) : toolCallResponse(id, tool, { ...args, rosterVersion: version })
 }

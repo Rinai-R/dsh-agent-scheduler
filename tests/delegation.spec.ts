@@ -7,7 +7,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { gate, setup, stored, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
-import { body, forksOf, install, last, leadSaw, records, until, user } from './support/scheduler.js'
+import { body, forksOf, install, last, leadSaw, listThen, records, rosterVersionIn, until, user } from './support/scheduler.js'
 import { AGENT_RECORD, REQUEST_RECORD } from '../src/records.js'
 
 afterEach(teardown)
@@ -28,7 +28,7 @@ function delegatingScript(worker: (o: GenerateOptions) => Promise<string> | stri
     if (o.sessionId === 'lead' || o.sessionId === 'main') { leadCalls += 1; return textResponse('LEAD OK') }
     if (isWorker('billing')(o)) return textResponse(await worker(o))
     if (isFork(o)) {
-      if (!called(o, 'agent_create')) return toolCallResponse('c1', 'agent_create', { name: 'billing', role: 'owns billing retries', task: 'check the retry policy' })
+      if (!called(o, 'agent_create')) return listThen(o, 'c1', 'agent_create', { name: 'billing', role: 'owns billing retries', task: 'check the retry policy' })
       return textResponse('FORK CONCLUSION: asked billing to check')
     }
     return textResponse('OTHER')
@@ -53,8 +53,8 @@ describe('requests', () => {
     expect(leadSaw(lead, 'BILLING ANSWER')).toBe(1)
     const log = lead.session.snapshotEvents()
     const forkId = forksOf(lead)[0]!
-    // The agent_create call and the conclusion: the answer costs the fork no third model call.
-    expect(adapter.requests.filter(r => r.sessionId === forkId)).toHaveLength(2)
+    // agent_list, agent_create, and the conclusion: the answer costs the fork no fourth model call.
+    expect(adapter.requests.filter(r => r.sessionId === forkId)).toHaveLength(3)
     expect(adapter.requests.filter(r => r.sessionId === forkId).some(r => body(r).includes('BILLING ANSWER'))).toBe(false)
     expect(records(log, REQUEST_RECORD).find(r => r.action === 'answered')).toMatchObject({ id: 'r-1', deliveredTo: 'lead' })
     expect(records(log, AGENT_RECORD)).toEqual([expect.objectContaining({ action: 'created', name: 'billing', role: 'owns billing retries' })])
@@ -70,7 +70,7 @@ describe('requests', () => {
     const { ctx, lead } = await setup(o => {
       if (isWorker('docs')(o)) return textResponse(body(o).includes('[request r-1 from lead]') ? 'DOCS: build is green' : 'docs ready')
       if (o.sessionId === 'lead') {
-        if (!sent && body(o).includes('ask docs')) { sent = true; return toolCallResponse('s1', 'agent_send', { to: 'docs', message: 'is the build green?' }) }
+        if (!sent && body(o).includes('ask docs')) { sent = rosterVersionIn(o) !== undefined; return listThen(o, 's1', 'agent_send', { to: 'docs', message: 'is the build green?' }) }
         return textResponse('LEAD')
       }
       return textResponse('FORK')
@@ -186,7 +186,7 @@ describe('requests', () => {
     hold.open()
     const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
     // The worker was released with its parent; the lead re-sends the request.
-    await scheduler.send(h2.agent, 'billing', 'check the retry policy (again)')
+    await scheduler.send(h2.agent, 'billing', 'check the retry policy (again)', { rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(h2.agent)) })
     await until(h2.agent, '[reply to r-2 from billing]')
     expect(scheduler.ledgerOf(h2.agent).requests.get('r-2')).toMatchObject({ state: 'answered', answer: 'ANSWER AFTER RESTART', deliveredTo: 'main' })
   })

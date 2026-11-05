@@ -45,13 +45,17 @@ dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
 
 | 工具 | 作用 |
 |---|---|
-| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`。 |
-| `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。 |
-| `agent_list` | worker 名单、积压和在途请求（`forks: true` 才带上临时分身）。 |
+| `agent_create` | 建 worker：`name`、`role`、`rosterVersion`（取自 `agent_list`），可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；lead 还要传 `for`（它依据的 `fork-N` 或 `r-N`）。 |
+| `agent_send` | 给分身或 worker 派活，带 `rosterVersion`；回答以 `[reply to r-N from …]` 回来。 |
+| `agent_list` | worker 名单（含 `createdFor`）、积压、在途请求和 `rosterVersion`（`forks: true` 才带上临时分身）。 |
 | `agent_interrupt` | 停当前这一轮。 |
 | `agent_archive` | 归档；名字不复用。 |
 | `role_set` | 改 lead 或某个 worker 的 role。 |
 | `report` | 显式交结论，替代最后一条消息。 |
+
+### 派活锁
+
+同一主会话里的 `agent_create` / `agent_send`（lead、分身、worker 都一样）按到达顺序逐个执行：读名单 → 校验 → 创建/投递 → 写记录都在锁内完成，异常也会释放。两者都必须带 `agent_list`（或上一次派活返回）的 `rosterVersion`；worker 增加或变状态、请求发出或结清时它就变，拿旧版本派活会被拒，并附上最新名单（worker、状态、积压、最近新建的成员及谁为哪条输入建的）。每条输入最多建一个 worker：分身只能为自己那条消息建一个；lead 建时用 `for` 指明依据的 `fork-N` 或 `r-N`，所以分身已建过的 worker 不会因其结论再被建一次。
 
 ## 命令
 

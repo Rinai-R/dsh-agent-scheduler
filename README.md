@@ -64,13 +64,24 @@ start with the switch on.
 
 | Tool | Purpose |
 |---|---|
-| `agent_create` | Create a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
-| `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. |
-| `agent_list` | The workers, their backlog and the open requests (`forks: true` adds the transient forks). |
+| `agent_create` | Create a worker: `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on). |
+| `agent_send` | Send a request to a fork or worker, with `rosterVersion`; its answer arrives as `[reply to r-N from …]`. |
+| `agent_list` | The workers (with `createdFor`), their backlog, the open requests and the `rosterVersion` (`forks: true` adds the transient forks). |
 | `agent_interrupt` | Stop an agent's current round. |
 | `agent_archive` | Archive an agent; its name is never reused. |
 | `role_set` | Set the lead's or a worker's role. |
 | `report` | Give this round's conclusion explicitly instead of the final message. |
+
+### Dispatch lock
+
+`agent_create` and `agent_send` of one main session (lead, forks and workers alike) run one at a
+time, in arrival order, each reading the roster, checking, creating or delivering, and recording
+inside the lock. Both require the `rosterVersion` from `agent_list` (or from the previous dispatch);
+it changes whenever a worker is added or changes state or a request is sent or settled, and a
+dispatch made on an older version is refused with the current roster (workers, their state and
+backlog, and the newest creations with who made them for which input). Each input gets at most one
+worker: a fork creates at most one for its own message, and the lead names with `for` the `fork-N`
+or `r-N` it acts on, so a worker a fork already created is not created again from its conclusion.
 
 ## Commands
 

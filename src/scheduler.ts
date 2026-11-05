@@ -9,7 +9,7 @@
  *   fork concludes after delegating instead of waiting for its workers;
  * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -33,11 +33,12 @@ import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type Ch
  */
 export const FORK_NOTICE = [
   'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
-  'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first:',
+  'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first: agent_create and agent_send take the rosterVersion it returns and are refused when the roster changed since (someone else just created or delegated); read the roster they return with the refusal and decide again, never by creating the same worker under another name.',
   '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
   '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd (git worktree add ~/project/worktrees/<repo>__<slug> -b feat/<slug> or fix/<slug> from the repository\'s base branch, e.g. origin/main), never a directory another worker uses; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
   '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
-  'Do not do the work yourself: no edits, builds, tests or long investigations. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
+  'You create at most one worker for your message: a second agent_create is refused and names the worker it already went to.',
+  'Do not do the work yourself: no edits, builds, tests or long investigations, not even when agent_create or agent_send is refused or scheduling is off; then say in your conclusion what could not be delegated and why. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
   'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
 ].join(' ')
@@ -45,6 +46,7 @@ export const FORK_NOTICE = [
 /** What the lead is for: the user reads only the lead's own replies. */
 export const LEAD_NOTICE = [
   'Otherwise you are the lead. The user\'s words never reach you directly; you receive forks\' conclusions as "The user said: ... Its conclusion: ...", workers\' answers as "[reply to r-N from name, asked by ...]", and failures as "[request r-N to name failed: ...]".',
+  'When you create a worker yourself, pass for: the fork-N whose conclusion or the r-N whose reply you act on; each of those gets at most one worker, so a fork that already created one is not duplicated (the refusal names that worker: agent_send it instead).',
   'The user does not read those messages or the forks\' work: only your replies. Tell the user the result in your own words, briefly, with anything they must decide. Never say you already answered them unless you did in a reply of your own.',
 ].join(' ')
 
@@ -170,8 +172,37 @@ export function selectionOptions(selection: ForkModelSelection): AgentOptions {
   return { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort: reasoningEffort as NonNullable<AgentOptions['reasoningEffort']> }) }
 }
 
+/**
+ * Optimistic check of a dispatch (agent_create, agent_send): the roster version the caller read
+ * with agent_list. Checked inside the dispatch lock, so a caller never acts on a stale roster.
+ */
+export interface Dispatch {
+  /** From agent_list (or the previous dispatch's result); a different current version refuses. */
+  readonly rosterVersion?: string | undefined
+}
+
+/** A dispatch refused before anything was created or sent; carries the current roster. */
+export class DispatchRefused extends Error {
+  /**
+   * @param reason - why, for the caller's model.
+   * @param roster - the current roster summary.
+   */
+  constructor(reason: string, readonly roster: RosterSummary) {
+    super(`${reason}\nNothing was created or sent. Current roster: ${JSON.stringify(roster)}`)
+    this.name = 'DispatchRefused'
+  }
+}
+
+/** What a refused (or any) dispatch shows of the roster: enough to decide again. */
+export interface RosterSummary {
+  readonly rosterVersion: string
+  readonly workers: ReadonlyArray<{ name: string; state: string; open?: number; role: string; createdFor?: string; createdBy?: string; createdAt?: string }>
+  /** The newest creations first: what someone else may have just done. */
+  readonly recent: ReadonlyArray<{ name: string; for?: string; by: string; at?: string; request?: string }>
+}
+
 /** Arguments of a worker creation. */
-export interface CreateWorker {
+export interface CreateWorker extends Dispatch {
   readonly name: string
   readonly role: string
   readonly cwd?: string | undefined
@@ -180,6 +211,11 @@ export interface CreateWorker {
   /** Existing worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly task?: string | undefined
+  /**
+   * What the worker is created for: `fork-N` (that fork's user message) or `r-N` (a reply). Each
+   * gets at most one worker. A fork always creates for its own message; others must name it.
+   */
+  readonly for?: string | undefined
 }
 
 /** Scheduler state and rules for every main Session in one preset scope. */
@@ -202,6 +238,12 @@ export class Scheduler {
   private readonly stopping = new Set<string>()
   /** Per member, the last round a restart cut off that `recover` has dealt with. */
   private readonly recoveredThrough = new Map<string, number>()
+  /**
+   * The dispatch lock, per main Session: the tail of a promise chain. agent_create and agent_send
+   * of the lead, its forks and its workers run one at a time, each reading the roster, checking,
+   * creating or delivering, and recording inside it, so none decides on a roster another changed.
+   */
+  private readonly dispatching = new Map<string, Promise<void>>()
 
   /** @param deps - services and policy. */
   constructor(private readonly deps: SchedulerDeps) {}
@@ -263,8 +305,104 @@ export class Scheduler {
   assertTakesPart(agent: Agent): void {
     if (this.takesPart(agent)) return
     throw new Error(isMainSession(agent)
-      ? 'Scheduling is off in this session. The user turns it on with the 调度 switch below the input or /schedule on; until then, work directly.'
+      ? 'Scheduling is off in this session, so nothing can be delegated now. Do not do the work yourself in place of a worker: say in your conclusion that it could not be delegated because scheduling is off (the user turns it on with the 调度 switch below the input or /schedule on).'
       : 'This agent is not part of scheduling.')
+  }
+
+  /**
+   * Run `work` holding the main Session's dispatch lock; callers queue in arrival order, and the
+   * lock is released whether `work` returns or throws.
+   * @param mainId - the main Session.
+   * @param work - the critical section.
+   * @returns what `work` returns.
+   */
+  async exclusive<T>(mainId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.dispatching.get(mainId) ?? Promise.resolve()
+    let release!: () => void
+    const mine = new Promise<void>(done => { release = done })
+    const tail = previous.then(() => mine)
+    this.dispatching.set(mainId, tail)
+    await previous
+    try {
+      return await work()
+    } finally {
+      release()
+      if (this.dispatching.get(mainId) === tail) this.dispatching.delete(mainId)
+    }
+  }
+
+  /**
+   * The roster version: changes whenever a worker is added or changes state, or a request is
+   * sent, answered or failed. Forks and settlement marks leave it alone: they do not change
+   * where work should go, and every user message would otherwise invalidate every reader.
+   * @param ledger - the main Session's ledger.
+   * @returns an opaque version string.
+   */
+  rosterVersion(ledger: Ledger): string {
+    const workers = ledger.state.members.filter(m => m.kind === 'worker')
+    const digest = createHash('sha1')
+      .update(JSON.stringify([workers.map(m => [m.id, m.state]), ledger.state.requests.map(r => [r.id, r.state])]))
+      .digest('hex').slice(0, 8)
+    return `${workers.length}.${ledger.state.requests.length}.${digest}`
+  }
+
+  /**
+   * The roster as a refused dispatch shows it.
+   * @param ledger - the main Session's ledger.
+   * @returns version, workers, and the newest creations.
+   */
+  rosterSummary(ledger: Ledger): RosterSummary {
+    const workers = ledger.state.members.filter(m => m.kind === 'worker')
+    const state = (m: Member) => m.state === 'started' ? (this.deps.agents.get(SessionId(m.id))?.status ?? 'idle') : m.state
+    return {
+      rosterVersion: this.rosterVersion(ledger),
+      workers: workers.map(m => {
+        const open = ledger.openTo(m.id).length
+        return {
+          name: m.name, state: state(m), role: (m.role ?? m.text).slice(0, 120), ...(open > 0 ? { open } : {}),
+          ...(m.createdFor === undefined ? {} : { createdFor: m.createdFor }),
+          ...(m.createdBy === undefined ? {} : { createdBy: ledger.nameOf(m.createdBy) }),
+          ...(m.createdAt === undefined ? {} : { createdAt: m.createdAt }),
+        }
+      }),
+      recent: workers.filter(m => m.state !== 'failed').slice(-3).reverse().map(m => {
+        const request = ledger.state.requests.find(r => r.to === m.id)?.id
+        return {
+          name: m.name, by: m.createdBy === undefined ? 'unknown' : ledger.nameOf(m.createdBy),
+          ...(m.createdFor === undefined ? {} : { for: m.createdFor }),
+          ...(m.createdAt === undefined ? {} : { at: m.createdAt }),
+          ...(request === undefined ? {} : { request }),
+        }
+      }),
+    }
+  }
+
+  /** Refuse a dispatch made on a roster that has changed since the caller read it. */
+  private checkVersion(ledger: Ledger, dispatch: Dispatch): void {
+    if (dispatch.rosterVersion === undefined || dispatch.rosterVersion === this.rosterVersion(ledger)) return
+    throw new DispatchRefused(`The roster changed since you read it (your rosterVersion ${dispatch.rosterVersion}): someone else created a worker or delegated meanwhile. Read the roster below; delegate to a worker that already has this work instead of creating it again, then retry with the current rosterVersion if something is still needed.`, this.rosterSummary(ledger))
+  }
+
+  /**
+   * What a creation is for: a fork creates for its own message; anyone else names the fork-N or
+   * r-N it acts on. Undefined when a non-fork caller named nothing (tests and internal calls).
+   */
+  private creationKey(ledger: Ledger, caller: Agent, named: string | undefined): string | undefined {
+    const self = ledger.members.get(caller.id)
+    if (self?.kind === 'fork') return self.name
+    if (named === undefined) return undefined
+    if (/^fork-\d+$/u.test(named) ? ledger.find(named)?.kind !== 'fork' : !/^r-\d+$/u.test(named) || !ledger.requests.has(named)) {
+      throw new Error(`for must name the fork-N whose conclusion or the r-N whose reply you act on; "${named}" is neither`)
+    }
+    return named
+  }
+
+  /** Refuse a second creation for the same message or reply, naming where it went. */
+  private checkOnce(ledger: Ledger, key: string): void {
+    const earlier = ledger.state.members.find(m => m.kind === 'worker' && m.createdFor === key && m.state !== 'failed')
+    if (earlier === undefined) return
+    const request = ledger.state.requests.find(r => r.to === earlier.id)?.id
+    throw new DispatchRefused(`${key} was already dispatched${earlier.createdAt === undefined ? '' : ` at ${earlier.createdAt}`} to ${earlier.name}${request === undefined ? '' : ` (${request})`}${earlier.createdBy === undefined ? '' : ` by ${ledger.nameOf(earlier.createdBy)}`}. Each message or reply gets one worker: use agent_send to ${earlier.name} for anything more about it, or say in your conclusion what else is needed.`, this.rosterSummary(ledger))
   }
 
   /** Forget a main Session (it was disposed); the log stays authoritative. */
@@ -462,9 +600,16 @@ export class Scheduler {
    * @returns the worker's name, id, the request id when a task was given, and whether it waits for a slot.
    * @throws when the arguments are invalid, the source cannot seed it, or the start failed.
    */
-  async createWorker(caller: Agent, args: CreateWorker): Promise<{ name: string; id: string; request?: string; queued: boolean }> {
+  async createWorker(caller: Agent, args: CreateWorker): Promise<{ name: string; id: string; request?: string; queued: boolean; rosterVersion: string }> {
     const main = this.mainOf(caller)
+    return this.exclusive(main.id, () => this.createLocked(main, caller, args))
+  }
+
+  private async createLocked(main: Agent, caller: Agent, args: CreateWorker): Promise<{ name: string; id: string; request?: string; queued: boolean; rosterVersion: string }> {
     const ledger = this.ledgerOf(main)
+    this.checkVersion(ledger, args)
+    const key = this.creationKey(ledger, caller, args.for)
+    if (key !== undefined) this.checkOnce(ledger, key)
     const checkName = (): void => {
       if (!/^[a-z][a-z0-9-]{0,39}$/u.test(args.name)) throw new Error('name must be lower-kebab-case, start with a letter, at most 40 characters')
       if (args.name === 'lead' || /^fork-\d+$/u.test(args.name)) throw new Error(`"${args.name}" is reserved`)
@@ -506,6 +651,7 @@ export class Scheduler {
     this.record(main, s => appendAgent(s, {
       action: 'created', id, name: args.name, role: args.role,
       ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }), ...(source === undefined ? {} : { from: source.id }),
+      by: caller.id, ...(key === undefined ? {} : { for: key }), at: new Date().toISOString(),
     }))
     const task = args.task
     const requestId = task === undefined ? undefined : ledger.nextRequestId()
@@ -544,7 +690,7 @@ export class Scheduler {
       },
     })
     if (outcome === 'failed') throw new Error(`could not start "${args.name}": ${failure}`)
-    return { name: args.name, id, queued: outcome === 'queued', ...(requestId === undefined ? {} : { request: requestId }) }
+    return { name: args.name, id, queued: outcome === 'queued', ...(requestId === undefined ? {} : { request: requestId }), rosterVersion: this.rosterVersion(ledger) }
   }
 
   /** A request as the worker's chat shows it: who asks and what. How to answer is in its system prompt. */
@@ -560,9 +706,14 @@ export class Scheduler {
    * @returns the request id, and whether delivery waits for a slot.
    * @throws when the target is unknown or gone, or delivery failed.
    */
-  async send(caller: Agent, to: string, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string }> {
+  async send(caller: Agent, to: string, text: string, dispatch: Dispatch = {}): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string; rosterVersion: string }> {
     const main = this.mainOf(caller)
+    return this.exclusive(main.id, () => this.sendLocked(main, caller, to, text, dispatch))
+  }
+
+  private async sendLocked(main: Agent, caller: Agent, to: string, text: string, dispatch: Dispatch): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string; rosterVersion: string }> {
     const ledger = this.ledgerOf(main)
+    this.checkVersion(ledger, dispatch)
     const target = ledger.find(to)
     if (target === undefined) throw new Error(`no agent named "${to}"; use agent_list`)
     if (target.id === caller.id) throw new Error('cannot send a request to yourself')
@@ -596,7 +747,7 @@ export class Scheduler {
       : busy
         ? `${target.name} is busy${ahead.length > 0 ? ` with ${ahead.join(', ')}` : ''}; it reads ${id} after its current step and answers it when its current round ends, together with what it is doing now.`
         : `${target.name} was idle and starts on ${id} now.`) + parallel
-    return { request: id, to: target.name, queued, busy, ahead, note }
+    return { request: id, to: target.name, queued, busy, ahead, note, rosterVersion: this.rosterVersion(ledger) }
   }
 
   /**
