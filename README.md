@@ -101,6 +101,10 @@ the way you could by hand: the roster on the left, agent chats as tabs on the ri
 page and the chats are `keepMounted`: switching tabs or closing a neighbour does not remount a chat
 and reload its conversation from the top.
 
+The **+** at the top opens a small form (name, duty, optional directory) that runs `/agents new`;
+the pencil on a worker row renames it in place (`/agents rename`; Enter saves, Esc cancels). A
+renamed worker keeps its old names reserved, and they still reach it.
+
 Archive a row from the button that appears on hover; archived names are never reused. 「全部归档」
 (or `/agents archive done`) archives every concluded fork that owes no answer. The 「Worker 默认模型」
 menu at the top sets the `/worker model` default.
@@ -135,6 +139,8 @@ All of these run in the main session.
 | Command | Purpose |
 |---|---|
 | `/schedule [on \| off]` | Turn scheduling on (bare is on) or off for this session. |
+| `/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role>` | Create a worker you name yourself, with no task; talk to it in its chat, or the lead sends it requests. The Agents page's **+** does the same. |
+| `/agents rename <name> <new-name>` | Rename a worker (not a fork, not an archived one). The old name stays reserved and still reaches it. The pencil on a worker row does the same. |
 | `/agents archive <name>` | Archive a fork or worker; requests it still owes fail and the lead is told. |
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |

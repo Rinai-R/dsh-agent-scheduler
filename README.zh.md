@@ -80,6 +80,9 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 页面按你手动会做的手势自己分栏：名单在左，agent 对话作为标签在右。Agents 页和 agent 对话都设了
 `keepMounted`：切换标签或关掉旁边的对话，不会重新挂载、把对话从头加载一遍。
 
+顶部的 **+** 打开一个小表单（名字、职责、可选目录），执行 `/agents new`；worker 行上的铅笔就地改名
+（`/agents rename`，回车保存、Esc 取消）。改过名的 worker 旧名字保留，用旧名字仍能找到它。
+
 悬停行时出现归档按钮；归档后的名字不再复用。「全部归档」（或 `/agents archive done`）归档所有已交回、
 没有欠回答的分身。顶部的「Worker 默认模型」菜单改的就是 `/worker model`。
 
@@ -108,6 +111,8 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 | 命令 | 作用 |
 |---|---|
 | `/schedule [on \| off]` | 打开（不写参数就是打开）或关闭本会话的调度。 |
+| `/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role>` | 自己建一个起好名字的 worker，不带任务；在它的对话里直接聊，或由 lead 派活。Agents 页右上角的 **+** 等同。 |
+| `/agents rename <name> <new-name>` | 给 worker 改名（分身、已归档的不能改）。旧名字保留、不再给别人用，用旧名字仍能找到它。worker 行上的铅笔按钮等同。 |
 | `/agents archive <name>` | 归档一个分身或 worker；它还欠着的请求判失败并告诉 lead。 |
 | `/agents archive done` | 归档所有已交回、没有欠回答的分身。 |
 | `/agents seen <name>` | 把成员最近一次上报标为已读（在 Agents 页点开成员时自动发送）。 |

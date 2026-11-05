@@ -187,7 +187,6 @@ const STYLE = `
 .sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
 .sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:var(--dsw-alias-label-on-color,#fff);font-size:11px;font-weight:600;line-height:16px}
 .sch-roster-section-title{display:inline-flex;align-items:center;gap:6px}
-.sch-roster-head-end{flex:none;display:flex;align-items:center;gap:2px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 /* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
 [data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
@@ -243,10 +242,24 @@ const STYLE = `
 .sch-roster-item{position:relative}
 .sch-roster-item[data-pending=yes]{opacity:.5}
 .sch-roster-item .sch-roster-row{width:calc(100% - 16px)}
-.sch-roster-archive{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
-.sch-roster-item:hover .sch-roster-archive,.sch-roster-archive:focus-visible{display:inline-flex}
-.sch-roster-item:has(.sch-roster-archive):hover .sch-roster-end{visibility:hidden}
-.sch-roster-archive:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-archive,.sch-roster-rename{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-item:hover :is(.sch-roster-archive,.sch-roster-rename),:is(.sch-roster-archive,.sch-roster-rename):focus-visible{display:inline-flex}
+.sch-roster-item:has(.sch-roster-archive,.sch-roster-rename):hover .sch-roster-end{visibility:hidden}
+:is(.sch-roster-archive,.sch-roster-rename):hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-head-actions{flex:none;display:flex;align-items:center;gap:2px}
+.sch-roster-rename{right:46px}
+.sch-roster-rename[data-alone]{right:16px}
+.sch-roster-edit{display:grid;grid-template-columns:7px minmax(0,1fr);align-items:center;column-gap:10px;margin:1px 8px;padding:6px 10px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-input{box-sizing:border-box;width:100%;min-width:0;height:26px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);padding:0 8px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;outline:none}
+.sch-roster-input:focus{border-color:var(--dsw-alias-state-business-primary)}
+.sch-roster-input::placeholder{color:var(--dsw-alias-label-caption)}
+textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:vertical;line-height:18px}
+.sch-roster-form{display:flex;flex-direction:column;gap:6px;margin:4px 12px 6px;padding:10px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:10px;background:var(--dsw-alias-bg-layer-1,transparent)}
+.sch-roster-form label{display:flex;flex-direction:column;gap:3px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-roster-form-actions{display:flex;justify-content:flex-end;gap:4px;margin-top:2px}
+.sch-roster-primary{border:0;padding:4px 10px;border-radius:8px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-on-color,#fff);font:var(--dsw-font-xxs-12);cursor:pointer}
+.sch-roster-primary:disabled{opacity:.5;cursor:default}
+.sch-roster-form-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12);overflow-wrap:anywhere}
 .sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-foldrow{display:flex;align-items:center;justify-content:space-between;margin:6px 8px 0}
@@ -648,6 +661,12 @@ const ICON = {
       <rect x="2" y="3" width="12" height="3" rx="1" /><path d="M3 6v6.5c0 .6.4 1 1 1h8c.6 0 1-.4 1-1V6M6.5 9h3" />
     </svg>
   ),
+  plus: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+  ),
+  rename: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.5 2.8 13.2 5.5 6 12.7l-3.2.5.5-3.2 7.2-7.2Z" /></svg>
+  ),
   chevron: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
   ),
@@ -808,6 +827,58 @@ export function subline(member: Member, pending: readonly { readonly id: string;
   const dir = member.cwd === undefined ? undefined : member.cwd.replace(/\/+$/u, '').split('/').pop()
   const duty = oldest === undefined ? member.role ?? member.text : `${oldest.id}：${flat(oldest.text)}`
   return [dir, duty === undefined ? undefined : flat(duty)].filter(part => part !== undefined && part !== '').join(' · ')
+}
+
+/** The rule a worker name must follow; the host checks it again (and that it is free). */
+export const WORKER_NAME = /^[a-z][a-z0-9-]{0,39}$/u
+
+/** A word for an `/agents` command line: quoted when it holds spaces. */
+function word(value: string): string { return /\s/u.test(value) ? `"${value}"` : value }
+
+/**
+ * The `/agents new` line for the Agents page's form.
+ * @param input - name, role, and an optional directory.
+ * @returns the command line, or what is wrong with the input.
+ */
+export function newWorkerCommand(input: { name: string; role: string; cwd?: string }): { line: string } | { error: string } {
+  const name = input.name.trim()
+  const role = input.role.replace(/\s+/gu, ' ').trim()
+  const cwd = input.cwd?.trim() ?? ''
+  if (!WORKER_NAME.test(name)) return { error: '名字只能用小写字母、数字和连字符，以字母开头，最多 40 个字符' }
+  if (role === '') return { error: '写一下这个 worker 负责什么' }
+  if (cwd.includes('"')) return { error: '目录里不能有双引号' }
+  // A role that starts like an option would be read as one.
+  const safeRole = role.startsWith('--') ? `- ${role}` : role
+  return { line: `/agents new ${name}${cwd === '' ? '' : ` --cwd ${word(cwd)}`} ${safeRole}` }
+}
+
+/**
+ * The `/agents rename` line for a worker row.
+ * @returns the command line, or what is wrong with the new name.
+ */
+export function renameCommand(from: string, to: string): { line: string } | { error: string } {
+  const next = to.trim()
+  if (!WORKER_NAME.test(next)) return { error: '名字只能用小写字母、数字和连字符，以字母开头，最多 40 个字符' }
+  return { line: `/agents rename ${from} ${next}` }
+}
+
+/**
+ * The failure text of a remote command's result, or null when it succeeded. The server answers
+ * `{ commandId, result: { kind, text } }`; older servers answered `{ kind, text }` directly.
+ * @param value - `result.value` of `remote.commands.execute`.
+ * @param line - the command line, for the unknown-command message.
+ * @returns the error text, or null.
+ */
+export function commandFailure(value: unknown, line: string): string | null {
+  if (value === undefined || value === null) return `unknown command: ${line.split(' ')[0]}`
+  const outer = value as { kind?: string; text?: string; result?: { kind?: string; text?: string } }
+  const inner = outer.result !== undefined && typeof outer.result === 'object' ? outer.result : outer
+  return inner.kind === 'error' ? (inner.text ?? 'failed') : null
+}
+
+/** A host that predates `/agents new` and `/agents rename` answers with its old usage line. */
+export function needsRestartFor(error: string): boolean {
+  return /^Usage: \/agents archive/u.test(error)
 }
 
 export type { CatalogGroup, CatalogReasoning } from './model-menu.js'
@@ -1055,6 +1126,38 @@ export function createAgentsPage(ctx: {
       }
       run(props.sessionId, `/agents archive ${target}`).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
     }
+    // 「新建 worker」 form and the row being renamed; both run /agents, which the host checks again.
+    const [creating, setCreating] = useState(false)
+    const [draft, setDraft] = useState({ name: '', role: '', cwd: '' })
+    const [formError, setFormError] = useState<string | null>(null)
+    const [submitting, setSubmitting] = useState(false)
+    const [renaming, setRenaming] = useState<{ id: string; from: string; value: string; error: string | null; busy: boolean } | undefined>(undefined)
+    const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? '插件已更新，但 DeepSeek Harness 还在用旧版本运行。按 ⌘Q 完全退出再打开即可。' : error
+    const create = () => {
+      if (sessionId === undefined || submitting) return
+      const built = newWorkerCommand(draft)
+      if ('error' in built) { setFormError(built.error); return }
+      setSubmitting(true)
+      setFormError(null)
+      const settle = (error: string | null) => {
+        setSubmitting(false)
+        if (error !== null) { setFormError(restartNote(error)); return }
+        setCreating(false)
+        setDraft({ name: '', role: '', cwd: '' })
+      }
+      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    const commitRename = () => {
+      if (sessionId === undefined || renaming === undefined || renaming.busy) return
+      if (renaming.value.trim() === renaming.from) { setRenaming(undefined); return }
+      const built = renameCommand(renaming.from, renaming.value)
+      if ('error' in built) { setRenaming({ ...renaming, error: built.error }); return }
+      setRenaming({ ...renaming, busy: true, error: null })
+      const settle = (error: string | null) => {
+        setRenaming(r => r === undefined || r.id !== renaming.id ? r : error === null ? undefined : { ...r, busy: false, error: restartNote(error) })
+      }
+      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
+    }
     const layout = ctx.sidebarRight?.mountedSurface?.()?.layout
     const selected = (layout === undefined ? undefined : activeChild(layout, AGENTS_KIND, rows.map(m => m.id))) ?? picked
     const open = (member: Member) => {
@@ -1102,6 +1205,30 @@ export function createAgentsPage(ctx: {
       // live work off the page. One still unread keeps its full row until it is opened.
       const compact = member.state === 'archived' && review === undefined
       const second = compact ? '' : subline(member, pendingRequests)
+      // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
+      const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived'
+      if (renaming?.id === member.id) {
+        return (
+          <div key={member.id} className="sch-roster-item">
+            <form className="sch-roster-edit" onSubmit={e => { e.preventDefault(); commitRename() }}>
+              <span className="sch-dot" data-row={state} />
+              <span className="sch-roster-main">
+                <input
+                  className="sch-roster-input"
+                  aria-label={`${member.name} 的新名字`}
+                  value={renaming.value}
+                  disabled={renaming.busy}
+                  autoFocus
+                  spellCheck={false}
+                  onChange={e => { const value = e.currentTarget.value; setRenaming(r => r === undefined ? r : { ...r, value, error: null }) }}
+                  onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setRenaming(undefined) } }}
+                />
+                {renaming.error === null ? <span className="sch-roster-sub">回车保存，Esc 取消；旧名字保留，不能再给别的 worker 用</span> : <span className="sch-roster-form-error" role="status">{renaming.error}</span>}
+              </span>
+            </form>
+          </div>
+        )
+      }
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
         <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
@@ -1116,6 +1243,7 @@ export function createAgentsPage(ctx: {
             <span className="sch-roster-chev">{ICON.chevron}</span>
           </span>
         </button>
+        {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={`改名 ${member.name}`} title="改名：lead 和请求里都换成新名字；旧名字保留，不能再给别的 worker 用" disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
         {canArchive ? <button type="button" className="sch-roster-archive" aria-label={`归档 ${member.name}`} title="归档：从名单移到「已归档」，对话保留，名字不再复用" disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
         </div>
       )
@@ -1139,11 +1267,30 @@ export function createAgentsPage(ctx: {
             <div className="sch-roster-title">Agents</div>
             <div className="sch-roster-summary">{live.length === 0 ? '还没有 agent' : [`${live.length} 个`, ...summaryParts(counts, live.length)].join(' · ')}</div>
           </div>
-          <span className="sch-roster-head-end">
+          <div className="sch-roster-head-actions">
             {props.sessionId === undefined || reviewSummary(rows, statuses, true).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title="把所有未读上报标为已读（/agents seen all）；等你处理的黄点不受影响" onClick={() => { markSeen(props.sessionId!, 'all') }}>全部已读</button>}
+            {sessionId === undefined || !canArchiveHere ? null : <button type="button" className="sch-roster-collapse" aria-label="新建 worker" aria-expanded={creating} title="新建 worker（/agents new）：起名字、写职责，可选工作目录" onClick={() => { setCreating(v => !v); setFormError(null) }}>{ICON.plus}</button>}
             <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
-          </span>
+          </div>
         </div>
+        {!creating ? null : (
+          <form className="sch-roster-form" data-scheduler-new-worker="" onSubmit={e => { e.preventDefault(); create() }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setCreating(false) } }}>
+            <label>名字
+              <input className="sch-roster-input" value={draft.name} placeholder="如 billing" autoFocus spellCheck={false} disabled={submitting} onChange={e => { const name = e.currentTarget.value; setDraft(d => ({ ...d, name })); setFormError(null) }} />
+            </label>
+            <label>职责
+              <textarea className="sch-roster-input" value={draft.role} placeholder="它负责什么，lead 按这个给它派活" disabled={submitting} onChange={e => { const role = e.currentTarget.value; setDraft(d => ({ ...d, role })); setFormError(null) }} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); create() } }} />
+            </label>
+            <label>工作目录（可选）
+              <input className="sch-roster-input" value={draft.cwd} placeholder="绝对路径，或相对主会话目录；须已存在" spellCheck={false} disabled={submitting} onChange={e => { const cwd = e.currentTarget.value; setDraft(d => ({ ...d, cwd })); setFormError(null) }} />
+            </label>
+            {formError === null ? null : <div className="sch-roster-form-error" role="status">{formError}</div>}
+            <div className="sch-roster-form-actions">
+              <button type="button" className="sch-roster-clear" disabled={submitting} onClick={() => { setCreating(false); setFormError(null) }}>取消</button>
+              <button type="submit" className="sch-roster-primary" disabled={submitting || draft.name.trim() === '' || draft.role.trim() === ''}>{submitting ? '创建中…' : '创建'}</button>
+            </div>
+          </form>
+        )}
         {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0
           ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会交给一个分身。'}</div>
@@ -1223,9 +1370,7 @@ export function apply(ctx: any): void {
   const run = async (sessionId: string, line: string): Promise<string | null> => {
     const result = await ctx.remote.commands.execute(sessionId, line, [])
     if (!result.ok) return `${result.error.message} (${result.error.code})`
-    const value = result.value as { kind?: string; text?: string } | undefined
-    if (value === undefined) return `unknown command: ${line.split(' ')[0]}`
-    return value.kind === 'error' ? (value.text ?? 'failed') : null
+    return commandFailure(result.value, line)
   }
   /** Whether the Session's host half knows a command: it lags the browser half until a restart. */
   const has = async (sessionId: string, name: string): Promise<boolean> => {

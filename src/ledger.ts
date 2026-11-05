@@ -67,7 +67,9 @@ export class Ledger {
    * @returns the member.
    */
   find(key: string): RosterMember | undefined {
-    return this.members.get(key) ?? this.current.members.find(m => m.name === key)
+    // A renamed worker is still found by an old name: names are never reused, so it is unambiguous,
+    // and a lead or fork that learned the old name keeps reaching it.
+    return this.members.get(key) ?? this.current.members.find(m => m.name === key) ?? this.current.members.find(m => m.formerNames?.includes(key) === true)
   }
 
   /** @returns the display name of a Session id; `lead` for the main Session. */

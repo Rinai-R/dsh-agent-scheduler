@@ -253,6 +253,23 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
   }
 }
 
+/**
+ * Refuse a worker name that is malformed, reserved, or held. Names are never reused: an archived
+ * worker keeps its name, and so does a renamed one for every name it had.
+ * @param ledger - the main Session's roster.
+ * @param name - the proposed name.
+ * @param opts - `failedFree`: a worker that failed to start never ran, so creating anew may take its name.
+ * @throws when the name cannot be used.
+ */
+export function checkWorkerName(ledger: Ledger, name: string, opts: { failedFree: boolean }): void {
+  if (!/^[a-z][a-z0-9-]{0,39}$/u.test(name)) throw new Error('name must be lower-kebab-case, start with a letter, at most 40 characters')
+  if (name === 'lead' || name === 'user' || /^fork-\d+$/u.test(name)) throw new Error(`"${name}" is reserved`)
+  const holder = ledger.find(name)
+  if (holder === undefined) return
+  if (opts.failedFree && holder.kind === 'worker' && holder.state === 'failed' && holder.name === name) return
+  throw new Error(`"${name}" is already taken (names are never reused)`)
+}
+
 /** Scheduler state and rules for every main Session in one preset scope. */
 export class Scheduler {
   private readonly ledgers = new Map<string, Ledger>()
@@ -618,7 +635,13 @@ export class Scheduler {
    * @param mainId - restrict to one main Session.
    * @returns labels of queued work, oldest first.
    */
-  queued(mainId?: string): string[] { return this.queue.filter(p => mainId === undefined || p.mainId === mainId).map(p => p.label) }
+  queued(mainId?: string): string[] {
+    // A worker waiting to start is labelled with the name it was created under; show its current one.
+    return this.queue.filter(p => mainId === undefined || p.mainId === mainId).map(p => {
+      const member = this.ledgers.get(p.mainId)?.members.get(p.memberId)
+      return member?.formerNames?.includes(p.label) === true ? member.name : p.label
+    })
+  }
 
   /** Stop retrying (scope disposal). */
   dispose(): void {
@@ -666,14 +689,7 @@ export class Scheduler {
     this.checkVersion(ledger, args)
     const key = this.creationKey(ledger, caller, args.for)
     if (key !== undefined) this.checkOnce(ledger, key)
-    const checkName = (): void => {
-      if (!/^[a-z][a-z0-9-]{0,39}$/u.test(args.name)) throw new Error('name must be lower-kebab-case, start with a letter, at most 40 characters')
-      if (args.name === 'lead' || /^fork-\d+$/u.test(args.name)) throw new Error(`"${args.name}" is reserved`)
-      // A worker that failed to start never ran: its name is free again, and creating it anew
-      // replaces that member in the roster (see applyRoster). Archived names are never reused.
-      const holder = ledger.find(args.name)
-      if (holder !== undefined && !(holder.kind === 'worker' && holder.state === 'failed')) throw new Error(`"${args.name}" is already taken (names are never reused)`)
-    }
+    const checkName = (): void => { checkWorkerName(ledger, args.name, { failedFree: true }) }
     checkName()
     const source = args.from === undefined ? undefined : ledger.find(args.from)
     let seed: SessionEvent[] | undefined
@@ -727,6 +743,8 @@ export class Scheduler {
       requestId === undefined ? 'No task yet: acknowledge briefly and wait for requests.' : this.requestText(requestId, ledger.nameOf(caller.id), task!),
     ].join('\n\n')
     let failure = ''
+    // The user may rename it while it waits for a slot: later records carry its current name.
+    const nameNow = (): string => ledger.members.get(id)?.name ?? args.name
     const outcome = await this.run(main, id, args.name, () => this.delivering(main, id, async () => {
       if (seed !== undefined) registerForkSeed(id, seed)
       let messageId: string
@@ -743,18 +761,46 @@ export class Scheduler {
       } finally {
         forgetForkSeed(id)
       }
-      if (ledger.members.get(id)?.state === 'queued') this.record(main, s => appendAgent(s, { action: 'started', id, name: args.name }))
+      if (ledger.members.get(id)?.state === 'queued') this.record(main, s => appendAgent(s, { action: 'started', id, name: nameNow() }))
       if (requestId !== undefined) this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: id, text: task!, messageId }))
     }), {
-      queued: () => { this.record(main, s => appendAgent(s, { action: 'queued', id, name: args.name })) },
+      queued: () => { this.record(main, s => appendAgent(s, { action: 'queued', id, name: nameNow() })) },
       failed: error => {
         failure = messageOf(error)
-        this.record(main, s => appendAgent(s, { action: 'failed', id, name: args.name, detail: failure }))
+        this.record(main, s => appendAgent(s, { action: 'failed', id, name: nameNow(), detail: failure }))
         if (requestId !== undefined) this.record(main, s => appendRequest(s, { action: 'failed', id: requestId, detail: failure }))
       },
     })
     if (outcome === 'failed') throw new Error(`could not start "${args.name}": ${failure}`)
     return { name: args.name, id, queued: outcome === 'queued', ...(requestId === undefined ? {} : { request: requestId }), rosterVersion: this.rosterVersion(ledger) }
+  }
+
+  /**
+   * Give a worker a new name. Its old name stays reserved and still finds it (see Ledger.find),
+   * so requests, replies and roles keep pointing at the same worker.
+   * @param caller - the agent asking (the user's command runs as the main agent).
+   * @param name - current name, an old name, or Session id of the worker.
+   * @param next - the new name.
+   * @returns the old and new name.
+   * @throws when there is no such worker, it is archived, or the new name is invalid or taken.
+   */
+  async rename(caller: Agent, name: string, next: string): Promise<{ from: string; to: string }> {
+    const main = this.mainOf(caller)
+    // Inside the dispatch lock: a creation checking whether a name is free must not race it.
+    return this.exclusive(main.id, async () => this.renameLocked(main, name, next))
+  }
+
+  private renameLocked(main: Agent, name: string, next: string): { from: string; to: string } {
+    const ledger = this.ledgerOf(main)
+    const target = ledger.find(name)
+    if (target === undefined) throw new Error(`no agent named "${name}"`)
+    if (target.kind !== 'worker') throw new Error(`"${target.name}" is a fork; only a worker can be renamed`)
+    if (target.state === 'archived') throw new Error(`"${target.name}" is archived`)
+    if (next === target.name) return { from: target.name, to: next }
+    // Taking back one of its own earlier names is no reuse: no one else can hold it.
+    if (target.formerNames?.includes(next) !== true) checkWorkerName(ledger, next, { failedFree: false })
+    this.record(main, s => appendAgent(s, { action: 'renamed', id: target.id, name: next, previousName: target.name }))
+    return { from: target.name, to: next }
   }
 
   /** A request as the worker's chat shows it: who asks and what. How to answer is in its system prompt. */
@@ -1006,7 +1052,7 @@ export class Scheduler {
       }
     }
     // Deliveries this process is making right now (sent after the resume) are not restart victims.
-    const live = (id: string) => this.inflight.has(memberId) || this.queue.some(p => p.memberId === memberId && (p.label === id || p.label === member.name))
+    const live = (id: string) => this.inflight.has(memberId) || this.queue.some(p => p.memberId === memberId && (p.label === id || p.label === member.name || member.formerNames?.includes(p.label) === true))
     for (const request of ledger.openTo(memberId)) {
       if (!openAtResume.has(request.id) || live(request.id)) continue
       const fate = log === undefined ? { kind: 'lost' as const } : fateOf(request, unsettled, trace)

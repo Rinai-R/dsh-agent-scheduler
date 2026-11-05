@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
-import { schedulerTools, sectionFor } from './tools.js'
+import { parseModel, schedulerTools, sectionFor } from './tools.js'
 import { forkGuard } from './fork-guard.js'
 import { installMemberModels, type Validate } from './member-model.js'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -124,20 +124,88 @@ export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'
   return { kind: 'success', text: on ? 'Scheduling is on: each later message goes to a fork.' : 'Scheduling is off. Existing forks and workers keep running.' }
 }
 
-const AGENTS_USAGE = 'Usage: /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all'
+/** What `/agents` accepts. */
+export const AGENTS_USAGE = 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all'
 
 /**
- * Execute `/agents archive <name>`, `/agents archive done`, or `/agents seen <name>` (the Agents
- * page sends it when the user opens a member's chat: its latest report is read).
+ * Split a command line into words; a double-quoted word may hold spaces.
+ * @param raw - text after the command name.
+ * @returns the words.
+ */
+export function words(raw: string): string[] {
+  const out: string[] = []
+  const re = /"([^"]*)"|(\S+)/gu
+  for (let m = re.exec(raw); m !== null; m = re.exec(raw)) out.push(m[1] ?? m[2]!)
+  return out
+}
+
+/**
+ * Parse `/agents new …`: the name, then options, then the role (the rest of the line).
+ * @param raw - text after `new`.
+ * @returns the worker to create, or an error message.
+ */
+export function parseNewWorker(raw: string): { name: string; role: string; cwd?: string; model?: ForkModelSelection } | string {
+  // Words are read one at a time so the role is the rest of the line exactly as typed.
+  const re = /\s*(?:"([^"]*)"|(\S+))/uy
+  let at = 0
+  const next = (): string | undefined => {
+    re.lastIndex = at
+    const m = re.exec(raw)
+    if (m === null) return undefined
+    at = re.lastIndex
+    return m[1] ?? m[2]!
+  }
+  const peek = (): string | undefined => { const keep = at; const word = next(); at = keep; return word }
+  const name = next()
+  if (name === undefined) return AGENTS_USAGE
+  let cwd: string | undefined
+  let model: ForkModelSelection | undefined
+  while (peek() === '--cwd' || peek() === '--model') {
+    const flag = next()!
+    const value = next()
+    if (value === undefined || value === '') return `${flag} needs a value`
+    if (flag === '--cwd') cwd = value
+    else {
+      try { model = parseModel(value) } catch (error) { return error instanceof Error ? error.message : String(error) }
+    }
+  }
+  const role = raw.slice(at).trim()
+  if (role === '') return 'Say what the worker is for: /agents new <name> <role>'
+  return { name, role, ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }) }
+}
+
+/**
+ * Execute `/agents`: create or rename a worker the user names, archive a fork or worker, archive
+ * every fork that has concluded, or mark a member's report read (`seen`, sent by the Agents page
+ * when the user opens a member). A worker the user creates gets no task; the user talks
+ * to it in its own chat, or the lead sends it requests like any other worker.
  * @param scheduler - the scheduler of this preset.
  * @param invocation - the parsed command.
+ * @param validate - checks a `--model` selection is routable.
  * @returns the command's outcome.
  */
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'markSeen'>, invocation: CommandInvocation): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/agents only applies in the main session.' }
-  const [verb, target, ...rest] = invocation.rawInput.trim().split(/\s+/u)
-  if ((verb !== 'archive' && verb !== 'seen') || target === undefined || rest.length > 0) return { kind: 'error', text: AGENTS_USAGE }
+  const raw = invocation.rawInput.trim()
+  const verb = raw.split(/\s+/u)[0] ?? ''
+  const rest = raw.slice(verb.length).trim()
   try {
+    if (verb === 'new') {
+      const parsed = parseNewWorker(rest)
+      if (typeof parsed === 'string') return { kind: 'error', text: parsed }
+      let model = parsed.model
+      if (model !== undefined && validate !== undefined) model = await validate(model)
+      const made = await scheduler.createWorker(invocation.agent, { ...parsed, ...(model === undefined ? {} : { model }) })
+      return { kind: 'success', text: made.queued ? `Created worker ${made.name}; it starts when a slot frees.` : `Created worker ${made.name}.` }
+    }
+    if (verb === 'rename') {
+      const [from, to, ...extra] = words(rest)
+      if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: 'Usage: /agents rename <name> <new-name>' }
+      const done = await scheduler.rename(invocation.agent, from, to)
+      return { kind: 'success', text: done.from === done.to ? `${done.to} already has that name.` : `Renamed ${done.from} to ${done.to}.` }
+    }
+    const [target, ...extra] = words(rest)
+    if ((verb !== 'archive' && verb !== 'seen') || target === undefined || extra.length > 0) return { kind: 'error', text: AGENTS_USAGE }
     if (verb === 'seen') {
       const marked = scheduler.markSeen(invocation.agent, target)
       if (target === 'all') return { kind: 'success', text: marked ? 'Marked every report as read.' : 'Nothing unread.' }
@@ -212,6 +280,12 @@ export function apply(ctx: Context, config: Config): void {
     text: (context) => context.agent === undefined ? '' : sectionFor(scheduler, context.agent),
   }), 'agent-scheduler: section')
   installMemberModels(ctx, scheduler)
+  // Same check as the runtime's own selector: the route must resolve and the effort must be one
+  // the model advertises (an unknown effort is refused here rather than at the first call).
+  const validate: Validate = async (selection) => {
+    const resolved = await ctx.llm.resolveCallConfig({ provider: selection.provider, model: selection.model, ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }) })
+    return { provider: resolved.provider, model: resolved.model, ...(selection.reasoningEffort === undefined || resolved.reasoningEffort === undefined ? {} : { reasoningEffort: String(resolved.reasoningEffort) }) }
+  }
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/schedule'),
     name: 'schedule',
@@ -222,16 +296,10 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
     name: 'agents',
-    description: 'Archive a fork or worker of this session, or every fork that has concluded; mark one\'s report read',
-    input: { hint: 'archive <name> | archive done | seen <name> | seen all' },
-    handler: (invocation) => runAgentsCommand(scheduler, invocation),
+    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read',
+    input: { hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all' },
+    handler: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
-  // Same check as the runtime's own selector: the route must resolve and the effort must be one
-  // the model advertises (an unknown effort is refused here rather than at the first call).
-  const validate: Validate = async (selection) => {
-    const resolved = await ctx.llm.resolveCallConfig({ provider: selection.provider, model: selection.model, ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }) })
-    return { provider: resolved.provider, model: resolved.model, ...(selection.reasoningEffort === undefined || resolved.reasoningEffort === undefined ? {} : { reasoningEffort: String(resolved.reasoningEffort) }) }
-  }
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/fork'),
     name: 'fork',
