@@ -93,7 +93,9 @@ prompt cache) and refuse while scheduling is off.
 Open the page from the Agents button. A handed-off message's status card opens that fork directly
 (「查看」). The page groups 「分身」 (forks), 「Worker」, 「已交回」 (concluded forks), and 「已归档」
 (archived). A row shows live state — 在跑, 在等你, 空闲, 已交回, 排队中, 失败, 已归档 — the requests
-it still owes (`N 个请求待回答`), and for a worker its directory and duty.
+it still owes (`N 个请求待回答`), and a second line: why it failed, else its oldest open request,
+else what a fork was asked or a worker's directory and duty. Archived rows are one compact line, and
+past eight of them the rest fold behind 「再显示 N 个」.
 
 Click a row to open that agent's own native conversation in the other pane, with the roster keeping
 a narrow column of its own. At most two horizontal panes are allowed, so the page arranges the split
@@ -149,7 +151,7 @@ All of these run in the main session.
 
 | Tool | Purpose |
 |---|---|
-| `agent_create` | Start a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
+| `agent_create` | Start a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
 | `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
 | `agent_list` | The workers and the open requests, with `open` counts; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |
@@ -234,6 +236,10 @@ use the lead's model. `defaultOn` belongs only to the retired `scheduler` preset
   this one.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
   lead request misses the prompt cache once.
+- Forks only route. A tool guard refuses a fork every tool except reading (`read`, `glob`, `grep`,
+  web and session search) and the `agent_*`, `role_set` and `report` tools, so a fork cannot run
+  commands, edit files, commit, push or start subagents; the refusal tells it to hand the work to a
+  worker or say in its conclusion that it could not.
 - A fork inherits only the lead's completed turns at fork time, not the round in progress.
 - The lead does not see your raw words; it sees them quoted in each conclusion.
 - A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an
@@ -241,8 +247,8 @@ use the lead's model. `defaultOn` belongs only to the retired `scheduler` preset
   surfaces through the lead.
 - The busy-worker reroute is guidance, not a hard block: `agent_send` still delivers to a busy
   worker and steers the request into its current round, where it is answered at the end of that
-  round. The scheduler never creates a worktree itself; the fork or lead runs `git worktree add`
-  and passes the resulting `cwd`.
+  round. A new worktree is created only when `agent_create` is given `repo` and `branch`; `cwd`
+  must not exist yet, and an existing directory or branch is refused with git's own message.
 - Only two horizontal panes are allowed by the runtime's docking kit.
 
 ## Development

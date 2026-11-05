@@ -74,7 +74,8 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 
 从 Agents 按钮打开；主会话消息下的状态卡则直接打开那个分身（「查看」）。名单分「分身」「Worker」
 「已交回」「已归档」。每行显示实时状态——在跑、在等你、空闲、已交回、排队中、失败、已归档——还欠着
-的请求（`N 个请求待回答`），worker 还显示目录和职责。
+的请求（`N 个请求待回答`），以及第二行：失败原因；否则最早一个未答请求；否则分身被问的话、worker 的
+目录和职责。已归档的行只占紧凑的一行，超过八个后其余收进「再显示 N 个」。
 
 点一行就在另一栏打开这个 agent 自己的原生对话，名单保留自己的一窄栏。右侧栏最多两个水平 pane，所以
 页面按你手动会做的手势自己分栏：名单在左，agent 对话作为标签在右。Agents 页和 agent 对话都设了
@@ -123,7 +124,7 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 
 | 工具 | 作用 |
 |---|---|
-| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`。 |
+| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
 | `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
 | `agent_list` | 当前 worker 与在途请求，带 `open` 计数；加 `forks: true` 才连一次性分身一起列出。 |
 | `agent_interrupt` | 停当前这一轮；它待处理的收件箱保留。 |
@@ -190,13 +191,15 @@ worktree、`git status` 和 `git log`、正在写的文件、已经启动的 job
   升级后用 `npm run gen:preset -- <dump.yml>` 重新生成，否则预设停在旧内容。别的插件也覆盖
   `standard` 时会冲突。
 - 开关会改变 lead 的系统提示（多出或去掉调度段），切换后 lead 的下一次请求不命中缓存。
+- 分身只路由：工具守卫只放行读类工具（`read`、`glob`、`grep`、网页与会话检索）和 `agent_*`、`role_set`、
+  `report`，执行命令、改文件、提交推送、开子任务一律拒绝；拒绝信息会让它交给 worker，或在结论里说明做不了。
 - 分身只继承 fork 那一刻 lead 已完成的轮次，不包含进行中的这一轮。
 - lead 看不到你的原话，只在结论里看到引用。
 - 分身和 worker 不能直接问你问题：宿主会拒绝「被另一个 live agent 拥有的 agent」的人类交互；它需要
   的决定会写进结论，经 lead 提出来。
 - 「worker 忙就另开一个 worktree」是系统提示和工具说明里的规则，不是硬拦截：`agent_send` 仍会把请求送给
-  忙着的 worker，并把它并入当前这一轮，在这一轮结束时一并回答。调度器自己不会创建 worktree；要由
-  分身或 lead 执行 `git worktree add`，再把结果 `cwd` 传进去。
+  忙着的 worker，并把它并入当前这一轮，在这一轮结束时一并回答。只有给 `agent_create` 传了 `repo` 和
+  `branch` 才会新建 worktree；`cwd` 必须还不存在，已有目录或分支会原样带着 git 的报错被拒绝。
 - 运行时的分栏最多两个水平 pane。
 
 ## 开发
