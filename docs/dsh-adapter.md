@@ -437,7 +437,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 ## 5. 待确认
 
-1. **P3 预设覆盖**：原定「先按现有能力做，继续整段拷贝 standard，靠 `packaging.spec.ts` 守门，等 DSH 回复 [#9431](https://github.com/deepseek-ai/deepseek-harness/discussions/9431#discussioncomment-19417759)」。调研（第 6 节）发现**现有能力就能不拷贝**：把 rule 改成 profile 顶层 `- insert:` 的 host 行。另外实测：现在这份拷贝**在 DSH 0.2.2-rc.1 上会让 standard 预设加载失败**。待用户确认是否改走 6.3 的方案。
+1. **P3 预设覆盖**：原定「先按现有能力做，继续整段拷贝 standard，靠 `packaging.spec.ts` 守门，向 DSH 提需求」（曾在 DSH 讨论帖 #9431 下评论，调研后已删除）。调研（第 6 节）发现**现有能力就能不拷贝**：把 rule 改成 profile 顶层 `- insert:` 的 host 行。另外实测：现在这份拷贝**在 DSH 0.2.2-rc.1 上会让 standard 预设加载失败**。待用户确认是否改走 6.3 的方案。
 2. ~~关键能力缺失~~ 已定：**直接禁用调度**，不跑不兼容的组合（见 2.1）。
 3. 是否同意为了做契约探针，加 6 个客户端包作为 devDependencies？
 4. ~~PR 拆分~~ 已定：**不拆**，第 1-6 步做成一个 PR，等在途分支合完后一起做（见 4.2）。
@@ -517,7 +517,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 **如果原型发现 host 层挂不住**（例如某个钩子只在预设作用域内派发），就退回整段拷贝的方案。届时：
 
-- **给 DSH 的需求**（补充到 #9431）：让 `applyEntryPatches` 的 `insert` 可以以「插件类声明了 `EntryGroup.key`、config 里有数组 `plugins`」的条目为目标，按 row id 追加到 `config.plugins`，同 id 覆盖。最小改动点是 `@deepseek-ai/cordis-plugin-include` `src/index.ts` 第 66–91 行，`buildMap` 和 `insert` 分支各加一种情况。另一个办法是在 `dsh-agent-preset-registry` 的 `PresetDefinition` 上加 `extends`。
+- **给 DSH 的需求**（届时再提，可参考已有的讨论帖 [#9431](https://github.com/deepseek-ai/deepseek-harness/discussions/9431)、[#8547](https://github.com/deepseek-ai/deepseek-harness/discussions/8547)）：让 `applyEntryPatches` 的 `insert` 可以以「插件类声明了 `EntryGroup.key`、config 里有数组 `plugins`」的条目为目标，按 row id 追加到 `config.plugins`，同 id 覆盖。最小改动点是 `@deepseek-ai/cordis-plugin-include` `src/index.ts` 第 66–91 行，`buildMap` 和 `insert` 分支各加一种情况。另一个办法是在 `dsh-agent-preset-registry` 的 `PresetDefinition` 上加 `extends`。
 - **`packaging.spec.ts` 守门够不够**：**不够**。它只能在我们这边的 CI 里发现过时（`@next` 档），保护不了已经先升级 DSH 的用户；而且照 6.3 第 1 条，过时的后果是默认预设整个起不来。即便退回这个方案，也必须同时做两件事：
   - `engines.dsh` 的上界收紧到当前验证过的 patch 版本（例如 `<=0.2.1`），而不是 `<0.3.0`；
   - DSH 每次发版当天重新生成并发版。
