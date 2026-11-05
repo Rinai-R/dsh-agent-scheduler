@@ -82,7 +82,10 @@ export interface AgentRecord {
   readonly name: string
   /** `renamed` only: the name it had before. That name stays reserved. */
   readonly previousName?: string
+  /** On `renamed` too: a split narrows the role along with the name. */
   readonly role?: string
+  /** The area (repository or module) the worker shares with the workers split from it (`agent_split`). */
+  readonly area?: string
   readonly cwd?: string
   readonly model?: string
   /** Worker whose conversation this one was forked from. */

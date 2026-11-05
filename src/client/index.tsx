@@ -37,7 +37,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
@@ -826,7 +826,23 @@ export function subline(member: Member, pending: readonly { readonly id: string;
   if (member.kind === 'fork') return oldest === undefined ? flat(member.text) : `${oldest.id}：${flat(oldest.text)}`
   const dir = member.cwd === undefined ? undefined : member.cwd.replace(/\/+$/u, '').split('/').pop()
   const duty = oldest === undefined ? member.role ?? member.text : `${oldest.id}：${flat(oldest.text)}`
-  return [dir, duty === undefined ? undefined : flat(duty)].filter(part => part !== undefined && part !== '').join(' · ')
+  return [member.area, dir, duty === undefined ? undefined : flat(duty)].filter(part => part !== undefined && part !== '').join(' · ')
+}
+
+/**
+ * Workers in roster order, except that workers split from one area sit together, where the
+ * first of them appears.
+ * @param workers - worker rows in roster order.
+ * @returns the same rows, grouped by area.
+ */
+export function byArea<T extends { readonly id: string; readonly area?: string | undefined }>(workers: readonly T[]): T[] {
+  const out: T[] = []
+  for (const worker of workers) {
+    if (out.includes(worker)) continue
+    out.push(worker)
+    if (worker.area !== undefined) out.push(...workers.filter(w => w !== worker && w.area === worker.area))
+  }
+  return out
 }
 
 /** The rule a worker name must follow; the host checks it again (and that it is free). */
@@ -1185,7 +1201,7 @@ export function createAgentsPage(ctx: {
     const finished = (m: Member) => m.kind === 'fork' && m.state === 'done' && statuses?.get(m.id)?.running !== true && statuses?.get(m.id)?.pendingInteraction === undefined
     const done = live.filter(m => finished(m) && !marked(m))
     const forks = rows.filter(m => m.kind === 'fork' && (m.state === 'archived' || finished(m) ? marked(m) : true))
-    const workers = rows.filter(m => m.kind === 'worker' && (m.state !== 'archived' || marked(m)))
+    const workers = byArea(rows.filter(m => m.kind === 'worker' && (m.state !== 'archived' || marked(m))))
     const archived = rows.filter(m => m.state === 'archived' && !marked(m))
     const counts = countsOf(rows, statuses)
     // The open chat's row is always visible: opening an archived or handed-back fork (say from
