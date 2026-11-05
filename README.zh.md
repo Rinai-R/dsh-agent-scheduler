@@ -47,7 +47,7 @@ dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
 |---|---|
 | `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`。 |
 | `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。 |
-| `agent_list` | 名单与在途请求。 |
+| `agent_list` | worker 名单、积压和在途请求（`forks: true` 才带上临时分身）。 |
 | `agent_interrupt` | 停当前这一轮。 |
 | `agent_archive` | 归档；名字不复用。 |
 | `role_set` | 改 lead 或某个 worker 的 role。 |

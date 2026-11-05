@@ -66,7 +66,7 @@ start with the switch on.
 |---|---|
 | `agent_create` | Create a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
 | `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. |
-| `agent_list` | The roster and open requests. |
+| `agent_list` | The workers, their backlog and the open requests (`forks: true` adds the transient forks). |
 | `agent_interrupt` | Stop an agent's current round. |
 | `agent_archive` | Archive an agent; its name is never reused. |
 | `role_set` | Set the lead's or a worker's role. |
