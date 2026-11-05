@@ -44,8 +44,9 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.sessionProjections.register({
     key: SCHEDULER_PROJECTION,
     // 3: the fold carries the scheduling switch. 4: the `/fork model` override. 5: each member's
-    // own model. Older cached state is dropped and refolded.
-    stateVersion: 5,
+    // own model. 6: who created a worker for which input, and each member's unread report.
+    // Older cached state is dropped and refolded.
+    stateVersion: 6,
     stateSchema: rosterSchema,
     init: initRoster,
     apply: applyRoster,
