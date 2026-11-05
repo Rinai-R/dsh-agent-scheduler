@@ -64,7 +64,7 @@ start with the switch on.
 
 | Tool | Purpose |
 |---|---|
-| `agent_create` | Create a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
+| `agent_create` | Create a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
 | `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. |
 | `agent_list` | The workers, their backlog and the open requests (`forks: true` adds the transient forks). |
 | `agent_interrupt` | Stop an agent's current round. |
@@ -96,6 +96,7 @@ start with the switch on.
   Another bundle that also overrides `standard` conflicts with this one.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
   lead request misses the prompt cache once.
+- Forks only route. A tool guard refuses a fork every tool except reading (`read`, `glob`, `grep`, web and session search) and the `agent_*` / `report` tools, so a fork cannot run commands, edit files, commit, push or start subagents; the refusal tells it to hand the work to a worker or say in its conclusion that it could not.
 - Forks inherit only the lead's completed turns at fork time, not the round in progress.
 - The lead does not see your raw words; it sees them quoted in each conclusion.
 - A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an agent owned by another live agent. A decision it needs travels back in its conclusion and surfaces through the lead.

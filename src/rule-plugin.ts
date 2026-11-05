@@ -16,6 +16,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { schedulerTools, sectionFor } from './tools.js'
+import { forkGuard } from './fork-guard.js'
 import { installMemberModels, type Validate } from './member-model.js'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
@@ -195,6 +196,8 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.on('agent/disposed', ({ agent }) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.effect(() => ctx.tools.register(tool), `agent-scheduler: ${tool.name}`)
+  // Forks route only: every working tool is refused at dispatch (src/fork-guard.ts).
+  ctx.effect(() => ctx.tools.guard(forkGuard(agent => scheduler.forkNameOf(agent))), 'agent-scheduler: fork guard')
   ctx.effect(() => ctx.systemPrompt.section({
     name: 'agent-scheduler',
     order: 900,

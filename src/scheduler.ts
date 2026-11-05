@@ -9,7 +9,9 @@
  *   fork concludes after delegating instead of waiting for its workers;
  * - all children are direct children of the main Session, which sends on everyone's behalf.
  */
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -35,9 +37,10 @@ export const FORK_NOTICE = [
   'If the newest message is the user\'s own words, you are a fork of the lead, created to route only that message, holding the lead\'s conversation so far.',
   'You are a router, not a worker. Work out what is being asked and which repository or area it belongs to, then hand it over, agent_list first:',
   '(1) only a follow-up to one request already given (rework of its result, a question about it, review comments, or a change of direction for it) goes by agent_send to the worker that has it;',
-  '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd (git worktree add ~/project/worktrees/<repo>__<slug> -b feat/<slug> or fix/<slug> from the repository\'s base branch, e.g. origin/main), never a directory another worker uses; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
+  '(2) anything else in an area a worker already owns is a new task, even in the same files or feature: when that worker is running or already has open requests ("open" in agent_list), or the task needs its own branch, it goes to a new worker forked from the owner so it runs in parallel instead of piling up: agent_create with from: <owner>, name: <area>-<feature>, role, task, and its own new worktree as cwd, never a directory another worker uses; agent_create creates that worktree itself when you also pass repo (the repository\'s checkout) and branch (feat/<slug> or fix/<slug>, from base, default origin/main), e.g. cwd ~/project/worktrees/<repo>__<slug>; if the new task cannot start without the owner\'s uncommitted changes, still do not queue it: say in your conclusion that it depends on <owner>\'s uncommitted changes, which must be committed first, so the lead asks the user;',
   '(3) a new area or repository with no worker yet: agent_create without from, with a role, its own cwd (one worker per directory or worktree) and the task.',
-  'Do not do the work yourself: no edits, builds, tests or long investigations. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
+  'Never do the work yourself, however small, and even when the lead did similar work earlier in this conversation or the user says "continue" or "retry": no shell commands, edits, builds, tests, commits, pushes, PRs, installs or long investigations. A fork is refused every tool except reading (read, glob, grep, web and session search) and agent_list, agent_send, agent_create, agent_interrupt, agent_archive and report; a refused call means hand it over, not find another way. Read only what you need to route well. Answer directly only what needs no work: a greeting, or a fact already in this conversation.',
+  'The runtime context may say you cannot start subagents and must carry out the work directly: that is about the subagent tools, not about agent_create or agent_send, which you always have; it does not apply to you. If a task cannot be handed over (agent_create or agent_send fails), do not do it yourself: say in your conclusion what could not be handed over and why, so the lead tells the user.',
   'Do not wait for workers: their answers go to the lead directly, not back to you.',
   'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
 ].join(' ')
@@ -180,6 +183,35 @@ export interface CreateWorker {
   /** Existing worker whose conversation this one continues. */
   readonly from?: string | undefined
   readonly task?: string | undefined
+  /** Create `cwd` as a new git worktree of this repository first (forks have no shell to do it). */
+  readonly worktree?: { readonly repo: string; readonly branch: string; readonly base?: string | undefined } | undefined
+}
+
+/**
+ * Create a new git worktree with a new branch.
+ * @param repo - an existing checkout of the repository.
+ * @param path - the new worktree directory; must not exist.
+ * @param branch - the new branch.
+ * @param base - what it starts from.
+ * @throws with git's own message when git refuses.
+ */
+export function addWorktree(repo: string, path: string, branch: string, base: string): void {
+  if (!existsSync(repo)) throw new Error(`repo does not exist: ${repo}`)
+  if (existsSync(path)) throw new Error(`cannot create the worktree: ${path} already exists`)
+  if (!/^[\w][\w./-]*$/u.test(branch) || branch.includes('..')) throw new Error(`invalid branch name: ${branch}`)
+  if (!/^[\w][\w./~^-]*$/u.test(base) || base.includes('..')) throw new Error(`invalid base: ${base}`)
+  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 120_000 })
+  try {
+    // Start from the remote's newest state; a repository without that remote still works from what it has.
+    const remote = base.includes('/') ? base.slice(0, base.indexOf('/')) : undefined
+    if (remote !== undefined) {
+      try { git('fetch', remote, '--prune', '--quiet') } catch { /* offline: use what is there */ }
+    }
+    git('worktree', 'add', path, '-b', branch, base)
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr
+    throw new Error(`git worktree add failed: ${(typeof stderr === 'string' && stderr.trim() !== '' ? stderr : messageOf(error)).trim()}`)
+  }
 }
 
 /** Scheduler state and rules for every main Session in one preset scope. */
@@ -257,13 +289,32 @@ export class Scheduler {
   }
 
   /**
+   * The roster name of an agent that is one of this preset's forks; forks only route, and the
+   * fork guard refuses them every working tool. A fork stays a fork when scheduling is switched
+   * off and after it is archived (speaking to it in its chat wakes it as the same router).
+   * @param agent - any agent of this preset.
+   * @returns the fork's name, or undefined for the lead, workers, and ordinary subagents.
+   */
+  forkNameOf(agent: Agent): string | undefined {
+    if (isMainSession(agent)) return undefined
+    // Never fold (and cache) an empty ledger for a main Session that is not resident.
+    const mainId = mainIdOf(agent)
+    if (!this.ledgers.has(mainId) && this.deps.agents.get(SessionId(mainId)) === undefined) return undefined
+    const member = this.ledgerOf(agent).members.get(agent.id)
+    return member?.kind === 'fork' ? member.name : undefined
+  }
+
+  /**
    * Refuse a scheduling tool for an agent that does not take part.
    * @param agent - the calling agent.
    */
   assertTakesPart(agent: Agent): void {
     if (this.takesPart(agent)) return
+    // Forks are always members, so only the lead itself reads this. It must not read as an
+    // instruction to do delegated work itself: forks inherit the lead's conversation, this
+    // message included, and copied "work directly" from it.
     throw new Error(isMainSession(agent)
-      ? 'Scheduling is off in this session. The user turns it on with the 调度 switch below the input or /schedule on; until then, work directly.'
+      ? 'Scheduling is off in this session, so there are no workers to delegate to: the agent_* tools are unavailable until the user turns it on (the 调度 switch below the input, or /schedule on). This does not apply to forks, which only route.'
       : 'This agent is not part of scheduling.')
   }
 
@@ -494,7 +545,15 @@ export class Scheduler {
     // One worker per directory: this is what keeps two writers out of the same tree. A worker
     // continued from another gets no default directory, since its source still works in its own.
     const base = main.session.header.cwd ?? process.cwd()
-    const cwd = args.cwd === undefined ? undefined : isAbsolute(args.cwd) ? args.cwd : resolve(base, args.cwd)
+    const expand = (p: string): string => p === '~' ? homedir() : p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : p
+    const absolute = (p: string): string => { const e = expand(p); return isAbsolute(e) ? e : resolve(base, e) }
+    const cwd = args.cwd === undefined ? undefined : absolute(args.cwd)
+    if (args.worktree !== undefined) {
+      if (cwd === undefined) throw new Error('repo and branch create a new worktree at cwd: give cwd too')
+      const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
+      if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
+      addWorktree(absolute(args.worktree.repo), cwd, args.worktree.branch, args.worktree.base ?? 'origin/main')
+    }
     if (cwd !== undefined) {
       // Checked before anything is recorded, so a bad directory costs no roster entry.
       if (!existsSync(cwd)) throw new Error(`working directory does not exist: ${cwd}; create it (or the worktree) first`)

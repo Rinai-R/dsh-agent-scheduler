@@ -8,7 +8,7 @@ DeepSeek Harness 插件：一个会话一个 lead，每条输入 fork 一个分�
 
 - **输入规则。** 调度打开时，每条用户消息立刻交给一个新分身；lead 不处理原话，稍后收到
   「The user said: … / Its conclusion: …」，历史里留下的是一张需求地图。
-- **分身（fork）。** 原生 fork，继承 lead 已完成的轮次，只处理一条输入：分析、用 `agent_create` / `agent_send` 派活，然后马上交结论，不等 worker。
+- **分身（fork）。** 原生 fork，继承 lead 已完成的轮次，只处理一条输入：分析、用 `agent_create` / `agent_send` 派活，然后马上交结论，不等 worker。分身只路由：工具守卫只放行读类工具（`read`、`glob`、`grep`、网页与会话检索）和 `agent_*` / `report`，执行命令、改文件、提交推送、开子任务一律拒绝。
 - **worker。** `agent_create` 建长期 agent：自己的会话、role、目录、模型。
 - **一条管道，终点是 lead。** 分身的结论、worker 的回答、请求失败，都直接汇报给 lead，并注明是谁、为哪条输入派的活。不会为了转交结果再唤醒任何 agent，省一次模型调用和时间。
 - **请求。** 每次派活是一条请求；承接方每完成一轮，就回答这一轮领取到的那些请求，内容取它 `report` 的摘要，没有就取收尾文字，全部从它自己的会话日志读，不靠自述。它一变空闲就结算并写下水位，重启不丢，也不依赖原生的结束通知何时（是否）到达 lead。
@@ -45,7 +45,7 @@ dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
 
 | 工具 | 作用 |
 |---|---|
-| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`。 |
+| `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；带 `repo` + `branch`（+ `base`，默认 `origin/main`）时先把 `cwd` 建成新的 git worktree。 |
 | `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。 |
 | `agent_list` | worker 名单、积压和在途请求（`forks: true` 才带上临时分身）。 |
 | `agent_interrupt` | 停当前这一轮。 |

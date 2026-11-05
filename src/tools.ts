@@ -48,7 +48,10 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       parameters: {
         name: { type: 'string', required: true, description: 'Unique lower-kebab-case name, never reused.' },
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },
-        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s. Required with from when the source worker has one: a new worktree of its own (git worktree add from the repository\'s base branch).' },
+        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s. Required with from when the source worker has one: a new worktree of its own. With repo and branch, it is created for you as a new git worktree.' },
+        repo: { type: 'string', description: 'With branch: an existing checkout of the repository; cwd (which must not exist yet) is created from it as a new git worktree on a new branch. Use it instead of running git yourself.' },
+        branch: { type: 'string', description: 'New branch for the worktree at cwd, e.g. feat/<slug> or fix/<slug>.' },
+        base: { type: 'string', description: 'What the new branch starts from; default origin/main (fetched first).' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the user\'s worker model (Agents page or /worker model), then the configured worker model, then the runtime default.' },
         from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset). Use it for a new task in that worker\'s area that should run in parallel (the owner is running or has open requests, or the task needs its own branch): fork the owner and give the new worker a new worktree of its own as cwd, never the owner\'s directory.' },
@@ -56,8 +59,11 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
       },
       output: { schema: OK, render: json },
       execute: async (args, exec) => {
-        const a = args as { name: string; role: string; cwd?: string; preset?: string; model?: string; from?: string; task?: string }
-        return scheduler.createWorker(caller(exec), { name: a.name, role: a.role, cwd: a.cwd, preset: a.preset, task: a.task, from: a.from, model: a.model === undefined ? undefined : parseModel(a.model) })
+        const a = args as { name: string; role: string; cwd?: string; preset?: string; model?: string; from?: string; task?: string; repo?: string; branch?: string; base?: string }
+        if ((a.repo === undefined) !== (a.branch === undefined)) throw new Error('repo and branch go together: both create the new worktree at cwd')
+        if (a.base !== undefined && a.repo === undefined) throw new Error('base only applies with repo and branch')
+        const worktree = a.repo === undefined || a.branch === undefined ? undefined : { repo: a.repo, branch: a.branch, base: a.base }
+        return scheduler.createWorker(caller(exec), { name: a.name, role: a.role, cwd: a.cwd, preset: a.preset, task: a.task, from: a.from, worktree, model: a.model === undefined ? undefined : parseModel(a.model) })
       },
     }),
     defineTool({
