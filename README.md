@@ -89,9 +89,7 @@ prompt cache) and refuse while scheduling is off.
 Open the page from the Agents button. A handed-off message's status card opens that fork directly
 (「查看」). The page groups 「分身」 (forks), 「Worker」, 「已交回」 (concluded forks), and 「已归档」
 (archived). A row shows live state — 在跑, 在等你, 空闲, 已交回, 排队中, 失败, 已归档 — the requests
-it still owes (`N 个请求待回答`), and a second line: why it failed, else its oldest open request,
-else what a fork was asked or a worker's directory and duty. Archived rows are one compact line, and
-past eight of them the rest fold behind 「再显示 N 个」.
+it still owes (`N 个请求待回答`), and for a worker its directory and duty.
 
 Click a row to open that agent's own native conversation in the other pane, with the roster keeping
 a narrow column of its own. At most two horizontal panes are allowed, so the page arranges the split
@@ -139,13 +137,25 @@ All of these run in the main session.
 
 | Tool | Purpose |
 |---|---|
-| `agent_create` | Start a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
-| `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
-| `agent_list` | The workers and the open requests, with `open` counts; pass `forks: true` to see the one-message forks too. |
+| `agent_create` | Start a worker: `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on); `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
+| `agent_send` | Send a request to a fork or worker, with `rosterVersion`; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
+| `agent_list` | The workers (with `createdFor`) and the open requests, with `open` counts and the `rosterVersion`; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |
 | `agent_archive` | Archive an agent; its session is kept and its name is never reused. |
 | `role_set` | Set the lead's or a worker's role, only when the user asks for it. |
 | `report` | Give this round's conclusion explicitly instead of the final message. |
+
+### Dispatch lock
+
+`agent_create` and `agent_send` of one main session (lead, forks and workers alike) run one at a
+time, in arrival order, each reading the roster, checking, creating or delivering, and recording
+inside the lock; a failure releases it. Both require the `rosterVersion` from `agent_list` (or from
+the previous dispatch); it changes whenever a worker is added or changes state or a request is sent
+or settled, and a dispatch made on an older version is refused with the current roster (workers,
+their state and backlog, and the newest creations with who made them for which input). Each input
+gets at most one worker: a fork creates at most one for its own message, and the lead names with
+`for` the `fork-N` or `r-N` it acts on, so a worker a fork already created is not created again
+from its conclusion.
 
 ## How it works
 
