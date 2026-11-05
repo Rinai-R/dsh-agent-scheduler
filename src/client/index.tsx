@@ -771,12 +771,12 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
         <span className="sch-mode" data-on={on ? 'yes' : 'no'}>
           {on
             ? (
-              <button type="button" className="sch-mode-exit" disabled={disabled} aria-label="关闭调度" title="调度已开启：每条消息交给一个分身。点击关闭（/schedule off）；已有的分身和 worker 保留" onClick={() => { switchTo(false) }}>
+              <button type="button" className="sch-mode-exit" disabled={disabled} aria-label="关闭调度" title="调度已开启：每条消息自动交给一个新分身。点击关闭（/schedule off）：之后消息直接给 lead，lead 仍可建 worker、派活；已有的分身和 worker 保留" onClick={() => { switchTo(false) }}>
                 <span className="sch-mode-glyph">{ICON.fork}</span><span className="sch-mode-x">{ICON.close}</span>调度
               </button>
             )
             : (
-              <button type="button" disabled={disabled} aria-label="开启调度" title="开启调度（/schedule）：之后的每条消息交给一个分身处理，lead 不被占住" onClick={() => { switchTo(true) }}>
+              <button type="button" disabled={disabled} aria-label="开启调度" title="开启调度（/schedule）：之后的每条消息自动交给一个新分身处理，lead 不被占住。关着时消息直接给 lead，lead 也能建 worker、派活" onClick={() => { switchTo(true) }}>
                 {ICON.fork}调度
               </button>
             )}
@@ -1293,7 +1293,7 @@ export function createAgentsPage(ctx: {
         )}
         {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0
-          ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会交给一个分身。'}</div>
+          ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会自动交给一个分身；关着时也可以让 lead 直接建 worker 派活。'}</div>
           : (
             <>
               {section('分身', forks)}

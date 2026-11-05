@@ -19,7 +19,7 @@ afterEach(teardown)
 const system = (o: { messages: readonly unknown[] }) => JSON.stringify(o.messages[0])
 
 describe('scheduling switch', () => {
-  it('off by default: the lead answers the user itself, has no scheduler section, and the tools refuse', async () => {
+  it('off by default: the lead answers the user itself, has no scheduler section, and its worker tools still work', async () => {
     let called = false
     const { ctx, lead, adapter } = await setup(o => {
       if (o.sessionId === 'lead' && !called) { called = true; return toolCallResponse('l1', 'agent_list', {}) }
@@ -32,7 +32,9 @@ describe('scheduling switch', () => {
     expect(adapter.requests.every(r => r.sessionId === 'lead')).toBe(true)
     expect(body(adapter.requests[0]!)).toContain('hello there')
     expect(system(adapter.requests[0]!)).not.toContain('# Agent Scheduler')
-    expect(body(adapter.requests[1]!)).toContain('Scheduling is off in this session')
+    // agent_list ran: the switch decides only who takes user messages, not whether workers exist.
+    expect(body(adapter.requests[1]!)).not.toContain('Scheduling is off')
+    expect(body(adapter.requests[1]!)).toContain('rosterVersion')
   })
 
   it('on mid-session forks the next message; off returns later messages to the lead, and an earlier fork still concludes', async () => {
@@ -72,7 +74,9 @@ describe('scheduling switch', () => {
     const child = { id: 'c', session: { header: { parentSession: 'lead' } }, inbox: { replace: () => { throw new Error('touched') } } }
     const notice = createUserMessage({ content: [{ type: 'text', text: 'Your parent agent id is "lead". Use send_message.' }], source: { kind: 'user' } })
     expect(scheduler.onInserted(child as never, notice)).toBe(false)
-    expect(scheduler.takesPart(lead)).toBe(false)
+    // The lead keeps the scheduling tools whether or not it schedules.
+    expect(scheduler.takesPart(lead)).toBe(true)
+    expect(scheduler.isOn(lead)).toBe(false)
   })
 
   it('/schedule parses on, off and a bare call, and refuses anything else', () => {
