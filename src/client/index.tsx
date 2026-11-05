@@ -334,6 +334,63 @@ export function retainChatTabs(tabs: TabTypesFace | undefined): () => void {
 }
 
 /**
+ * Keep the right sidebar's tab strip still when its active tab changes.
+ *
+ * The dock draws a pane's tab strip inside the host of the pane's active tab, so closing or
+ * switching a tab mounts a brand-new strip under the next tab: its scroll offset starts at 0 and
+ * the dock then reveals the active tab with `scroll-behavior: smooth`. With more tabs than fit,
+ * every close slid the whole strip for ~100 ms. This carries each pane's scroll offset over to
+ * the strip that replaces it, reveals the active tab instantly, and turns the smooth animation
+ * off for these strips, all before the next paint.
+ * @param doc - the page's document.
+ * @returns undo.
+ */
+export function steadyTabStrips(doc: Document | undefined): () => void {
+  const view = doc?.defaultView
+  if (doc === undefined || view === undefined || view === null || typeof view.MutationObserver !== 'function') return () => undefined
+  const SELECTOR = '[data-sidebar-right-session] [data-dockkit-strip-tabs]'
+  const style = doc.createElement('style')
+  style.dataset.plugin = 'dsh-agent-scheduler/strip'
+  style.textContent = `${SELECTOR}{scroll-behavior:auto!important}`
+  doc.head.appendChild(style)
+  const offsets = new Map<string, number>()
+  const seen = new WeakSet<Element>()
+  const remember = (event: globalThis.Event) => {
+    const el = event.target
+    if (!(el instanceof view.HTMLElement) || !el.matches(SELECTOR)) return
+    const pane = el.dataset.dockkitStripTabs
+    if (pane !== undefined) offsets.set(pane, el.scrollLeft)
+  }
+  const settle = () => {
+    for (const el of doc.querySelectorAll<HTMLElement>(SELECTOR)) {
+      const pane = el.dataset.dockkitStripTabs
+      if (pane === undefined) continue
+      if (seen.has(el)) { offsets.set(pane, el.scrollLeft); continue }
+      seen.add(el)
+      const before = offsets.get(pane)
+      if (before !== undefined) el.scrollLeft = before
+      const active = el.querySelector<HTMLElement>('[role=tab][aria-selected=true]')
+      if (active !== null) {
+        const box = el.getBoundingClientRect()
+        const tab = active.getBoundingClientRect()
+        if (tab.left < box.left) el.scrollLeft += tab.left - box.left - 24
+        else if (tab.right > box.right) el.scrollLeft += tab.right - box.right + 24
+      }
+      offsets.set(pane, el.scrollLeft)
+    }
+  }
+  doc.addEventListener('scroll', remember, true)
+  const observer = new view.MutationObserver(settle)
+  observer.observe(doc.body, { childList: true, subtree: true })
+  settle()
+  return () => {
+    observer.disconnect()
+    doc.removeEventListener('scroll', remember, true)
+    style.remove()
+  }
+}
+
+/**
  * Address of one child's native sidebar chat, preferring the controller's known mode.
  * @param ctx - client plugin context.
  * @param parent - main Session id, the fallback parent when the controller has no address.
@@ -1059,6 +1116,7 @@ export function apply(ctx: any): void {
     keepMounted: true,
   }), 'agent-scheduler: agents tab type')
   ctx.effect(() => retainChatTabs(ctx.sidebarRightTabs), 'agent-scheduler: keep agent chats mounted')
+  ctx.effect(() => steadyTabStrips(typeof document === 'undefined' ? undefined : document), 'agent-scheduler: keep the sidebar tab strip still')
   /** Run one command line; returns null on success, otherwise what went wrong. */
   const run = async (sessionId: string, line: string): Promise<string | null> => {
     const result = await ctx.remote.commands.execute(sessionId, line, [])

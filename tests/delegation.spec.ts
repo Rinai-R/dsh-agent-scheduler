@@ -348,3 +348,20 @@ describe('worker tools', () => {
     expect(leadSaw(lead, 'B ANSWER')).toBe(1)
   })
 })
+
+describe('agent list scope', () => {
+  it('lists workers by default and forks only when asked', async () => {
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
+    const scheduler = install(ctx)
+    lead.followup(user('why is billing slow'))
+    await until(lead, 'Its conclusion')
+    await scheduler.createWorker(lead, { name: 'billing', role: 'owns billing' })
+    const list = ctx.tools.get('agent_list', lead)!
+    const call = (args: object) => list.execute(args, { agent: lead, signal: new AbortController().signal } as never) as Promise<{ agents: Array<{ name: string; kind: string; input?: string }> }>
+    // Forks are the router's own one-message agents: routing sees the workers, not the plumbing.
+    expect((await call({})).agents).toEqual([expect.objectContaining({ name: 'billing', kind: 'worker' })])
+    const all = await call({ forks: true })
+    expect(all.agents.map(a => a.name)).toContain('fork-1')
+    expect(all.agents.find(a => a.kind === 'fork')).toMatchObject({ input: 'why is billing slow' })
+  })
+})

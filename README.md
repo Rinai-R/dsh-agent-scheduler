@@ -139,7 +139,7 @@ All of these run in the main session.
 |---|---|
 | `agent_create` | Start a worker: `name`, `role`, optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`. |
 | `agent_send` | Send a request to a fork or worker; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
-| `agent_list` | The roster and open requests, plus `open` counts and the queue. |
+| `agent_list` | The workers and the open requests, with `open` counts; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |
 | `agent_archive` | Archive an agent; its session is kept and its name is never reused. |
 | `role_set` | Set the lead's or a worker's role, only when the user asks for it. |

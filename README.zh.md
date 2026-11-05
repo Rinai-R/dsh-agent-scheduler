@@ -117,7 +117,7 @@ worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，�
 |---|---|
 | `agent_create` | 建 worker：`name`、`role`，可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`。 |
 | `agent_send` | 给分身或 worker 派活；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
-| `agent_list` | 名单与在途请求，带 `open` 计数和队列。 |
+| `agent_list` | 当前 worker 与在途请求，带 `open` 计数；加 `forks: true` 才连一次性分身一起列出。 |
 | `agent_interrupt` | 停当前这一轮；它待处理的收件箱保留。 |
 | `agent_archive` | 归档一个 agent；会话保留，名字不再复用。 |
 | `role_set` | 改 lead 或某个 worker 的 role，只在用户要求时用。 |
