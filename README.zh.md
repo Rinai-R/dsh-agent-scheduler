@@ -69,7 +69,13 @@ dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 再点一次 chip（悬停时分叉图标变成 ×）或执行 `/schedule off`。之后的消息回到 lead；已经开着的分身和
 worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，所以 lead 的下一次请求不命中一次提示缓存。
 
-调度工具注册在预设的每个会话里（工具列表不变才能命中缓存），关闭时调用会被拒绝。
+开关只管一件事：用户消息是否自动交给一个新分身。关着时，用户直接和 lead 对话，lead 自己回答，但
+worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_split`、`agent_send`、`agent_interrupt`、
+`agent_archive`、`role_set`、`report`——派活锁和 `rosterVersion` 校验照样生效，worker 的回答、上报和
+失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create`、`agent_split` 时 `for` 可以不填（填了 `fork-N`
+或 `r-N` 仍会校验，每个仍只建一个 worker）；开着时 lead 照旧必须填。开调度时建的分身，关掉之后仍只能
+路由。调度工具注册在预设的每个会话里（工具列表不变才能命中缓存）；关着且还没有分身或 worker 的会话，
+系统提示里没有调度段，建出第一个 worker 后多出一段只给 lead 的简短说明。
 
 ### Agents 页
 
@@ -169,7 +175,7 @@ projection 是同一份 fold，所以侧栏画出来的和调度实际依据的�
 
 **预设与开关。** 插件覆盖内置的 `standard` 预设：原有各行不变，只多一行调度规则，所以每个新会话
 都能调度。旧的「调度（旧会话）」预设只为让用它建的会话还能打开；这些会话默认是打开的。关闭调度后，
-之后的消息回到 lead；已有的分身和 worker 继续跑，结果照常汇报给 lead。
+之后的消息回到 lead，lead 仍能建 worker、派活；已有的分身和 worker 继续跑，结果照常汇报给 lead。
 
 ## 配置
 

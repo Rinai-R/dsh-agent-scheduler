@@ -87,8 +87,17 @@ Click the chip again (its fork glyph becomes × on hover) or run `/schedule off`
 back to the lead; forks and workers already running keep running and still report their results.
 Switching changes the lead's system prompt, so the next lead request misses the prompt cache once.
 
-The scheduler tools are registered in every session of the preset (a stable tool list keeps the
-prompt cache) and refuse while scheduling is off.
+The switch decides one thing only: whether each user message is handed to a new fork. With it
+off, the user talks to the lead directly and the lead answers itself, but it keeps every worker
+tool — `agent_list`, `agent_create`, `agent_split`, `agent_send`, `agent_interrupt`,
+`agent_archive`, `role_set` and `report` — under the same dispatch lock and `rosterVersion` check. Workers' answers, reports
+and failures still come to the lead. Because there is no fork in between, `for` is optional on the
+lead's `agent_create` and `agent_split` while scheduling is off (a named `fork-N` or `r-N` is still checked and
+still gets one worker); with it on, the lead must name one as before. A fork created while
+scheduling was on stays a router after the switch goes off. The tools are registered in every
+session of the preset (a stable tool list keeps the prompt cache); an off session with no forks or
+workers has no scheduler section in its system prompt, and gets a short lead-only one from its
+first worker on.
 
 ### The Agents page
 
@@ -218,7 +227,8 @@ restart recovery reads their logs rather than trusting what an agent says about 
 **Preset and switch.** The plugin overrides the shipped `standard` preset with its rows unchanged
 plus the scheduler rule, so every new session can schedule. The retired `调度（旧会话）` preset stays
 only so sessions created with it still open; those start with scheduling on. Turning the switch off
-returns later messages to the lead; existing forks and workers keep running and still answer to it.
+returns later messages to the lead, which can still create and use workers; existing forks and
+workers keep running and still answer to it.
 
 ## Configuration
 

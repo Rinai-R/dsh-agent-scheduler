@@ -97,23 +97,6 @@ describe('fork guard', () => {
   })
 })
 
-describe('scheduling off', () => {
-  it('the refusal no longer tells anyone to "work directly"', async () => {
-    let asked = false
-    const { ctx, lead, adapter } = await setup(o => {
-      if (!asked) { asked = true; return toolCallResponse('l1', 'agent_create', { name: 'x', role: 'y' }) }
-      return textResponse('LEAD')
-    })
-    install(ctx, { defaultOn: false })
-    lead.followup(user('make a worker'))
-    await vi.waitFor(async () => { await lead.whenIdle(); expect(adapter.requests.length).toBe(2) })
-    const refusal = body(adapter.requests[1]!)
-    expect(refusal).toContain('Scheduling is off in this session')
-    expect(refusal).not.toContain('work directly')
-    expect(refusal).toContain('does not apply to forks')
-  })
-})
-
 describe('agent_create worktrees', () => {
   const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
   function repo(): string {

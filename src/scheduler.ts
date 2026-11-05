@@ -1,7 +1,8 @@
 /**
  * The scheduler for one preset scope. Rules, not model judgment, decide routing:
- * - a user message to the main Session never reaches the lead: it leaves the inbox on insertion
- *   and a new fork of the lead takes it;
+ * - while scheduling is on, a user message to the main Session never reaches the lead: it leaves
+ *   the inbox on insertion and a new fork of the lead takes it. Off, the user talks to the lead,
+ *   and the lead keeps every worker tool: the switch decides only who takes user messages;
  * - every piece of delegated work is a request; each completed round of the agent that took it
  *   answers the requests whose messages that round claimed, read from its log;
  * - there is one pipeline and it ends at the lead: a fork's conclusion, a worker's answer, and a
@@ -53,6 +54,17 @@ export const LEAD_NOTICE = [
   'Otherwise you are the lead. The user\'s words never reach you directly; you receive forks\' conclusions as "The user said: ... Its conclusion: ...", workers\' answers as "[reply to r-N from name, asked by ...]", and failures as "[request r-N to name failed: ...]".',
   'When you create a worker yourself, pass for: the fork-N whose conclusion or the r-N whose reply you act on; each of those gets at most one worker, so a fork that already created one is not duplicated (the refusal names that worker: agent_send it instead).',
   'The user does not read those messages or the forks\' work: only your replies. Tell the user the result in your own words, briefly, with anything they must decide. Never say you already answered them unless you did in a reply of your own.',
+  'The user\'s 调度 switch decides only whether their messages go to forks: when they turn it off they talk to you directly, you answer yourself, and you keep agent_list, agent_create, agent_send and the other worker tools.',
+].join(' ')
+
+/**
+ * What the lead is for while scheduling is off: the user talks to it directly, and it may still
+ * create and use workers. Only in a Session that has members, so a plain chat stays plain.
+ */
+export const LEAD_OFF_NOTICE = [
+  'Scheduling (handing each user message to a fork) is off: the user talks to you, the lead, directly, and you answer them yourself.',
+  'You can still use workers, long-lived agents with their own sessions, for work that should run in parallel or in its own repository or worktree: agent_list shows them with the rosterVersion that agent_create, agent_split and agent_send require, and dispatches run one at a time per session; start coarse (one worker per repository or module) and agent_split a busy worker\'s area for a new task. While scheduling is off, for is optional on agent_create and agent_split (pass the r-N whose reply you act on when there is one; each fork-N or r-N still gets at most one worker).',
+  'Answers come to you as messages of their own: "[reply to r-N from name, asked by ...]", "[report from name, not a request]", "[request r-N to name failed: ...]", and a fork created while scheduling was on still concludes as "The user said: ... Its conclusion: ...". Do not wait for them. The user reads only your replies: tell them results in your own words. Do not use send_message or the subagent tools for this.',
 ].join(' ')
 
 /** Marker the runtime appends to a child's first message; we route results ourselves. */
@@ -384,13 +396,14 @@ export class Scheduler {
   }
 
   /**
-   * Whether an agent belongs to scheduling: the main Session while it is on, or one of its forks
+   * Whether an agent may use the scheduling tools: the main Session (the lead) always, whether or
+   * not scheduling is on, since the switch only decides who takes user messages; and its forks
    * and workers. Children of ordinary subagent tools are not members and are left alone.
    * @param agent - any agent of this preset.
    * @returns membership.
    */
   takesPart(agent: Agent): boolean {
-    return isMainSession(agent) ? this.isOn(agent) : this.ledgerOf(agent).members.has(agent.id)
+    return isMainSession(agent) || this.ledgerOf(agent).members.has(agent.id)
   }
 
   /**
@@ -417,12 +430,7 @@ export class Scheduler {
    */
   assertTakesPart(agent: Agent): void {
     if (this.takesPart(agent)) return
-    // Forks are always members, so only the lead itself reads this. It must not read as an
-    // instruction to do delegated work itself: forks inherit the lead's conversation, this
-    // message included, and copied "work directly" from it.
-    throw new Error(isMainSession(agent)
-      ? 'Scheduling is off in this session, so there are no workers to delegate to: the agent_* tools are unavailable until the user turns it on (the 调度 switch below the input, or /schedule on). This does not apply to forks, which only route.'
-      : 'This agent is not part of scheduling.')
+    throw new Error('This agent is not part of scheduling.')
   }
 
   /**
