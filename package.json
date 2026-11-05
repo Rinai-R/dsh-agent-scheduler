@@ -27,8 +27,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "gen:preset": "node scripts/gen-preset.mjs"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",

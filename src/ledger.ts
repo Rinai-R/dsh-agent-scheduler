@@ -2,7 +2,7 @@
  * Queries over one main Session's roster. The state is the same pure fold the client projection
  * uses ({@link applyRoster}); this class only caches lookups for the current state.
  */
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from './dsh/types.js'
 import { applyRoster, EMPTY_ROSTER, type Roster, type RosterMember, type RosterRequest } from './projection.js'
 
 export type { MemberState, RosterMember as Member, RosterRequest as Request } from './projection.js'

@@ -1,13 +1,13 @@
 /**
- * Model tools. Every agent of the preset gets the same set; the lead (scheduling on or off), its
+ * Model tools. Every agent gets the same set (a stable tool list keeps the prompt cache); the lead (scheduling on or off), its
  * forks and its workers may use it.
  */
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { Agent, ToolDefinition } from './dsh/types.js'
+import { defineTool, statusOf, type AgentLookup } from './dsh/host/index.js'
 import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, LEAD_OFF_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
 
-type Live = { get(id: never): Agent | undefined }
+type Live = AgentLookup
 
 const OK = { type: 'object', additionalProperties: true, properties: {} } as const
 /** The calling agent; tools only run inside an agent. */
@@ -37,7 +37,7 @@ export function parseModel(value: string): ForkModelSelection {
  * @returns tool definitions.
  */
 export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefinition[] {
-  const status = (id: string): string => (agents.get(id as never)?.status) ?? 'idle'
+  const status = (id: string): string => statusOf(agents, id) ?? 'idle'
   // Registered in every session of the preset so the tool list never changes with the switch.
   // The lead keeps them with scheduling off: the switch decides only who takes user messages.
   // Ordinary subagents of the preset are not members and are refused.

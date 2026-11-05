@@ -1,23 +1,21 @@
 /**
  * Host half of dsh-agent-scheduler. The Loader row makes the bundle's browser half available in
- * every session and registers the `fork-from` provider; all behaviour lives in `./rule`, mounted
- * in the standard preset and switched per Session with `/schedule on|off`.
+ * every session and registers the `fork-from` provider and the roster projection; all behaviour
+ * lives in `./rule`, a second top-level row, switched per Session with `/schedule on|off`.
  * @module dsh-agent-scheduler
  */
 import type { Context, Volatile } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-session-projection'
 import z from '@deepseek-ai/schemastery'
 import { DEFAULT_RECOVERY, setRecoveryPolicy, type RecoveryPolicy } from './recovery.js'
-import { installForkFrom } from './forks-from.js'
+import { HOST_SERVICES, installForkFrom, registerProjection } from './dsh/host/index.js'
 import { applyRoster, initRoster, rosterSchema, rosterView, rosterViewSchema, SCHEDULER_PROJECTION } from './projection.js'
 
 export const name = 'agent-scheduler'
-export const inject = ['subagents', 'sessionProjections']
+export const inject = HOST_SERVICES
 
 /**
- * Host row configuration. It lives here rather than on the preset's rule row: the rule row is
- * nested inside the overridden standard preset, and settings forms only address rows owned by
- * the profile's root Include. Volatile, so the plugin page edits it live without a remount.
+ * Host row configuration. The plugin page edits this row's settings namespace
+ * (`dsh-agent-scheduler`, see src/client/recovery-config.tsx). Volatile, so the plugin page edits it live without a remount.
  */
 export interface Config {
   recovery: Volatile<RecoveryPolicy>
@@ -34,25 +32,26 @@ export const Config: z<Config> = z.object({
 
 /**
  * Register the fork provider and the roster projection once for the whole process, so a
- * client that draws the roster has the projection even before the preset's rule mounts.
+ * client that draws the roster has the projection even before the rule row mounts.
  * @param ctx - host context.
  * @param config - host row configuration.
  */
 export function apply(ctx: Context, config: Config): void {
   installForkFrom(ctx)
   ctx.effect(() => setRecoveryPolicy(() => config.recovery.get() as RecoveryPolicy), 'agent-scheduler: recovery policy')
-  ctx.effect(() => ctx.sessionProjections.register({
+  registerProjection(ctx, {
     key: SCHEDULER_PROJECTION,
     // 3: the fold carries the scheduling switch. 4: the `/fork model` override. 5: each member's
     // own model. 6: who created a worker for which input, and each member's unread report.
     // 7: a renamed worker's former names, and the area workers split from one area share.
     // Older cached state is dropped and refolded.
     stateVersion: 7,
-    stateSchema: rosterSchema,
+    state: rosterSchema,
+    view: rosterViewSchema,
     init: initRoster,
     apply: applyRoster,
-    wire: { viewSchema: rosterViewSchema, view: rosterView },
-  }), 'agent-scheduler: roster projection')
+    toView: rosterView,
+  })
 }
 
 export * from './forks-from.js'

@@ -4,8 +4,8 @@
  * sidebar draws and what the scheduler routes by cannot drift apart.
  * @module dsh-agent-scheduler/projection
  */
-import type { SessionEvent, SessionHeader, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { ZodType } from 'zod'
+import type { SessionEvent, SessionHeader, SessionLogOffset } from './dsh/types.js'
+import type { Parser } from './dsh/host/services.js'
 import { inputOf, recordReaders as R, type ForkModelSelection } from './records.js'
 import { memberModelRecordOf } from './member-model.js'
 import { unread } from './review.js'
@@ -312,8 +312,8 @@ function checkMember(m: unknown, view: boolean): void {
 }
 
 /**
- * The registry calls only `parse` on persisted state and on the wire copy. These shims check the
- * shape for real without adding zod to the published dependencies; the cast is the only bridge.
+ * Validators for persisted state and the wire copy. They check the shape for real without adding
+ * zod to the published dependencies; registerProjection (src/dsh/host/services.ts) adapts them.
  */
 export const rosterSchema = {
   parse(value: unknown): Roster {
@@ -329,7 +329,7 @@ export const rosterSchema = {
     }
     return value as unknown as Roster
   },
-} as unknown as ZodType<Roster>
+} satisfies Parser<Roster>
 
 export const rosterViewSchema = {
   parse(value: unknown): RosterView {
@@ -340,13 +340,6 @@ export const rosterViewSchema = {
     for (const m of value.members) checkMember(m, true)
     return value as unknown as RosterView
   },
-} as unknown as ZodType<RosterView>
+} satisfies Parser<RosterView>
 
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionMap {
-    agentScheduler: RosterView
-  }
-  interface SessionProjectionStateMap {
-    agentScheduler: Roster
-  }
-}
+// Its entries in DSH's projection maps are declared in src/dsh/host/augment.ts.

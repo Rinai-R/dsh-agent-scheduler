@@ -12,7 +12,8 @@
  * cannot address.
  * @module dsh-agent-scheduler/recovery
  */
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from './dsh/types.js'
+import { inboxSpliceOf, unwrapRelayed, userMessageOf } from './dsh/host/index.js'
 import { cutByRestart, type Round } from './rounds.js'
 
 /** How a request cut off by a restart is handled. */
@@ -86,7 +87,7 @@ export interface ChildTrace {
 const firstLine = (content: unknown): string => {
   const blocks = Array.isArray(content) ? content as { type?: string; text?: string }[] : []
   const text = blocks.flatMap(b => b.type === 'text' && b.text !== undefined ? [b.text] : []).join('')
-  return (text.replace(/^Agent \S+ sent a message: /u, '').split('\n', 1)[0]) ?? ''
+  return (unwrapRelayed(text).split('\n', 1)[0]) ?? ''
 }
 
 /**
@@ -100,14 +101,16 @@ export function traceChild(events: readonly SessionEvent[]): ChildTrace {
   const taken = new Set<string>()
   const seen: { id: string; content: unknown }[] = []
   for (const event of events) {
-    if (event.type === 'user/message') {
-      taken.add(event.data.id)
-      seen.push({ id: event.data.id, content: event.data.content })
-    } else if (event.type === 'agent/inbox/spliced') {
-      const { target, start, removedCount, inserted } = event.data
-      inbox[target].splice(start, removedCount ?? 0, ...inserted.map(m => ({ id: m.id, content: m.content })))
-      seen.push(...inserted.map(m => ({ id: m.id, content: m.content })))
+    const message = userMessageOf(event)
+    if (message !== undefined) {
+      taken.add(message.id)
+      seen.push({ id: message.id, content: message.content })
+      continue
     }
+    const splice = inboxSpliceOf(event)
+    if (splice === undefined) continue
+    inbox[splice.target].splice(splice.start, splice.removed, ...splice.inserted)
+    seen.push(...splice.inserted)
   }
   const pendingList = [...inbox['next-turn'], ...inbox['next-step']]
   const requestMessages = new Map<string, string>()

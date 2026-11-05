@@ -16,11 +16,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import type { Agent, AgentOptions, PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { boundContextSummary, createDeveloperMessage, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
-import { FORK_FROM_PROVIDER, ForkSeedError, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
+import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserMessage } from './dsh/types.js'
+import {
+  admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
+  pendingOf, removePending, replacePending, rewriteSettled, SessionId, settledSender, statusOf, subagentPort, textOf, toLead, withoutReturnGuidance,
+  type AgentLookup, type SessionLog, type SubagentPort, type SubagentService,
+} from './dsh/host/index.js'
+import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
   appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
@@ -67,19 +69,14 @@ export const LEAD_OFF_NOTICE = [
   'Answers come to you as messages of their own: "[reply to r-N from name, asked by ...]", "[report from name, not a request]", "[request r-N to name failed: ...]", and a fork created while scheduling was on still concludes as "The user said: ... Its conclusion: ...". Do not wait for them. The user reads only your replies: tell them results in your own words. Do not use send_message or the subagent tools for this.',
 ].join(' ')
 
-/** Marker the runtime appends to a child's first message; we route results ourselves. */
-const NATIVE_NOTICE = /^Your parent agent id is "/u
-
-/** A child's log as stored: contiguous from seq 0, its first `inherited` events copied from a parent. */
-export interface SessionLog {
-  readonly events: readonly SessionEvent[]
-  readonly inherited: number
-}
+// Moved to the DSH adapter; re-exported for callers of this module.
+export { admitHidden, HANDOFF_SOURCE, isCapacity, isMainSession, textOf, type SessionLog } from './dsh/host/index.js'
 
 /** Services the scheduler uses, narrowed for tests. */
 export interface SchedulerDeps {
-  readonly subagents: Pick<SubagentRuntime, 'startActivation' | 'sendMessage' | 'interrupt' | 'drainChildren'>
-  readonly agents: { get(id: SessionId): Agent | undefined }
+  /** `ctx.subagents`; the scheduler drives it through the adapter's {@link SubagentPort}. */
+  readonly subagents: SubagentService
+  readonly agents: AgentLookup
   /** Read a Session's log whether or not it is resident. */
   readonly readLog: (id: SessionId) => Promise<SessionLog>
   /** Configured default model for workers; undefined inherits the runtime default. */
@@ -88,8 +85,8 @@ export interface SchedulerDeps {
   readonly workerPreset?: string | undefined
   readonly log?: (message: string, error?: unknown) => void
   /**
-   * Whether a Session that never recorded a switch schedules. True only for Sessions of the
-   * retired `scheduler` preset, which scheduled from their first message.
+   * Whether a Session that never recorded a switch schedules. The plugin itself never sets it
+   * (the preset that did is retired); tests of scheduling sessions do.
    */
   readonly defaultOn?: boolean | undefined
   /** Delay before retrying work refused at capacity; tests shorten it. */
@@ -98,7 +95,7 @@ export interface SchedulerDeps {
    * Set a child Session's title (its chat header and session list), when the host offers it.
    * The right-pane tab label is the subagent's creation label, which the runtime cannot change.
    */
-  readonly renameSession?: ((id: SessionId, title: string) => void) | undefined
+  readonly renameSession?: ((id: string, title: string) => void) | undefined
 }
 
 type Outcome = 'done' | 'queued' | 'failed'
@@ -112,76 +109,6 @@ interface Pending {
   readonly attempt: () => Promise<'done' | 'capacity' | 'failed'>
 }
 
-export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
-const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? agent.id
-const isUserInput = (message: UserMessage): boolean => message.source.kind === 'user'
-
-/** Source of the empty node that hides a handed-off message from the lead's model input. */
-export const HANDOFF_SOURCE = 'agent-scheduler-handoff'
-
-/**
- * Log a handed-off user message as received, then hide it from the lead's model input.
- *
- * The browser composer releases a sent draft (text and attachments) only once the Session log
- * holds a `user/message` carrying the prompt's request id; an inbox removal is recorded as a
- * cancellation, and a draft with attachments is then restored as unsent. Logging the message
- * gives the composer its receipt and the chat the user's own bubble, images included. The
- * replacement that follows shadows that one surface node, inside a step with an empty developer message
- * which yields no model message, so the lead never reads the words a fork is handling. Outside
- * a step the shadow is a one-line note instead (the format allows developer messages only
- * inside steps).
- * @param session - the main Session.
- * @param message - the user message being handed to a fork.
- * @param note - the line the lead reads in its place when no step is open.
- * @returns false when the log has no system prompt yet and nothing could be logged.
- */
-export function admitHidden(session: Session, message: UserMessage, note: string): boolean {
-  // A log's first surface node must be the system prompt, which only the lead's first step
-  // writes; before it, a user message cannot be logged at all.
-  const head = session.surface.nodes[0]
-  if (head === undefined || session.eventAt(head)?.type !== 'system/message') return false
-  const logged = session.append('user/message', message, { surfaceOp: 'append' })
-  const replace = { surfaceOp: { op: 'replace', startSeq: logged.seq, endSeq: logged.seq }, sourceEventSeqs: [logged.seq] } as never
-  const open = openStep(session.snapshotEvents())
-  if (open !== undefined) {
-    // Inside a step the node may sit between a tool call and its result, where no user message
-    // may stand; an empty developer message of that step yields no model message at all.
-    session.append('developer/message', {
-      ...open,
-      message: createDeveloperMessage({ source: { kind: HANDOFF_SOURCE } as never, content: [] }),
-    } as never, replace)
-    return true
-  }
-  // Outside a step a developer message is not allowed; a one-line note in its place is.
-  session.append('user/message', createUserMessage({ content: [{ type: 'text', text: note }], source: { kind: HANDOFF_SOURCE } as never }), replace)
-  return true
-}
-
-/** The turn and step of a step still open at the end of the log, if any. */
-function openStep(events: readonly SessionEvent[]): { turn: number; step: number } | undefined {
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i]!
-    if (event.type === 'step/end' || event.type === 'turn/end') return undefined
-    if (event.type === 'step/start') return { turn: event.data.turn, step: event.data.step }
-  }
-  return undefined
-}
-/** Context the runtime refreshes on every step; never a reason for the lead to speak. */
-const isContextOnly = (message: UserMessage): boolean => (message.source as { form?: unknown }).form === 'snapshot'
-
-/**
- * Whether a refusal is the runtime's residency limit, the one failure that waiting cures.
- * Persistence, draining, and authority failures are real and are not retried.
- * @param error - whatever the runtime threw.
- * @returns true for `ACTIVATION_LIMIT_REACHED`.
- */
-export const isCapacity = (error: unknown): boolean =>
-  (error as { code?: unknown } | null)?.code === 'ACTIVATION_LIMIT_REACHED'
-  || /subagent limit reached/u.test(error instanceof Error ? error.message : String(error))
-
-export const textOf = (content: readonly ContentBlock[]): string =>
-  content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
-
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const gone = (member: Member | undefined): boolean => member !== undefined && (member.state === 'archived' || member.state === 'failed')
 
@@ -189,10 +116,7 @@ const gone = (member: Member | undefined): boolean => member !== undefined && (m
  * @param selection - a provider/model pair.
  * @returns agent options carrying it.
  */
-export function selectionOptions(selection: ForkModelSelection): AgentOptions {
-  const { provider, model, reasoningEffort } = selection
-  return { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort: reasoningEffort as NonNullable<AgentOptions['reasoningEffort']> }) }
-}
+export const selectionOptions = (selection: ForkModelSelection): AgentOptions => agentOptionsOf(selection)
 
 /**
  * Optimistic check of a dispatch (agent_create, agent_send): the roster version the caller read
@@ -311,7 +235,7 @@ export interface SplitWorker extends Dispatch {
 
 /** A checked worker creation, ready to record and start. */
 interface WorkerPlan {
-  readonly id: SessionId
+  readonly id: string
   readonly source: Member | undefined
   readonly seed: SessionEvent[] | undefined
   readonly selection: ForkModelSelection | undefined
@@ -353,7 +277,16 @@ export class Scheduler {
   private readonly dispatching = new Map<string, Promise<void>>()
 
   /** @param deps - services and policy. */
-  constructor(private readonly deps: SchedulerDeps) {}
+  /** The runtime's subagent service, through the adapter. */
+  private readonly port: SubagentPort
+
+  /** @param deps - services and policy. */
+  constructor(private readonly deps: SchedulerDeps) {
+    this.port = subagentPort(deps.subagents)
+  }
+
+  /** A resident agent by Session id. */
+  private live(id: string): Agent | undefined { return this.deps.agents.get(id as never) }
 
   /**
    * The ledger of the main Session an agent belongs to.
@@ -364,8 +297,8 @@ export class Scheduler {
     const mainId = mainIdOf(agent)
     let ledger = this.ledgers.get(mainId)
     if (ledger === undefined) {
-      const main = this.deps.agents.get(SessionId(mainId)) ?? (isMainSession(agent) ? agent : undefined)
-      ledger = Ledger.from(mainId, main?.session.snapshotEvents() ?? [])
+      const main = this.live(mainId) ?? (isMainSession(agent) ? agent : undefined)
+      ledger = Ledger.from(mainId, main === undefined ? [] : eventsOf(main.session))
       this.ledgers.set(mainId, ledger)
     }
     return ledger
@@ -418,7 +351,7 @@ export class Scheduler {
     // Never fold (and cache) an empty ledger for a main Session that is not resident.
     const mainId = mainIdOf(agent)
     // A subagent of a worker has the worker, not a main Session, as its parent: nothing to fold.
-    const parent = this.deps.agents.get(SessionId(mainId))
+    const parent = this.live(mainId)
     if (!this.ledgers.has(mainId) && (parent === undefined || !isMainSession(parent))) return undefined
     const member = this.ledgerOf(agent).members.get(agent.id)
     return member?.kind === 'fork' ? member.name : undefined
@@ -477,7 +410,7 @@ export class Scheduler {
    */
   rosterSummary(ledger: Ledger): RosterSummary {
     const workers = ledger.state.members.filter(m => m.kind === 'worker')
-    const state = (m: Member) => m.state === 'started' ? (this.deps.agents.get(SessionId(m.id))?.status ?? 'idle') : m.state
+    const state = (m: Member) => m.state === 'started' ? (statusOf(this.deps.agents, m.id) ?? 'idle') : m.state
     return {
       rosterVersion: this.rosterVersion(ledger),
       workers: workers.map(m => {
@@ -533,7 +466,7 @@ export class Scheduler {
   forget(mainId: string): void { this.ledgers.delete(mainId) }
 
   private mainOf(agent: Agent): Agent {
-    const main = isMainSession(agent) ? agent : this.deps.agents.get(SessionId(mainIdOf(agent)))
+    const main = isMainSession(agent) ? agent : this.live(mainIdOf(agent))
     if (main === undefined) throw new Error('the main session is not running')
     return main
   }
@@ -541,13 +474,12 @@ export class Scheduler {
   /** Append through the ledger, so the fold and the log never disagree. */
   private record(main: Agent, append: (session: Session) => unknown): void {
     append(main.session)
-    const events = main.session.snapshotEvents()
-    this.ledgerOf(main).apply(events[events.length - 1]!)
+    this.ledgerOf(main).apply(lastEvent(main.session))
   }
 
   private async logOf(id: string): Promise<SessionLog> {
-    const live = this.deps.agents.get(SessionId(id))
-    if (live !== undefined) return { events: live.session.snapshotEvents(), inherited: Number(live.session.inheritedEventCount) }
+    const live = this.live(id)
+    if (live !== undefined) return liveLog(live)
     return this.deps.readLog(SessionId(id))
   }
 
@@ -562,35 +494,31 @@ export class Scheduler {
    */
   onInserted(agent: Agent, message: UserMessage): boolean {
     if (!isMainSession(agent)) return this.ledgerOf(agent).members.has(agent.id) && this.stripNativeNotice(agent, message)
-    if (!isUserInput(message) || !this.isOn(agent) || !agent.inbox.nextTurn.concat(agent.inbox.nextStep).some(m => m.id === message.id)) return false
+    if (!isUserInput(message) || !this.isOn(agent) || !isPending(agent, message.id)) return false
     this.handOff(agent, message)
     return true
   }
 
   private stripNativeNotice(agent: Agent, message: UserMessage): boolean {
-    const kept = message.content.filter(block => !(block.type === 'text' && NATIVE_NOTICE.test(block.text)))
-    if (kept.length === message.content.length) return false
-    return agent.inbox.replace(message.id, { ...message, content: kept })
+    const kept = withoutReturnGuidance(message)
+    return kept !== undefined && replacePending(agent, kept)
   }
 
   private handOff(main: Agent, message: UserMessage): void {
     // A Session that schedules by default records it once, so the client's switch shows it.
     if (this.ledgerOf(main).state.enabled === null) this.record(main, s => appendMode(s, true))
-    const forkId = SessionId(`session-${randomUUID()}`)
+    const forkId = `session-${randomUUID()}`
     const text = textOf(message.content)
     const name = this.ledgerOf(main).nextForkName()
     // Admit before removing: the composer keeps a draft with attachments until it sees the
     // message logged; a removal alone reads to it as a canceled send and restores the draft.
     const logged = admitHidden(main.session, message, `[A user message was handed to ${name}; its conclusion will come to you.]`)
-    main.inbox.remove(message.id)
+    removePending(main, message.id)
     this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name, ...(logged ? { logged: true as const } : {}) }))
     // A fork always runs on the lead's model: it replays the lead's history, which then hits the
     // lead's prompt cache. There is no per-fork model (any `/fork model` record is history only).
     void this.run(main, forkId, name, async () => {
-      await this.deps.subagents.startActivation({
-        provider: 'fork', label: `${name}: ${text.slice(0, 50)}`, childId: forkId, signal: new AbortController().signal, delivery: 'parent',
-        request: { parent: main, prompt: [...message.content] },
-      })
+      await this.port.startFork(main, { childId: forkId, label: `${name}: ${text.slice(0, 50)}`, prompt: message.content })
       if (this.ledgerOf(main).members.get(forkId)?.state === 'queued') this.record(main, s => appendForkState(s, { forkId, state: 'started' }))
     }, {
       queued: () => { this.record(main, s => appendForkState(s, { forkId, state: 'queued' })) },
@@ -669,7 +597,7 @@ export class Scheduler {
     if (status !== 'idle') return
     if (this.queue.length > 0) void this.drain()
     if (isMainSession(agent)) return
-    const main = this.deps.agents.get(SessionId(mainIdOf(agent)))
+    const main = this.live(mainIdOf(agent))
     if (main === undefined || !this.ledgerOf(main).members.has(agent.id)) return
     this.settleInBackground(main, agent.id)
   }
@@ -778,11 +706,11 @@ export class Scheduler {
       checkName()
     }
     // The lead's explicit model, then the Agents page's 「Worker 模型」 (/worker model), then config.
-    const selection = args.model ?? workerModelOf(main.session.snapshotEvents()) ?? this.deps.configuredWorkerModel
+    const selection = args.model ?? workerModelOf(eventsOf(main.session)) ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
     // One worker per directory: this is what keeps two writers out of the same tree. A worker
     // continued from another gets no default directory, since its source still works in its own.
-    const base = main.session.header.cwd ?? process.cwd()
+    const base = cwdOf(main) ?? process.cwd()
     const expand = (p: string): string => p === '~' ? homedir() : p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : p
     const absolute = (p: string): string => { const e = expand(p); return isAbsolute(e) ? e : resolve(base, e) }
     const cwd = args.cwd === undefined ? undefined : absolute(args.cwd)
@@ -799,7 +727,7 @@ export class Scheduler {
       const holder = ledger.state.members.find(m => m.kind === 'worker' && !gone(m) && m.cwd !== undefined && resolve(base, m.cwd) === cwd)
       if (holder !== undefined) throw new Error(`"${holder.name}" already works in ${cwd}; give each worker its own directory or worktree`)
     }
-    return { id: SessionId(`session-${randomUUID()}`), source, seed, selection, preset, cwd, key }
+    return { id: `session-${randomUUID()}`, source, seed, selection, preset, cwd, key }
   }
 
   /** Record a planned worker and start it; its task becomes its first request. */
@@ -825,21 +753,7 @@ export class Scheduler {
     // The user may rename it while it waits for a slot: later records carry its current name.
     const nameNow = (): string => ledger.members.get(id)?.name ?? args.name
     const outcome = await this.run(main, id, args.name, () => this.delivering(main, id, async () => {
-      if (seed !== undefined) registerForkSeed(id, seed)
-      let messageId: string
-      try {
-        ;({ messageId } = await this.deps.subagents.startActivation({
-          provider: seed === undefined ? 'spawn' : FORK_FROM_PROVIDER, label: args.name, childId: id, signal: new AbortController().signal, delivery: 'parent',
-          request: {
-            parent: main, prompt: [{ type: 'text', text: first }],
-            ...(cwd === undefined ? {} : { cwd }),
-            ...(preset === undefined ? {} : { agentPreset: preset }),
-            ...(selection === undefined ? {} : { agentOptions: selectionOptions(selection) }),
-          },
-        }))
-      } finally {
-        forgetForkSeed(id)
-      }
+      const { messageId } = await this.port.startWorker(main, { childId: id, label: args.name, text: first, seed, cwd, preset, model: selection })
       if (ledger.members.get(id)?.state === 'queued') this.record(main, s => appendAgent(s, { action: 'started', id, name: nameNow() }))
       if (requestId !== undefined) this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: id, text: task!, messageId }))
       // A worker split from another starts with that one's title; give it its own.
@@ -897,14 +811,14 @@ export class Scheduler {
     // A running owner learns its new identity at its next step; an idle one is not woken for it:
     // its system prompt and its next request carry the identity (see requestText).
     let ownerNotified = false
-    if (this.deps.agents.get(SessionId(owner.id))?.status === 'running') {
+    if (statusOf(this.deps.agents, owner.id) === 'running') {
       try {
-        await this.deps.subagents.sendMessage(main, SessionId(owner.id), [{ type: 'text', text: [
+        await this.port.send(main, owner.id, [
           '[note from the scheduler, not a request: you were renamed]',
           `You are now worker "${args.ownerName}" (formerly "${formerName}") in area "${area}".`,
           `Your role: ${args.ownerRole}`,
           `A new worker "${args.name}": ${args.role} was split off for a new task in this area; leave that to it and carry on with your current work.`,
-        ].join('\n') }], { signal: new AbortController().signal })
+        ].join('\n'))
         ownerNotified = true
       } catch (error) {
         this.deps.log?.(`telling ${args.ownerName} about the split failed`, error)
@@ -927,7 +841,7 @@ export class Scheduler {
     if (this.deps.renameSession === undefined) return
     const short = role.trim().replace(/\s+/gu, ' ')
     try {
-      this.deps.renameSession(SessionId(id), (short === '' ? name : `${name} · ${short}`).slice(0, 60))
+      this.deps.renameSession(id, (short === '' ? name : `${name} · ${short}`).slice(0, 60))
     } catch (error) {
       this.deps.log?.(`renaming the session of ${name} failed`, error)
     }
@@ -994,14 +908,14 @@ export class Scheduler {
     if (gone(target)) throw new Error(`"${to}" is ${target.state}`)
     // A running target takes the message at its next step boundary, inside the round it is in;
     // say so, since `queued` alone (waiting for a slot) reads as "it is being handled now".
-    const busy = this.deps.agents.get(SessionId(target.id))?.status === 'running'
+    const busy = statusOf(this.deps.agents, target.id) === 'running'
     const id = ledger.nextRequestId()
     const from = ledger.nameOf(caller.id)
     this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text }))
     let failure = ''
     // A target still waiting to start is ahead in the queue, so this delivery waits behind it.
     const outcome = await this.run(main, target.id, id, () => this.delivering(main, target.id, async () => {
-      const messageId = await this.deps.subagents.sendMessage(main, SessionId(target.id), [{ type: 'text', text: this.requestText(id, from, text, ledger.members.get(target.id)) }], { signal: new AbortController().signal })
+      const messageId = await this.port.send(main, target.id, this.requestText(id, from, text, ledger.members.get(target.id)))
       this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text, messageId }))
     }), {
       failed: error => {
@@ -1033,7 +947,7 @@ export class Scheduler {
     const main = this.mainOf(caller)
     const target = this.lookup(this.ledgerOf(main), name)
     this.stopping.add(target.id)
-    this.deps.subagents.interrupt(SessionId(target.id), { kind: 'ancestor', agent: main })
+    this.port.interrupt(main, target.id)
   }
 
   /**
@@ -1057,7 +971,7 @@ export class Scheduler {
     this.stopping.add(target.id)
     const forLead: string[] = []
     if (!neverStarted) {
-      await this.deps.subagents.drainChildren(main, [SessionId(target.id)])
+      await this.port.drain(main, [target.id])
       // Rounds it completed still answer; the one it was cut off in fails its requests.
       forLead.push(...await this.settleOnce(main, target.id))
     }
@@ -1081,7 +995,7 @@ export class Scheduler {
    */
   async archiveConcluded(main: Agent): Promise<string[]> {
     const ledger = this.ledgerOf(main)
-    const done = ledger.state.members.filter(m => m.kind === 'fork' && m.state === 'done' && ledger.openTo(m.id).length === 0 && this.deps.agents.get(SessionId(m.id))?.status !== 'running')
+    const done = ledger.state.members.filter(m => m.kind === 'fork' && m.state === 'done' && ledger.openTo(m.id).length === 0 && statusOf(this.deps.agents, m.id) !== 'running')
     for (const fork of done) await this.archive(main, fork.id)
     return done.map(m => m.name)
   }
@@ -1159,7 +1073,7 @@ export class Scheduler {
       // Only a fork still routing, something still queued, or someone owing an answer can be cut off.
       const routing = member.kind === 'fork' && member.state === 'started'
       if (!routing && member.state !== 'queued' && ledger.openTo(member.id).length === 0) continue
-      if (this.deps.agents.get(SessionId(member.id)) !== undefined) continue
+      if (this.live(member.id) !== undefined) continue
       const previous = this.settling.get(member.id) ?? Promise.resolve()
       const next = previous.catch(() => undefined).then(() => this.recoverMember(main, member.id, policy, openAtResume))
       this.settling.set(member.id, next)
@@ -1250,7 +1164,7 @@ export class Scheduler {
     if (existing !== undefined) { repoint(existing); return }
     let failure = ''
     const outcome = await this.run(main, member.id, request.id, () => this.delivering(main, member.id, async () => {
-      const messageId = await this.deps.subagents.sendMessage(main, SessionId(member.id), [{ type: 'text', text: resumeText(request.id, attempt, max) }], { signal: new AbortController().signal })
+      const messageId = await this.port.send(main, member.id, resumeText(request.id, attempt, max))
       repoint(messageId)
     }), {
       failed: error => {
@@ -1282,8 +1196,8 @@ export class Scheduler {
         changed = true
         continue
       }
-      const settled = message.source.kind === 'subagent-settled' ? message.source : undefined
-      const member = settled === undefined ? undefined : this.ledgerOf(main).members.get(settled.senderSessionId)
+      const settled = settledSender(message)
+      const member = settled === undefined ? undefined : this.ledgerOf(main).members.get(settled)
       if (settled === undefined || member === undefined) {
         kept.push(message)
         continue
@@ -1294,10 +1208,10 @@ export class Scheduler {
       // The runtime's row label says the child "will do no further work"; ours names what arrived.
       const concluded = forLead.some(text => text.startsWith('The user said: '))
       const replies = forLead.filter(text => !text.startsWith('[report from ')).length
-      const summary = boundContextSummary(concluded ? `${member.name} concluded`
+      const summary = concluded ? `${member.name} concluded`
         : replies === 0 ? `${member.name} reported`
-        : `${member.name} answered ${replies === 1 ? 'a request' : `${replies} requests`}`)
-      kept.push({ ...message, source: { ...settled, summary }, content: [{ type: 'text', text: forLead.join('\n\n') }] })
+        : `${member.name} answered ${replies === 1 ? 'a request' : `${replies} requests`}`
+      kept.push(rewriteSettled(message, summary, forLead.join('\n\n')))
     }
     return changed ? kept : undefined
   }
@@ -1381,7 +1295,7 @@ export class Scheduler {
     const fork = ledger.members.get(forkId)
     if (fork?.kind !== 'fork' || fork.state !== 'done') return
     try {
-      await this.deps.subagents.drainChildren(main, [SessionId(forkId)])
+      await this.port.drain(main, [forkId])
     } catch (error) {
       this.deps.log?.(`releasing ${fork.name} failed`, error)
     }
@@ -1410,7 +1324,7 @@ export class Scheduler {
 
   /** Give the lead a message outside a step it is admitting: queued for its next turn. */
   private toLead(main: Agent, text: string, sender: string): void {
-    main.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'agent-message', form: 'relay', senderSessionId: SessionId(sender) } }))
+    toLead(main, text, sender)
   }
 }
 
@@ -1447,7 +1361,7 @@ export async function preStep(
  * @returns whether the step now holds something besides context.
  */
 async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMessage[]): Promise<boolean> {
-  const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn].filter(message => agent.inbox.remove(message.id))
+  const pending = pendingOf(agent).filter(message => removePending(agent, message.id))
   if (pending.length === 0) return false
   messages.push(...(await scheduler.admit(agent, pending) ?? pending))
   return !messages.every(isContextOnly)
