@@ -21,6 +21,8 @@ const ROSTER = 'agentScheduler'
 const AGENTS_ID = 'dsh-agent-scheduler/agents'
 /** Page kind, opened by name because the type has no resource patterns. */
 const AGENTS_KIND = 'agent-scheduler-agents'
+/** Archived members listed before the roster folds the rest behind one button. */
+const ARCHIVED_ROWS = 8
 
 export const name = 'dsh-agent-scheduler'
 export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace', 'remote', 'remote.commands', 'remote.session']
@@ -208,21 +210,24 @@ const STYLE = `
 
 /* Agents page: its own narrow column at the left of the right sidebar, a list of agents. */
 .sch-roster{display:flex;flex-direction:column;height:100%;overflow:auto;padding:0 0 12px;font-size:13px}
-.sch-roster-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 12px 6px 18px}
+.sch-roster-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:12px 12px 10px 18px;border-bottom:1px solid var(--dsw-alias-border-l1,transparent)}
 .sch-roster-title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600;line-height:20px}
 .sch-roster-summary{margin-top:2px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-roster-collapse{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;background:none;padding:0;border-radius:8px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-collapse:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-roster-section{display:flex;justify-content:space-between;gap:8px;padding:14px 18px 6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-roster-section{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:12px 18px 4px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);letter-spacing:.02em}
 .sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(0,1fr) auto;align-items:center;column-gap:10px;margin:1px 8px;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary);transition:background .12s}
 .sch-roster-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-row[data-selected=yes]{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}
 .sch-roster-row[data-row=archived] .sch-roster-name{color:var(--dsw-alias-label-tertiary)}
+.sch-roster-row[data-compact=yes]{padding:3px 10px}
+.sch-roster-row[data-compact=yes] .sch-roster-name{font-weight:400}
+.sch-roster-row[data-compact=yes] .sch-roster-main{flex-direction:row;align-items:center}
 .sch-roster-main{min-width:0;display:flex;flex-direction:column;gap:2px}
 .sch-roster-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:18px}
-.sch-roster-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-roster-end{display:flex;align-items:center;gap:2px}
-.sch-roster-state{color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
+.sch-roster-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);line-height:16px}
+.sch-roster-end{display:flex;align-items:center;gap:6px}
+.sch-roster-state{min-width:3.2em;text-align:right;color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-roster-chev{color:var(--dsw-alias-label-caption);opacity:0;transition:opacity .12s}
 .sch-roster-row:hover .sch-roster-chev,.sch-roster-row[data-selected=yes] .sch-roster-chev{opacity:1}
 .sch-roster-item{position:relative}
@@ -232,6 +237,8 @@ const STYLE = `
 .sch-roster-item:hover .sch-roster-archive,.sch-roster-archive:focus-visible{display:inline-flex}
 .sch-roster-item:hover .sch-roster-end{visibility:hidden}
 .sch-roster-archive:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
+.sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-foldrow{display:flex;align-items:center;justify-content:space-between;margin:6px 8px 0}
 .sch-roster-foldrow .sch-roster-fold{margin:0}
 .sch-roster-clear{border:0;background:none;padding:4px 8px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
@@ -662,17 +669,28 @@ export function openLabel(n: number, state: RowState): string {
   return state === 'running' ? `${n} 个请求处理中` : `${n} 个请求待回答`
 }
 
+/** One line of readable text: runs of whitespace become one space, ends trimmed. */
+function flat(text: string): string {
+  return text.replace(/\s+/gu, ' ').trim()
+}
+
 /**
- * The second line of a row: what a fork was asked, or a worker's directory and duty.
+ * The second line of a row: why it failed, what it is working on right now, or what it was asked.
+ *
+ * A running agent's own requests say more than the message that created it, so the oldest still
+ * unanswered one leads; a fork with nothing open shows the ask, a worker its directory and duty.
  * @param member - a roster row.
- * @returns the line.
+ * @param pending - the member's unanswered requests, oldest first.
+ * @returns the line, or '' when there is nothing worth saying.
  */
-export function subline(member: Member): string {
+export function subline(member: Member, pending: readonly { readonly id: string; readonly text: string }[] = []): string {
   const failure = member.state === 'failed' ? member.detail : undefined
-  if (member.kind === 'fork') return failure ?? member.text
+  if (failure !== undefined) return flat(failure)
+  const oldest = pending[0]
+  if (member.kind === 'fork') return oldest === undefined ? flat(member.text) : `${oldest.id}：${flat(oldest.text)}`
   const dir = member.cwd === undefined ? undefined : member.cwd.replace(/\/+$/u, '').split('/').pop()
-  const duty = failure ?? member.role ?? member.text
-  return [dir, duty].filter(part => part !== undefined && part !== '').join(' · ')
+  const duty = oldest === undefined ? member.role ?? member.text : `${oldest.id}：${flat(oldest.text)}`
+  return [dir, duty === undefined ? undefined : flat(duty)].filter(part => part !== undefined && part !== '').join(' · ')
 }
 
 export type { CatalogGroup, CatalogReasoning } from './model-menu.js'
@@ -890,6 +908,7 @@ export function createAgentsPage(ctx: {
     const rows = roster?.members ?? []
     const [picked, setPicked] = useState<string | undefined>(undefined)
     const [showArchived, setShowArchived] = useState(false)
+    const [showAllArchived, setShowAllArchived] = useState(false)
     const [showDone, setShowDone] = useState(false)
     const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
     const [failure, setFailure] = useState<string | null>(null)
@@ -954,13 +973,17 @@ export function createAgentsPage(ctx: {
       const state = rowStateOf(member, statuses)
       const pendingRequests = openTo(member.id)
       const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
+      // An archived member is history: one line, no subtitle. A dozen of them must not push the
+      // live work off the page.
+      const compact = member.state === 'archived'
+      const second = compact ? '' : subline(member, pendingRequests)
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
-        <button type="button" className="sch-roster-row" data-row={state} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
+        <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
           <span className="sch-dot" data-row={state} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
-            <span className="sch-roster-sub">{subline(member)}</span>
+            {second === '' ? null : <span className="sch-roster-sub">{second}</span>}
           </span>
           <span className="sch-roster-end">
             {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => `${r.id}：${r.text.replace(/\s+/gu, ' ').slice(0, 80)}`).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
@@ -1018,7 +1041,12 @@ export function createAgentsPage(ctx: {
                   <button type="button" className="sch-roster-fold" aria-expanded={showArchived} onClick={() => { setShowArchived(v => !v) }}>
                     {ICON.chevron}已归档 {archived.length}
                   </button>
-                  {showArchived ? archived.map(member => row(member)) : null}
+                  {showArchived ? (showAllArchived ? archived : archived.slice(0, ARCHIVED_ROWS)).map(member => row(member)) : null}
+                  {showArchived && archived.length > ARCHIVED_ROWS ? (
+                    <button type="button" className="sch-roster-more" aria-expanded={showAllArchived} onClick={() => { setShowAllArchived(v => !v) }}>
+                      {showAllArchived ? '收起' : `再显示 ${archived.length - ARCHIVED_ROWS} 个`}
+                    </button>
+                  ) : null}
                 </>
               )}
             </>
