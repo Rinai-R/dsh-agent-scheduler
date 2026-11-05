@@ -208,6 +208,12 @@ describe('roster subline', () => {
     expect(subline(fork)).toBe('补充 架构 说明')
     expect(subline(fork, [{ id: 'r-3', text: '改\n方向' }, { id: 'r-4', text: 'x' }])).toBe('r-3：改 方向')
   })
+  it('a worker shows its directory, then its oldest open request or else its duty', () => {
+    const worker = { id: 'w', name: 'w', kind: 'worker', state: 'running', text: 'first task', role: 'docs\nowner', cwd: '/x/repo/' } as never
+    expect(subline(worker)).toBe('repo · docs owner')
+    expect(subline(worker, [{ id: 'r-2', text: 'fix\nit' }])).toBe('repo · r-2：fix it')
+    expect(subline({ ...(worker as object), cwd: undefined, role: undefined } as never)).toBe('first task')
+  })
   it('says why a member failed before anything else', () => {
     expect(subline({ ...(fork as object), state: 'failed', detail: 'quota\nexhausted' } as never, [{ id: 'r-1', text: 'x' }])).toBe('quota exhausted')
   })
