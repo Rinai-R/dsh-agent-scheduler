@@ -9,6 +9,7 @@ import { memo, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
+import { reviewOf } from '../review.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
 const FORK_STATE = 'plugin:dsh-agent-scheduler/fork-state'
@@ -34,7 +35,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string; readonly pickedModel?: ForkModel }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
@@ -176,6 +177,14 @@ const STYLE = `
 :is(.sch-input,.sch-roster,.sch-mode-group) [data-state=failed],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=failed]{--sch-dot:var(--dsw-alias-state-error-primary);--sch-tone:var(--dsw-alias-state-error-primary)}
 :is(.sch-input,.sch-roster,.sch-mode-group) [data-row=waiting]{--sch-dot:var(--dsw-alias-state-warn-primary);--sch-tone:var(--dsw-alias-state-warn-primary)}
 .sch-dot[data-row=running]{box-shadow:0 0 0 0 var(--sch-dot);animation:sch-pulse 1.8s ease-out infinite}
+/* Review marks: a report the user has not opened yet (green, red), or a prompt waiting for them
+   (yellow). Solid, larger, with a halo; opening the chat returns the dot to its state colour. */
+.sch-dot[data-review]{justify-self:center;width:9px;height:9px;animation:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--sch-dot) 24%,transparent)}
+.sch-dot[data-review=reported],.sch-review-n[data-review=reported]{--sch-dot:var(--dsw-alias-state-success-primary)}
+.sch-dot[data-review=failed],.sch-review-n[data-review=failed]{--sch-dot:var(--dsw-alias-state-error-primary)}
+.sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
+.sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:var(--dsw-alias-label-on-color,#fff);font-size:11px;font-weight:600;line-height:16px}
+.sch-roster-section-title{display:inline-flex;align-items:center;gap:6px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 /* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
 [data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
@@ -293,6 +302,53 @@ export function rowStateOf(member: Member, statuses: Statuses | undefined): RowS
   const status = statuses?.get(member.id)
   if (status?.pendingInteraction !== undefined) return 'waiting'
   return status?.running === true ? 'running' : 'idle'
+}
+
+/**
+ * The command line that marks a member's latest report read.
+ * @param member - the member's Session id.
+ * @returns e.g. `/agents seen <id>`.
+ */
+export const seenLine = (member: string): string => `/agents seen ${member}`
+
+/** A member's review mark (see src/review.ts). */
+export type ReviewMark = 'approval' | 'failed' | 'reported'
+const REVIEW_RANK: Record<ReviewMark, number> = { approval: 3, failed: 2, reported: 1 }
+const REVIEW_TITLE: Record<ReviewMark, string> = { approval: '等你处理：有权限审批或提问待回应', failed: '有失败的上报还没看', reported: '有新的上报还没看' }
+
+/**
+ * One member's review mark: yellow while a prompt waits for the user, else red or green for a
+ * report the user has not opened yet.
+ * @param member - a roster row.
+ * @param statuses - the root Session-status map.
+ * @returns the mark, or undefined when there is nothing to look at.
+ */
+export function reviewMarkOf(member: Member, statuses: Statuses | undefined): ReviewMark | undefined {
+  return reviewOf(member, statuses?.get(member.id)?.pendingInteraction !== undefined)
+}
+
+/**
+ * How many members carry a mark, and the most urgent one.
+ * @param members - roster rows.
+ * @param statuses - the root Session-status map.
+ * @param reportsOnly - count only unread reports (the composer already says 「N 等你」).
+ * @returns the count and the tone of the badge.
+ */
+export function reviewSummary(members: readonly Member[], statuses: Statuses | undefined, reportsOnly = false): { n: number; tone: ReviewMark | undefined } {
+  let n = 0
+  let tone: ReviewMark | undefined
+  for (const member of members) {
+    const mark = reportsOnly ? reviewOf(member) : reviewMarkOf(member, statuses)
+    if (mark === undefined) continue
+    n += 1
+    if (tone === undefined || REVIEW_RANK[mark] > REVIEW_RANK[tone]) tone = mark
+  }
+  return { n, tone }
+}
+
+function ReviewBadge({ summary }: { summary: { n: number; tone: ReviewMark | undefined } }) {
+  if (summary.n === 0 || summary.tone === undefined) return null
+  return <span className="sch-review-n" data-review={summary.tone} title={`${summary.n} 个待查看`}>{summary.n}</span>
 }
 
 /** The parts of `ctx.sidebarRightTabs` used to keep agent chats mounted. */
@@ -671,6 +727,8 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
     const on = roster?.enabled === true
     const members = (roster?.members ?? []).filter(m => m.state !== 'archived')
     const label = agentsLabel(members, statuses)
+    // A fork archives itself right after handing back, so unread reports count over every member.
+    const unreadReports = reviewSummary(roster?.members ?? [], statuses, true)
     const switchTo = (next: boolean) => {
       setBusy(true)
       setError(null)
@@ -696,11 +754,12 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
               </button>
             )}
         </span>
-        {members.length === 0 && !on ? null : (
+        {members.length === 0 && !on && unreadReports.n === 0 ? null : (
           <button type="button" className="sch-agents-btn" aria-label="打开 Agents" title="打开 Agents：查看、打开或归档分身和 worker，设置分身模型" onClick={deps.openAgents}>
             {label.tone === 'idle' ? null : <span className="sch-dot" data-row={label.tone} />}
             Agents
             {label.text === '' ? (members.length === 0 ? null : <span className="sch-agents-n">{members.length}</span>) : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
+            <ReviewBadge summary={unreadReports} />
           </button>
         )}
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
@@ -963,6 +1022,8 @@ export function createAgentsPage(ctx: {
       has(sessionId, 'worker').then(ok => { if (alive) setCanPickWorkerModel(ok) }, () => undefined)
       return () => { alive = false }
     }, [sessionId])
+    // A host not restarted since the update refuses `seen`; the mark then stays until it is.
+    const markSeen = (session: string, member: string) => { run(session, seenLine(member)).catch(() => undefined) }
     const archive = (target: string) => {
       if (props.sessionId === undefined) return
       setPending(p => new Set([...p, target]))
@@ -979,6 +1040,8 @@ export function createAgentsPage(ctx: {
     const open = (member: Member) => {
       if (props.sessionId === undefined || tab === undefined) return
       setPicked(member.id)
+      // Opening the chat reads its latest report; a prompt waiting stays marked until answered.
+      if (reviewOf(member) !== undefined) markSeen(props.sessionId, member.id)
       const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
       tab.tab.actions.openResource(subagentAddress(ctx, props.sessionId, member.id), placement)
       if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
@@ -991,13 +1054,16 @@ export function createAgentsPage(ctx: {
       else tab?.tab.actions.close()
     }
     const live = rows.filter(m => m.state !== 'archived')
+    // A member with something to look at stays in its section until the user opens it, even a
+    // fork that archived itself right after handing back: the folds hide only what was read.
+    const marked = (m: Member) => reviewMarkOf(m, statuses) !== undefined
     // A fork that handed back its conclusion and is not working again is finished work: folded
     // away under 「已交回」, where one click archives it or all of them.
     const finished = (m: Member) => m.kind === 'fork' && m.state === 'done' && statuses?.get(m.id)?.running !== true && statuses?.get(m.id)?.pendingInteraction === undefined
-    const done = live.filter(finished)
-    const forks = live.filter(m => m.kind === 'fork' && !finished(m))
-    const workers = live.filter(m => m.kind === 'worker')
-    const archived = rows.filter(m => m.state === 'archived')
+    const done = live.filter(m => finished(m) && !marked(m))
+    const forks = rows.filter(m => m.kind === 'fork' && (m.state === 'archived' || finished(m) ? marked(m) : true))
+    const workers = rows.filter(m => m.kind === 'worker' && (m.state !== 'archived' || marked(m)))
+    const archived = rows.filter(m => m.state === 'archived' && !marked(m))
     const counts = countsOf(rows, statuses)
     // The open chat's row is always visible: opening an archived or handed-back fork (say from
     // its message's 「查看」) unfolds its group once, so the selection is not hidden in a fold.
@@ -1011,10 +1077,11 @@ export function createAgentsPage(ctx: {
       const state = rowStateOf(member, statuses)
       const pendingRequests = openTo(member.id)
       const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
+      const review = reviewMarkOf(member, statuses)
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'}>
         <button type="button" className="sch-roster-row" data-row={state} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={member.id}>
-          <span className="sch-dot" data-row={state} />
+          <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: REVIEW_TITLE[review] })} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
             <span className="sch-roster-sub">{subline(member)}</span>
@@ -1034,7 +1101,7 @@ export function createAgentsPage(ctx: {
       const busy = members.filter(m => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' }).length
       return (
         <>
-          <div className="sch-roster-section"><span>{title}</span><span>{busy === 0 ? members.length : `${busy} / ${members.length} 在忙`}</span></div>
+          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses)} /></span><span>{busy === 0 ? members.length : `${busy} / ${members.length} 在忙`}</span></div>
           {members.map(member => row(member))}
         </>
       )
@@ -1098,6 +1165,9 @@ export function apply(ctx: any): void {
   }, 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const open = (parent: string, child: string) => {
+    // Opening a member from its status pill in the main chat reads its latest report too.
+    const member = (rosterFace(parent).getSnapshot() as Roster | undefined)?.members.find(m => m.id === child)
+    if (member !== undefined && reviewOf(member) !== undefined) run(parent, seenLine(child)).catch(() => undefined)
     const address = { parentSessionId: parent, childSessionId: child, mode: 'continuable' }
     const face = sidebar()
     if (face?.openResource === undefined) { ctx.uiWorkspace?.openSession(address); return }

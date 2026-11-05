@@ -27,6 +27,11 @@ the lead is never blocked by an input.
   lead, so nobody waits forever.
 - **Right sidebar.** An *Agents* page lists forks and workers with live state, opens any of them as
   an embedded conversation (split view) beside the roster, which keeps a column of its own.
+- **Unread reports.** A member's report (an answer or failure, a fork's conclusion, a failed
+  start) marks its dot until you open its chat: green for a result, red for a failure, yellow while
+  a permission prompt or question waits for you. Opening it (or its pill in the main chat) records
+  `seen` (`/agents seen <name>`), so a restart does not bring the mark back. Section titles and the
+  composer's Agents button count the unread ones.
 - **Switch.** 「调度」 in the composer's mode row (next to access mode and Plan) turns scheduling on
   or off at any time, also `/schedule on|off`. While on it is a blue chip with live counts: click
   it for the Agents page, click its glyph (× on hover) to turn it off.

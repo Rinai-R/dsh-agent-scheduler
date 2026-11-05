@@ -123,17 +123,24 @@ export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'
   return { kind: 'success', text: on ? 'Scheduling is on: each later message goes to a fork.' : 'Scheduling is off. Existing forks and workers keep running.' }
 }
 
+const AGENTS_USAGE = 'Usage: /agents archive <name> | /agents archive done | /agents seen <name>'
+
 /**
- * Execute `/agents archive <name>` or `/agents archive done`.
+ * Execute `/agents archive <name>`, `/agents archive done`, or `/agents seen <name>` (the Agents
+ * page sends it when the user opens a member's chat: its latest report is read).
  * @param scheduler - the scheduler of this preset.
  * @param invocation - the parsed command.
  * @returns the command's outcome.
  */
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded'>, invocation: CommandInvocation): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'markSeen'>, invocation: CommandInvocation): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/agents only applies in the main session.' }
   const [verb, target, ...rest] = invocation.rawInput.trim().split(/\s+/u)
-  if (verb !== 'archive' || target === undefined || rest.length > 0) return { kind: 'error', text: 'Usage: /agents archive <name> | /agents archive done' }
+  if ((verb !== 'archive' && verb !== 'seen') || target === undefined || rest.length > 0) return { kind: 'error', text: AGENTS_USAGE }
   try {
+    if (verb === 'seen') {
+      const marked = scheduler.markSeen(invocation.agent, target)
+      return { kind: 'success', text: marked ? `Marked ${target} as read.` : `Nothing new from ${target}.` }
+    }
     if (target === 'done') {
       const names = await scheduler.archiveConcluded(invocation.agent)
       return { kind: 'success', text: names.length === 0 ? 'No concluded fork to archive.' : `Archived ${names.join(', ')}.` }
@@ -211,8 +218,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
     name: 'agents',
-    description: 'Archive a fork or worker of this session, or every fork that has concluded',
-    input: { hint: 'archive <name> | archive done' },
+    description: 'Archive a fork or worker of this session, or every fork that has concluded; mark one\'s report read',
+    input: { hint: 'archive <name> | archive done | seen <name>' },
     handler: (invocation) => runAgentsCommand(scheduler, invocation),
   })
   // Same check as the runtime's own selector: the route must resolve and the effort must be one
