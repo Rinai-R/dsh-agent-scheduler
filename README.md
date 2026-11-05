@@ -80,6 +80,10 @@ start with the switch on.
 | `/worker model <provider>/<model> [effort]` | Model for later workers when the lead names none (default: the runtime default). |
 | `/worker model default` | Back to the default. |
 | `/role [text]` | Show or set the lead's role. |
+| `/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role>` | Create a worker you name yourself, with no task; talk to it in its chat, or the lead sends it requests. The Agents page's **+** does the same. |
+| `/agents rename <name> <new-name>` | Rename a worker (not a fork, not an archived one). The old name stays reserved and still reaches it. The pencil on a worker row does the same. |
+| `/agents archive <name>` | Archive a fork or worker; its session is kept and its name is never reused. |
+| `/agents archive done` | Archive every fork that has handed back and owes no answer. |
 
 ## Configuration
 

@@ -61,6 +61,10 @@ dsh plugin --profile web add dsh-agent-scheduler   # 装进指定 profile
 | `/worker model <provider>/<model> [effort]` | 之后新建的 worker 在 lead 没指定模型时用这个模型（默认用运行时默认模型）。 |
 | `/worker model default` | 回到默认。 |
 | `/role [text]` | 查看或设置 lead 的 role。 |
+| `/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role>` | 自己建一个起好名字的 worker，不带任务；在它的对话里直接聊，或由 lead 派活。Agents 页右上角的 **+** 等同。 |
+| `/agents rename <name> <new-name>` | 给 worker 改名（分身、已归档的不能改）。旧名字保留、不再给别人用，用旧名字仍能找到它。worker 行上的铅笔按钮等同。 |
+| `/agents archive <name>` | 归档分身或 worker；对话保留，名字不复用。 |
+| `/agents archive done` | 归档所有已交回、没有待回答请求的分身。 |
 
 ## 配置
 
