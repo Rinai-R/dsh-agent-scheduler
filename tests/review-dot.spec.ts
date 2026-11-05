@@ -122,6 +122,12 @@ describe('/agents seen', () => {
     expect(lead.session.snapshotEvents().length).toBe(count)
     expect(await run('seen nobody')).toMatchObject({ kind: 'error' })
     expect(await run('seen')).toMatchObject({ kind: 'error', text: expect.stringContaining('seen <name>') })
+    // `seen all` reads every unread report at once (an old log has them all unread).
+    appendAgent(lead.session, { action: 'failed', id: 'w8', name: 'ops', detail: 'x' })
+    appendAgent(lead.session, { action: 'failed', id: 'w7', name: 'qa', detail: 'y' })
+    expect(await run('seen all')).toMatchObject({ kind: 'success', text: 'Marked every report as read.' })
+    expect(scheduler.ledgerOf(lead).state.members.filter(m => reviewOf(m) !== undefined)).toHaveLength(0)
+    expect(await run('seen all')).toMatchObject({ kind: 'success', text: 'Nothing unread.' })
     // The host ledger and the client projection agree.
     expect(scheduler.ledgerOf(lead).state).toEqual(rosterOf(lead))
   })

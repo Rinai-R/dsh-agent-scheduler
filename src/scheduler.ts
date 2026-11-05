@@ -882,11 +882,17 @@ export class Scheduler {
    * Mark a member's latest report as read: the user opened its chat. Recorded only when there is
    * an unread report, so opening a chat again writes nothing.
    * @param caller - the agent asking.
-   * @param name - the member, by name or Session id.
+   * @param name - the member, by name or Session id, or `all` for every member with an unread report.
    * @returns whether a report was marked read.
    */
   markSeen(caller: Agent, name: string): boolean {
     const main = this.mainOf(caller)
+    if (name === 'all') {
+      // A log from before review marks existed has every past report unread: one click reads them.
+      const marked = this.ledgerOf(main).state.members.filter(m => unread(m))
+      for (const m of marked) this.record(main, s => appendSeen(s, { agent: m.id }))
+      return marked.length > 0
+    }
     const target = this.ledgerOf(main).find(name)
     if (target === undefined) throw new Error(`no agent named "${name}"`)
     if (!unread(target)) return false

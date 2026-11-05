@@ -124,7 +124,7 @@ export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'
   return { kind: 'success', text: on ? 'Scheduling is on: each later message goes to a fork.' : 'Scheduling is off. Existing forks and workers keep running.' }
 }
 
-const AGENTS_USAGE = 'Usage: /agents archive <name> | /agents archive done | /agents seen <name>'
+const AGENTS_USAGE = 'Usage: /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all'
 
 /**
  * Execute `/agents archive <name>`, `/agents archive done`, or `/agents seen <name>` (the Agents
@@ -140,6 +140,7 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
   try {
     if (verb === 'seen') {
       const marked = scheduler.markSeen(invocation.agent, target)
+      if (target === 'all') return { kind: 'success', text: marked ? 'Marked every report as read.' : 'Nothing unread.' }
       return { kind: 'success', text: marked ? `Marked ${target} as read.` : `Nothing new from ${target}.` }
     }
     if (target === 'done') {
@@ -222,7 +223,7 @@ export function apply(ctx: Context, config: Config): void {
     definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
     name: 'agents',
     description: 'Archive a fork or worker of this session, or every fork that has concluded; mark one\'s report read',
-    input: { hint: 'archive <name> | archive done | seen <name>' },
+    input: { hint: 'archive <name> | archive done | seen <name> | seen all' },
     handler: (invocation) => runAgentsCommand(scheduler, invocation),
   })
   // Same check as the runtime's own selector: the route must resolve and the effort must be one

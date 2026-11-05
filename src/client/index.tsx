@@ -187,6 +187,7 @@ const STYLE = `
 .sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
 .sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:var(--dsw-alias-label-on-color,#fff);font-size:11px;font-weight:600;line-height:16px}
 .sch-roster-section-title{display:inline-flex;align-items:center;gap:6px}
+.sch-roster-head-end{flex:none;display:flex;align-items:center;gap:2px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 /* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
 [data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
@@ -1138,7 +1139,10 @@ export function createAgentsPage(ctx: {
             <div className="sch-roster-title">Agents</div>
             <div className="sch-roster-summary">{live.length === 0 ? '还没有 agent' : [`${live.length} 个`, ...summaryParts(counts, live.length)].join(' · ')}</div>
           </div>
-          <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
+          <span className="sch-roster-head-end">
+            {props.sessionId === undefined || reviewSummary(rows, statuses, true).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title="把所有未读上报标为已读（/agents seen all）；等你处理的黄点不受影响" onClick={() => { markSeen(props.sessionId!, 'all') }}>全部已读</button>}
+            <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
+          </span>
         </div>
         {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0

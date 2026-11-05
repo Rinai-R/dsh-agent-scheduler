@@ -108,7 +108,8 @@ menu at the top sets the `/worker model` default.
 **Unread reports.** After a member reports (an answer or failure, a fork's conclusion, a failed
 start) its dot turns solid with a halo until you open it (or its pill in the main chat): green for
 a result, red for a failure; yellow while it waits for you on a permission prompt or question, read
-or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not light it again.
+or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not light it again;
+「全部已读」 at the top (`/agents seen all`) reads them all at once.
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 
@@ -137,6 +138,7 @@ All of these run in the main session.
 | `/agents archive <name>` | Archive a fork or worker; requests it still owes fail and the lead is told. |
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
+| `/agents seen all` | Mark every unread report read (the Agents page's 「全部已读」). A session from before review marks shows its past reports unread once. |
 | `/worker` | Show the model later workers start with. |
 | `/worker model <provider>/<model> [effort]` | Set the default model for later workers. |
 | `/worker model default` | Back to the runtime default. |
