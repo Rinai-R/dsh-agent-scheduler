@@ -1,13 +1,15 @@
 /** P1: the input rule and forks, over a real composition. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { gate, setup, teardown, text } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
 import { body, forksOf, install, records, until, user } from './support/scheduler.js'
-import { appendForkModel, FORK_STATE_RECORD, forkModelOf, INPUT_RECORD } from '../src/records.js'
+import { appendForkModel, FORK_STATE_RECORD, INPUT_RECORD, workerModelOf } from '../src/records.js'
 import { admitHidden, FORK_NOTICE, HANDOFF_SOURCE, isMainSession, preStep, Scheduler } from '../src/scheduler.js'
-import { Config, parseForkCommand, runForkCommand } from '../src/rule-plugin.js'
+import * as RulePlugin from '../src/rule-plugin.js'
+import { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import { Config, FORK_MODEL_RETIRED, parseForkCommand, runForkCommand, runWorkerModelCommand } from '../src/rule-plugin.js'
 
 afterEach(teardown)
 
@@ -188,24 +190,19 @@ describe('lead wakes', () => {
 })
 
 describe('fork model', () => {
-  it('uses the lead by default, then plugin config, then the session override', async () => {
-    const { ctx, lead, adapter } = await setup(o => textResponse(`M ${String(o.model)}`))
-    install(ctx, { configuredModel: { provider: 'mock-b', model: 'configured' } })
+  it('a fork always runs on the lead model: a config or an older /fork model record has no effect', async () => {
+    const { ctx, lead, adapter } = await setup(() => textResponse('X'))
+    // A retired config key and a record written by an earlier version: both ignored.
+    install(ctx, { configuredModel: { provider: 'mock-b', model: 'configured' } } as never)
+    appendForkModel(lead.session, { provider: 'mock-b', model: 'override', reasoningEffort: 'high' })
     lead.followup(user('a'))
     await until(lead, 'Its conclusion')
-    appendForkModel(lead.session, { provider: 'mock-b', model: 'override' })
-    lead.followup(user('b'))
-    await until(lead, 'Its conclusion', 2)
-    appendForkModel(lead.session, null)
-    lead.followup(user('c'))
-    await until(lead, 'Its conclusion', 3)
-    const models = forksOf(lead).map(id => adapter.requests.find(r => r.sessionId === id)!.model)
-    expect(models).toEqual(['configured', 'override', 'configured'])
-    expect(forkModelOf(lead.session.snapshotEvents())).toBeNull()
-    expect(adapter.requests.find(r => r.sessionId === 'lead')!.model).toBe('lead-model')
+    const fork = adapter.requests.find(r => r.sessionId === forksOf(lead)[0])!
+    expect(fork.model).toBe('lead-model')
+    expect(fork.reasoningEffort).toBeUndefined()
   })
 
-  it('without configuration a fork keeps the lead model, system, and message prefix', async () => {
+  it('a fork keeps the lead model, system, and message prefix', async () => {
     const { ctx, lead, adapter } = await setup(() => textResponse('X'))
     install(ctx)
     lead.followup(user('a'))
@@ -220,23 +217,92 @@ describe('fork model', () => {
 
   it('accepts an empty config, because a throw here takes the whole preset out of the menu', () => {
     expect(Config({})).toEqual({})
+    // The retired fork key still loads, so an existing config does not break the preset.
     expect(Config({ fork: { provider: 'a', model: 'b' } })).toMatchObject({ fork: { provider: 'a', model: 'b' } })
     expect(Config({ worker: { provider: 'a', model: 'b' }, workerPreset: 'scheduler' })).toMatchObject({ worker: { provider: 'a', model: 'b' }, workerPreset: 'scheduler' })
-    expect(() => Config({ fork: { provider: 'a' } } as never)).toThrow()
     expect(() => Config({ worker: { provider: 'a' } } as never)).toThrow()
   })
 
-  it('parses and runs /fork', async () => {
+  it('/fork explains that forks use the lead model and records nothing', async () => {
     expect(parseForkCommand('model glm/opus high')).toEqual({ provider: 'glm', model: 'opus', reasoningEffort: 'high' })
     expect(parseForkCommand(' model a/b/c ')).toEqual({ provider: 'a', model: 'b/c' })
     expect(parseForkCommand('model default')).toBeNull()
     for (const bad of ['', 'model', 'model nope', 'model /x', 'model x/', 'other a/b', 'model default x', 'model a/b c d']) expect(parseForkCommand(bad)).toBeUndefined()
     const { lead } = await setup(() => textResponse('X'))
     const run = (rawInput: string) => runForkCommand({ agent: lead, rawInput, attachments: [] } as never)
-    expect(run('')).toMatchObject({ kind: 'success', text: 'Forks use the default model.' })
-    expect(run('bad')).toMatchObject({ kind: 'error' })
-    expect(run('model a/b')).toMatchObject({ kind: 'success' })
-    expect(run('')).toMatchObject({ text: 'Forks use a/b.' })
+    const before = lead.session.snapshotEvents().length
+    expect(run('')).toEqual({ kind: 'success', text: FORK_MODEL_RETIRED })
+    expect(run('model default')).toEqual({ kind: 'success', text: FORK_MODEL_RETIRED })
+    expect(run('model a/b high')).toEqual({ kind: 'error', text: FORK_MODEL_RETIRED })
+    expect(lead.session.snapshotEvents().length).toBe(before)
+  })
+})
+
+describe('rule plugin', () => {
+  it('registers every command with metadata the command runtime accepts', async () => {
+    // A rejected definition (such as an empty input hint) makes the whole preset invalid, so
+    // no session using it can be created. Mount the real rule plugin on the real runtime.
+    const { ctx } = await setup(() => textResponse('X'))
+    await ctx.plugin(CommandRuntime)
+    const names: string[] = []
+    const real = ctx.commands.register.bind(ctx.commands)
+    // Through the runtime's own register, which validates (and throws on a bad definition).
+    ;(ctx.commands as { register: typeof real }).register = ((definition: Parameters<typeof real>[0]) => { names.push(definition.name); return real(definition) }) as typeof real
+    const errors: unknown[] = []
+    ctx.on('internal/error' as never, ((error: unknown) => { errors.push(error) }) as never)
+    await ctx.plugin(RulePlugin as never, {} as never)
+    expect(errors).toEqual([])
+    expect(names).toEqual(expect.arrayContaining(['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model']))
+    // The exact failure seen in the GUI: an empty hint is refused by the runtime.
+    expect(() => real({ definitionId: 'x/y' as never, name: 'zz', description: 'd', input: { hint: '' }, handler: () => ({ kind: 'success', text: '' }) } as never)).toThrow(/hint must not be empty/u)
+  })
+})
+
+describe('worker default model', () => {
+  const validator = (ctx: Parameters<typeof install>[0]) => async (s: { provider: string; model: string; reasoningEffort?: string }) => {
+    const r = await ctx.llm.resolveCallConfig({ provider: s.provider, model: s.model, ...(s.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(s.reasoningEffort) }) })
+    return { provider: r.provider, model: r.model, ...(s.reasoningEffort === undefined || r.reasoningEffort === undefined ? {} : { reasoningEffort: String(r.reasoningEffort) }) }
+  }
+  const isW = (name: string) => (r: Parameters<typeof body>[0]) => body(r).includes(`You are worker \\"${name}\\"`)
+
+  it('/worker checks the route and the level, and the level reaches the model call', async () => {
+    const { ctx, lead, adapter } = await setup(() => textResponse('X'))
+    const scheduler = install(ctx)
+    const run = (rawInput: string) => runWorkerModelCommand({ agent: lead, rawInput, attachments: [] } as never, validator(ctx))
+    expect(await run('')).toMatchObject({ kind: 'success', text: 'Workers use the default model.' })
+    // A level the model does not offer, or one for a model with none, is refused before anything is recorded.
+    expect(await run('model mock-b/reasoner max')).toMatchObject({ kind: 'error' })
+    expect(await run('model mock-b/plain high')).toMatchObject({ kind: 'error' })
+    expect(await run('bad')).toMatchObject({ kind: 'error' })
+    expect(workerModelOf(lead.session.snapshotEvents())).toBeNull()
+    // No level given stays "the model's default", not the default materialized.
+    expect(await run('model mock-b/reasoner')).toMatchObject({ kind: 'success', text: 'Later workers use mock-b/reasoner.' })
+    expect(workerModelOf(lead.session.snapshotEvents())).toEqual({ provider: 'mock-b', model: 'reasoner' })
+    expect(await run('model mock-b/reasoner high')).toMatchObject({ kind: 'success', text: 'Later workers use mock-b/reasoner (high).' })
+    expect(await run('')).toMatchObject({ text: 'Workers use mock-b/reasoner (high).' })
+    await scheduler.createWorker(lead, { name: 'w', role: 'r' })
+    await vi.waitFor(() => { expect(adapter.requests.some(isW('w'))).toBe(true) })
+    const worker = adapter.requests.find(isW('w'))!
+    expect([worker.model, worker.reasoningEffort]).toEqual(['reasoner', 'high'])
+    expect(await run('model default')).toMatchObject({ text: 'Later workers use the default model.' })
+    expect(workerModelOf(lead.session.snapshotEvents())).toBeNull()
+  })
+
+  it('the lead\'s explicit model wins, then /worker model, then the plugin config, then the runtime default', async () => {
+    const { ctx, lead, adapter } = await setup(() => textResponse('ready'))
+    const scheduler = install(ctx, { configuredWorkerModel: { provider: 'mock-b', model: 'configured' } })
+    const run = (rawInput: string) => runWorkerModelCommand({ agent: lead, rawInput, attachments: [] } as never)
+    await scheduler.createWorker(lead, { name: 'by-config', role: 'x' })
+    await run('model mock-b/picked')
+    await scheduler.createWorker(lead, { name: 'by-default', role: 'x' })
+    await scheduler.createWorker(lead, { name: 'by-lead', role: 'x', model: { provider: 'mock', model: 'explicit' } })
+    await run('model default')
+    await scheduler.createWorker(lead, { name: 'cleared', role: 'x' })
+    await vi.waitFor(() => { expect(['by-config', 'by-default', 'by-lead', 'cleared'].every(n => adapter.requests.some(isW(n)))).toBe(true) })
+    const model = (n: string) => adapter.requests.find(isW(n))!.model
+    expect([model('by-config'), model('by-default'), model('by-lead'), model('cleared')]).toEqual(['configured', 'picked', 'explicit', 'configured'])
+    // The main session itself never changes model.
+    expect(adapter.requests.filter(r => r.sessionId === 'lead').every(r => r.model === 'lead-model')).toBe(true)
   })
 })
 

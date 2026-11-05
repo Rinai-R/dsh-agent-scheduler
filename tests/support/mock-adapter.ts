@@ -4,7 +4,7 @@
  * every request through a `respond` callback, so concurrent Team members get deterministic
  * answers.
  */
-import { LlmAdapter, ToolCallId, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, ReasoningEffortId, ToolCallId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 
 /** Text-only answer that ends the turn. */
 export function textResponse(text: string): StreamChunk[] {
@@ -38,6 +38,13 @@ export class RoutingMockAdapter extends LlmAdapter {
   /** @param respond - computes the chunks for one request. */
   constructor(private readonly respond: (options: GenerateOptions) => StreamChunk[] | Promise<StreamChunk[]>) {
     super()
+  }
+
+  /** Model `reasoner` advertises reasoning levels, so an effort can be chosen for it; others have none. */
+  override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    const info = await super.resolveModel(provider, model)
+    if (model !== 'reasoner') return info
+    return { ...info, reasoning: { efforts: [{ id: ReasoningEffortId('low'), name: 'Low' }, { id: ReasoningEffortId('high'), name: 'High' }], defaultEffort: ReasoningEffortId('low') } }
   }
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {

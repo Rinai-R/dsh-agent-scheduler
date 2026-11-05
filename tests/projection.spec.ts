@@ -5,7 +5,8 @@ import { setup, teardown } from './support/harness.js'
 import { textResponse } from './support/mock-adapter.js'
 import { install, user, until } from './support/scheduler.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema, rosterView, rosterViewSchema, type Roster } from '../src/projection.js'
-import { runForkCommand } from '../src/rule-plugin.js'
+import { runWorkerModelCommand } from '../src/rule-plugin.js'
+import { appendForkModel } from '../src/records.js'
 
 afterEach(teardown)
 
@@ -38,23 +39,35 @@ describe('roster projection', () => {
     expect(() => rosterSchema.parse({ enabled: null, role: null, forkModel: null, members: [{ id: 1 }], requests: [] })).toThrow(/invalid member/)
   })
 
-  it('folds the /fork model override the Agents page shows', async () => {
+  it('ignores /fork model records: forks have no model of their own', async () => {
     const { lead } = await setup(() => textResponse('X'))
-    const run = (rawInput: string) => runForkCommand({ agent: lead, rawInput, attachments: [] } as never)
+    const before = rosterOf(lead)
+    appendForkModel(lead.session, { provider: 'mock-b', model: 'other', reasoningEffort: 'high' })
+    expect(applyRoster(before, lead.session.snapshotEvents().at(-1)!)).toBe(before)
     expect(rosterView(rosterOf(lead)).forkModel).toBeNull()
-    run('model mock-b/other high')
-    const set = rosterOf(lead)
-    expect(set.forkModel).toEqual({ provider: 'mock-b', model: 'other', reasoningEffort: 'high' })
-    expect(rosterViewSchema.parse(rosterView(set)).forkModel).toEqual(set.forkModel)
-    expect(rosterSchema.parse(JSON.parse(JSON.stringify(set)))).toEqual(set)
-    // The same selection again changes nothing, so the projection publishes nothing.
-    const event = lead.session.snapshotEvents().at(-1)!
-    expect(applyRoster(set, event)).toBe(set)
-    run('model default')
-    expect(rosterOf(lead).forkModel).toBeNull()
-    // Malformed records are ignored; a malformed state does not validate.
-    const bad = { type: 'plugin:dsh-agent-scheduler/fork-model', seq: 1, time: 1, ignorable: true, data: { version: 1, selection: { provider: 1 } } }
-    expect(applyRoster(set, bad as never)).toBe(set)
-    expect(() => rosterSchema.parse({ ...set, forkModel: { provider: 'a' } })).toThrow(/invalid forkModel/)
+    // A state saved with an override by an earlier version still parses; the view drops it.
+    const old = { ...rosterOf(lead), forkModel: { provider: 'mock-b', model: 'other' } }
+    expect(rosterSchema.parse(JSON.parse(JSON.stringify(old)))).toEqual(old)
+    expect(rosterView(old).forkModel).toBeNull()
+    expect(() => rosterSchema.parse({ ...old, forkModel: { provider: 'a' } })).toThrow(/invalid forkModel/)
   })
+  it('folds the /worker model default the Agents page shows', async () => {
+    const { lead } = await setup(() => textResponse('X'))
+    const run = (rawInput: string) => runWorkerModelCommand({ agent: lead, rawInput, attachments: [] } as never)
+    expect(rosterView(rosterOf(lead)).workerModel).toBeNull()
+    await run('model mock-b/reasoner high')
+    const set = rosterOf(lead)
+    expect(set.workerModel).toEqual({ provider: 'mock-b', model: 'reasoner', reasoningEffort: 'high' })
+    expect(set.forkModel).toBeNull()
+    expect(rosterViewSchema.parse(rosterView(set)).workerModel).toEqual(set.workerModel)
+    expect(rosterSchema.parse(JSON.parse(JSON.stringify(set)))).toEqual(set)
+    expect(applyRoster(set, lead.session.snapshotEvents().at(-1)!)).toBe(set)
+    // A state saved before the field existed still parses.
+    const { workerModel: _, ...old } = set
+    expect(rosterSchema.parse(JSON.parse(JSON.stringify(old)))).toEqual(old)
+    expect(() => rosterSchema.parse({ ...set, workerModel: { provider: 'a' } })).toThrow(/invalid forkModel/)
+    await run('model default')
+    expect(rosterOf(lead).workerModel).toBeNull()
+  })
+
 })

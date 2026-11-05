@@ -50,7 +50,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },
         cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s. Required with from when the source worker has one: a new worktree of its own (git worktree add from the repository\'s base branch).' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
-        model: { type: 'string', description: 'Optional "provider/model"; default is the configured worker model, then the runtime default.' },
+        model: { type: 'string', description: 'Optional "provider/model"; default is the user\'s worker model (Agents page or /worker model), then the configured worker model, then the runtime default.' },
         from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset). Use it for a new task in that worker\'s area that should run in parallel (the owner is running or has open requests, or the task needs its own branch): fork the owner and give the new worker a new worktree of its own as cwd, never the owner\'s directory.' },
         task: { type: 'string', description: 'Optional first request.' },
       },

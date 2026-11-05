@@ -13,10 +13,11 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { appendForkModel, forkModelOf, type ForkModelSelection } from './records.js'
+import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { schedulerTools, sectionFor } from './tools.js'
-import { installMemberModels } from './member-model.js'
+import { installMemberModels, type Validate } from './member-model.js'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
 export const name = 'agent-scheduler-rule'
 export const inject = ['subagents', 'agents', 'commands', 'tools', 'systemPrompt', 'sessionQuery', 'llm']
@@ -40,14 +41,16 @@ const modelConfig = z.union([
 ])
 
 export const Config: z<Config> = z.object({
-  fork: modelConfig.description('Model for forks. Empty uses the lead\'s model and reuses its prompt cache.'),
+  // Retired: forks always use the lead's model. Still accepted so an existing config loads.
+  fork: modelConfig.description('Retired and ignored: forks always use the lead\'s model (and its prompt cache).'),
   worker: modelConfig.description('Default model for workers. Empty uses the runtime default.'),
   workerPreset: z.string().description('Preset for new workers. Empty inherits this session\'s preset.'),
   defaultOn: z.boolean().description('Schedule in sessions that never used /schedule. Only the retired scheduler preset sets it.'),
 }) as unknown as z<Config>
 
 /**
- * Parse `/fork model <provider>/<model> [effort]` and `/fork model default`.
+ * Parse `model <provider>/<model> [effort]` and `model default` (the `/worker` argument; `/fork`
+ * parses it only to explain that forks have no model of their own).
  * @param raw - text after the command name.
  * @returns the selection, null to clear, or undefined when malformed.
  */
@@ -61,21 +64,48 @@ export function parseForkCommand(raw: string): ForkModelSelection | null | undef
   return parts[2] === undefined ? base : { ...base, reasoningEffort: parts[2] }
 }
 
+const routeOf = (s: ForkModelSelection): string => `${s.provider}/${s.model}${s.reasoningEffort === undefined ? '' : ` (${s.reasoningEffort})`}`
+
+/** What `/fork` says now: forks have no model of their own. */
+export const FORK_MODEL_RETIRED = 'Forks always use the lead\'s model, so they reuse its prompt cache; a fork model can no longer be set. To give one task another model, ask the lead for a worker (see /worker model).'
+
 /**
- * Execute `/fork`.
+ * Execute `/fork`. Forks always run on the lead's model; the command stays registered only so
+ * that typed or replayed `/fork model …` lines get an explanation instead of "unknown command".
+ * Nothing is recorded, and an older `/fork model` record in the log has no effect.
  * @param invocation - the parsed command.
- * @returns the command's outcome.
+ * @returns the command's outcome: success for a bare `/fork` or `/fork model default`, else an error.
  */
 export function runForkCommand(invocation: CommandInvocation): CommandResult {
   if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/fork only applies in the main session.' }
+  const raw = invocation.rawInput.trim()
+  if (raw === '' || parseForkCommand(raw) === null) return { kind: 'success', text: FORK_MODEL_RETIRED }
+  return { kind: 'error', text: FORK_MODEL_RETIRED }
+}
+
+/**
+ * Execute `/worker`: show or set the model later workers start with when the lead names none.
+ * @param invocation - the parsed command.
+ * @param validate - checks a selection is routable and its effort is one the model offers.
+ * @returns the command's outcome.
+ */
+export async function runWorkerModelCommand(invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/worker only applies in the main session.' }
   if (invocation.rawInput.trim() === '') {
-    const current = forkModelOf(invocation.agent.session.snapshotEvents())
-    return { kind: 'success', text: current === null ? 'Forks use the default model.' : `Forks use ${current.provider}/${current.model}.` }
+    const current = workerModelOf(invocation.agent.session.snapshotEvents())
+    return { kind: 'success', text: current === null ? 'Workers use the default model.' : `Workers use ${routeOf(current)}.` }
   }
-  const selection = parseForkCommand(invocation.rawInput)
-  if (selection === undefined) return { kind: 'error', text: 'Usage: /fork model <provider>/<model> [effort] | /fork model default' }
-  appendForkModel(invocation.agent.session, selection)
-  return { kind: 'success', text: selection === null ? 'Later forks use the default model.' : `Later forks use ${selection.provider}/${selection.model}.` }
+  let selection = parseForkCommand(invocation.rawInput)
+  if (selection === undefined) return { kind: 'error', text: 'Usage: /worker model <provider>/<model> [effort] | /worker model default' }
+  if (selection !== null && validate !== undefined) {
+    try {
+      selection = await validate(selection)
+    } catch (error) {
+      return { kind: 'error', text: `${selection.provider}/${selection.model}: ${error instanceof Error ? error.message : String(error)}` }
+    }
+  }
+  appendWorkerModel(invocation.agent.session, selection)
+  return { kind: 'success', text: selection === null ? 'Later workers use the default model.' : `Later workers use ${routeOf(selection)}.` }
 }
 
 /**
@@ -128,7 +158,6 @@ export function apply(ctx: Context, config: Config): void {
       using observed = await ctx.sessionQuery.observeSession(SessionId(id), { projectionMode: 'none' })
       return { events: [...observed.events], inherited: Number(observed.inheritedEventCount) }
     },
-    configuredModel: config.fork,
     configuredWorkerModel: config.worker,
     workerPreset: config.workerPreset,
     defaultOn: config.defaultOn,
@@ -186,12 +215,26 @@ export function apply(ctx: Context, config: Config): void {
     input: { hint: 'archive <name> | archive done' },
     handler: (invocation) => runAgentsCommand(scheduler, invocation),
   })
+  // Same check as the runtime's own selector: the route must resolve and the effort must be one
+  // the model advertises (an unknown effort is refused here rather than at the first call).
+  const validate: Validate = async (selection) => {
+    const resolved = await ctx.llm.resolveCallConfig({ provider: selection.provider, model: selection.model, ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }) })
+    return { provider: resolved.provider, model: resolved.model, ...(selection.reasoningEffort === undefined || resolved.reasoningEffort === undefined ? {} : { reasoningEffort: String(resolved.reasoningEffort) }) }
+  }
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/fork'),
     name: 'fork',
-    description: 'Show or set the model used by this session\'s forks',
-    input: { hint: 'model <provider>/<model> [effort] | model default' },
+    description: 'Forks always use the lead\'s model; says so (a fork model can no longer be set)',
+    // No `input`: it takes no arguments, and the runtime rejects an empty hint (the whole preset
+    // then fails to load, see tests/input.spec.ts).
     handler: runForkCommand,
+  })
+  ctx.commands.register({
+    definitionId: CommandDefinitionId('dsh-agent-scheduler/worker'),
+    name: 'worker',
+    description: 'Show or set the model new workers use when the lead names none',
+    input: { hint: 'model <provider>/<model> [effort] | model default' },
+    handler: (invocation) => runWorkerModelCommand(invocation, validate),
   })
   ctx.commands.register({
     definitionId: CommandDefinitionId('dsh-agent-scheduler/role'),

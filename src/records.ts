@@ -8,6 +8,7 @@ import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session
 export const INPUT_RECORD = 'plugin:dsh-agent-scheduler/input'
 export const FORK_STATE_RECORD = 'plugin:dsh-agent-scheduler/fork-state'
 export const FORK_MODEL_RECORD = 'plugin:dsh-agent-scheduler/fork-model'
+export const WORKER_MODEL_RECORD = 'plugin:dsh-agent-scheduler/worker-model'
 export const AGENT_RECORD = 'plugin:dsh-agent-scheduler/agent'
 export const REQUEST_RECORD = 'plugin:dsh-agent-scheduler/request'
 export const ROLE_RECORD = 'plugin:dsh-agent-scheduler/role'
@@ -108,6 +109,7 @@ declare module '@deepseek-ai/dsh-session/types' {
     'plugin:dsh-agent-scheduler/input': InputRecord
     'plugin:dsh-agent-scheduler/fork-state': ForkStateRecord
     'plugin:dsh-agent-scheduler/fork-model': ForkModelRecord
+    'plugin:dsh-agent-scheduler/worker-model': ForkModelRecord
     'plugin:dsh-agent-scheduler/agent': AgentRecord
     'plugin:dsh-agent-scheduler/request': RequestRecord
     'plugin:dsh-agent-scheduler/role': RoleRecord
@@ -124,6 +126,9 @@ export const appendForkState = (session: Session, record: Fields<ForkStateRecord
   appendPluginRecord(session, FORK_STATE_RECORD, { version: 1, ...record })
 export const appendForkModel = (session: Session, selection: ForkModelSelection | null): SessionSeq =>
   appendPluginRecord(session, FORK_MODEL_RECORD, { version: 1, selection })
+/** `/worker model`: the model later workers start with when the lead names none; `null` clears it. */
+export const appendWorkerModel = (session: Session, selection: ForkModelSelection | null): SessionSeq =>
+  appendPluginRecord(session, WORKER_MODEL_RECORD, { version: 1, selection })
 export const appendAgent = (session: Session, record: Fields<AgentRecord>): SessionSeq =>
   appendPluginRecord(session, AGENT_RECORD, { version: 1, ...record })
 export const appendRequest = (session: Session, record: Fields<RequestRecord>): SessionSeq =>
@@ -159,11 +164,35 @@ export function inputOf(event: SessionEvent): InputRecord | undefined {
  * @returns the latest selection, or null when none applies.
  */
 export function forkModelOf(events: readonly SessionEvent[]): ForkModelSelection | null {
+  // Retired: read only by tests that check old records are ignored. Nothing routes by it.
+  return modelRecordOf(events, FORK_MODEL_RECORD)
+}
+
+/**
+ * Fold this Session's current worker default model.
+ * @param events - the Session's log.
+ * @returns the latest selection, or null when none applies.
+ */
+export function workerModelOf(events: readonly SessionEvent[]): ForkModelSelection | null {
+  return modelRecordOf(events, WORKER_MODEL_RECORD)
+}
+
+function modelRecordOf(events: readonly SessionEvent[], type: string): ForkModelSelection | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
-    const data = dataOf<ForkModelRecord>(events[i]!, FORK_MODEL_RECORD)
+    const data = dataOf<ForkModelRecord>(events[i]!, type)
     if (data !== undefined) return data.selection ?? null
   }
   return null
+}
+
+/** A well-formed model record of `type`, or undefined. */
+function modelRecord(e: SessionEvent, type: string): ForkModelRecord | undefined {
+  const d = dataOf<ForkModelRecord>(e, type)
+  if (d === undefined) return undefined
+  const sel = d.selection as Partial<ForkModelSelection> | null
+  if (sel === null) return d
+  if (typeof sel?.provider !== 'string' || typeof sel.model !== 'string' || (sel.reasoningEffort !== undefined && typeof sel.reasoningEffort !== 'string')) return undefined
+  return d
 }
 
 /** Typed readers used by the roster fold. */
@@ -173,13 +202,7 @@ export const recordReaders = {
   request: (e: SessionEvent) => dataOf<RequestRecord>(e, REQUEST_RECORD),
   role: (e: SessionEvent) => dataOf<RoleRecord>(e, ROLE_RECORD),
   settled: (e: SessionEvent) => dataOf<SettledRecord>(e, SETTLED_RECORD),
-  forkModel: (e: SessionEvent) => {
-    const d = dataOf<ForkModelRecord>(e, FORK_MODEL_RECORD)
-    if (d === undefined) return undefined
-    const sel = d.selection as Partial<ForkModelSelection> | null
-    if (sel === null) return d
-    if (typeof sel?.provider !== 'string' || typeof sel.model !== 'string' || (sel.reasoningEffort !== undefined && typeof sel.reasoningEffort !== 'string')) return undefined
-    return d
-  },
+  forkModel: (e: SessionEvent) => modelRecord(e, FORK_MODEL_RECORD),
+  workerModel: (e: SessionEvent) => modelRecord(e, WORKER_MODEL_RECORD),
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
 }

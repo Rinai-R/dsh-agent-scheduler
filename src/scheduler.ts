@@ -19,7 +19,7 @@ import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { FORK_FROM_PROVIDER, forgetForkSeed, forkSeed, registerForkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, forkModelOf,
+  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSettled, workerModelOf,
   type ForkModelSelection,
 } from './records.js'
 import { schedulingOn } from './projection.js'
@@ -63,8 +63,6 @@ export interface SchedulerDeps {
   readonly agents: { get(id: SessionId): Agent | undefined }
   /** Read a Session's log whether or not it is resident. */
   readonly readLog: (id: SessionId) => Promise<SessionLog>
-  /** Configured model for forks; undefined means the lead's own model. */
-  readonly configuredModel?: ForkModelSelection | undefined
   /** Configured default model for workers; undefined inherits the runtime default. */
   readonly configuredWorkerModel?: ForkModelSelection | undefined
   /** Preset for new workers; undefined inherits the main Session's preset. */
@@ -162,17 +160,6 @@ export const textOf = (content: readonly ContentBlock[]): string =>
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const gone = (member: Member | undefined): boolean => member !== undefined && (member.state === 'archived' || member.state === 'failed')
-
-/**
- * Resolve the model a new fork uses: Session override, then plugin config, then the lead's.
- * @param agent - the lead.
- * @param configured - plugin configuration.
- * @returns options for the fork, or undefined to inherit the lead's and keep its cache prefix.
- */
-export function forkAgentOptions(agent: Agent, configured: ForkModelSelection | undefined): AgentOptions | undefined {
-  const selection = forkModelOf(agent.session.snapshotEvents()) ?? configured
-  return selection === undefined ? undefined : selectionOptions(selection)
-}
 
 /**
  * @param selection - a provider/model pair.
@@ -335,11 +322,12 @@ export class Scheduler {
     const logged = admitHidden(main.session, message, `[A user message was handed to ${name}; its conclusion will come to you.]`)
     main.inbox.remove(message.id)
     this.record(main, s => appendInput(s, { messageId: message.id, forkId, text, name, ...(logged ? { logged: true as const } : {}) }))
-    const agentOptions = forkAgentOptions(main, this.deps.configuredModel)
+    // A fork always runs on the lead's model: it replays the lead's history, which then hits the
+    // lead's prompt cache. There is no per-fork model (any `/fork model` record is history only).
     void this.run(main, forkId, name, async () => {
       await this.deps.subagents.startActivation({
         provider: 'fork', label: `${name}: ${text.slice(0, 50)}`, childId: forkId, signal: new AbortController().signal, delivery: 'parent',
-        request: { parent: main, prompt: [...message.content], ...(agentOptions === undefined ? {} : { agentOptions }) },
+        request: { parent: main, prompt: [...message.content] },
       })
       if (this.ledgerOf(main).members.get(forkId)?.state === 'queued') this.record(main, s => appendForkState(s, { forkId, state: 'started' }))
     }, {
@@ -500,7 +488,8 @@ export class Scheduler {
       checkName()
     }
     const id = SessionId(`session-${randomUUID()}`)
-    const selection = args.model ?? this.deps.configuredWorkerModel
+    // The lead's explicit model, then the Agents page's 「Worker 模型」 (/worker model), then config.
+    const selection = args.model ?? workerModelOf(main.session.snapshotEvents()) ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
     // One worker per directory: this is what keeps two writers out of the same tree. A worker
     // continued from another gets no default directory, since its source still works in its own.

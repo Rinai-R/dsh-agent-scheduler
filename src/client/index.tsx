@@ -7,6 +7,7 @@
  */
 import { memo, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
+import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
@@ -36,7 +37,7 @@ interface Ctx { key: string; id: string; state?: State; start?: { location: unkn
 interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly detail?: string; readonly pickedModel?: ForkModel }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
-interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly forkModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
+interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
 /** One Session's live status as the client root hook reports it. */
 interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
 type Statuses = Map<string, StatusRow>
@@ -153,16 +154,6 @@ const STYLE = `
 .sch-request-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-brand-primary-new-colorprimary-new-color,currentColor)}
 .sch-request-hint{margin-left:auto;color:var(--dsw-alias-label-tertiary)}
 .sch-request-body{padding:0 14px 10px 29px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;color:var(--dsw-alias-label-primary)}
-.sch-mm{position:relative;display:inline-flex;align-items:center}
-.sch-mm-trigger{display:inline-flex;align-items:center;gap:4px;height:28px;max-width:220px;border:0;background:none;padding:0 8px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sch-mm-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-mm-trigger:disabled{opacity:.6;cursor:default}
-.sch-mm-menu{position:absolute;right:0;bottom:calc(100% + 6px);z-index:50;min-width:240px;max-height:360px;overflow:auto;padding:4px;border-radius:12px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.sch-mm-head{padding:6px 10px 2px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-mm-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;border:0;background:none;padding:6px 10px;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;text-align:left;cursor:pointer}
-.sch-mm-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.sch-mm-item[aria-checked=true]{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-label-primary))}
-.sch-mm-effort{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-roster-reqs{margin-right:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
@@ -251,13 +242,11 @@ const STYLE = `
 .sch-roster-fold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .sch-roster-fold svg{transition:transform .15s}
 .sch-roster-fold[aria-expanded=true] svg{transform:rotate(90deg)}
-.sch-forkmodel{display:flex;flex-direction:column;gap:4px;padding:2px 12px 6px 18px}
-.sch-forkmodel-row{display:flex;align-items:center;gap:8px;min-width:0}
-.sch-forkmodel-label{flex:none;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-forkmodel select{flex:1;min-width:0;height:26px;border:1px solid var(--dsw-alias-border-default,var(--dsw-alias-interactive-bg-hover));border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);padding:0 6px;cursor:pointer}
-.sch-forkmodel select:disabled{opacity:.6;cursor:default}
-.sch-forkmodel-note{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);line-height:16px}
+.sch-forkmodel{display:flex;flex-direction:column;gap:2px;padding:0 12px 4px 18px}
+.sch-forkmodel-row{display:flex;align-items:center;gap:4px;min-width:0;margin-left:-6px}
+.sch-forkmodel-label{flex:none;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-forkmodel-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
+.sch-mm-composer{display:inline-flex;align-items:center;min-width:0}
 .sch-roster-empty{margin:auto;padding:24px;max-width:220px;text-align:center;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:18px}
 `
 
@@ -280,7 +269,6 @@ export function statusLine(state: Pick<State, 'fork' | 'name' | 'detail'>): { le
     case 'failed': return { lead: '', name, tail: ` 启动失败${state.detail === undefined ? '' : `：${state.detail}`}`, open: '查看' }
   }
 }
-
 
 const STATE_LABEL: Record<RowState, string> = {
   running: '在跑',
@@ -539,9 +527,6 @@ const ICON = {
       <rect x="2" y="3" width="12" height="3" rx="1" /><path d="M3 6v6.5c0 .6.4 1 1 1h8c.6 0 1-.4 1-1V6M6.5 9h3" />
     </svg>
   ),
-  chevronDown: (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
-  ),
   chevron: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
   ),
@@ -690,10 +675,7 @@ export function subline(member: Member): string {
   return [dir, duty].filter(part => part !== undefined && part !== '').join(' · ')
 }
 
-/** One provider group of the Host model catalog (`remote.session.modelCatalog`). */
-/** Reasoning levels a catalog model advertises. */
-export interface CatalogReasoning { readonly defaultEffort?: string; readonly efforts: readonly { readonly id: string; readonly name: string }[] }
-export interface CatalogGroup { readonly id: string; readonly name: string; readonly models: readonly { readonly id: string; readonly name: string; readonly reasoning?: CatalogReasoning }[] }
+export type { CatalogGroup, CatalogReasoning } from './model-menu.js'
 
 /**
  * The command that sets one member's model, run in the main Session.
@@ -731,13 +713,15 @@ export interface Face { getSnapshot: () => unknown; subscribe: (listener: () => 
 const NO_FACE: Face = { getSnapshot: () => undefined, subscribe: () => () => undefined }
 
 /**
- * The member a Session is, from its parent's roster.
+ * The worker a Session is, from its parent's roster: only a worker has a model of its own (a fork
+ * always runs on the lead's). An archived worker still talks in its chat (speaking to it wakes
+ * it), so it keeps the picker; one that failed to start has nothing to switch.
  * @param roster - the parent's roster view.
  * @param sessionId - the child Session.
- * @returns its name, or undefined when it is not a live member.
+ * @returns the worker, or undefined for a fork, a non-member, or one that never started.
  */
 export function memberOf(roster: Roster | undefined, sessionId: string): Member | undefined {
-  return roster?.members.find(m => m.id === sessionId && m.state !== 'archived' && m.state !== 'failed')
+  return roster?.members.find(m => m.id === sessionId && m.kind === 'worker' && m.state !== 'failed')
 }
 
 export function createMemberModelPicker(deps: {
@@ -756,7 +740,6 @@ export function createMemberModelPicker(deps: {
     const member = parentId === undefined || row === undefined ? undefined : { parent: parentId, name: row.name }
     const own = row?.pickedModel ?? null
     const [groups, setGroups] = useState<readonly CatalogGroup[]>([])
-    const [open, setOpen] = useState(false)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [supported, setSupported] = useState(false)
@@ -770,89 +753,80 @@ export function createMemberModelPicker(deps: {
     }, [parent])
     if (member === undefined || !supported) return null
     const choose = (selection: ForkModel | null) => {
-      setOpen(false)
       setBusy(true)
       setError(null)
       deps.run(member.parent, memberModelCommand(member.name, selection)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
     }
-    const same = (a: ForkModel | null, b: ForkModel | null) => JSON.stringify(a) === JSON.stringify(b)
     const label = memberModelLabel(groups, own)
     return (
-      <span className="sch-mm" data-scheduler-member-model={own === null ? 'default' : `${own.provider}/${own.model}${own.reasoningEffort === undefined ? '' : ` ${own.reasoningEffort}`}`}>
-        <button type="button" className="sch-mm-trigger" disabled={busy} aria-haspopup="menu" aria-expanded={open} aria-label={`${member.name} 的模型：${label}`} title={`${member.name} 自己用的模型，下一步生效（/agent-model）。换成和 lead 不同的模型会用不上 lead 的提示缓存。`} onClick={() => { setOpen(v => !v) }}>
-          {label}{ICON.chevronDown}
-        </button>
-        {open ? (
-          <div className="sch-mm-menu" role="menu">
-            <button type="button" role="menuitemradio" aria-checked={own === null} className="sch-mm-item" onClick={() => { choose(null) }}>默认模型（创建时的模型）</button>
-            {groups.map(group => (
-              <div key={group.id} className="sch-mm-group" role="group" aria-label={group.name}>
-                <div className="sch-mm-head">{group.name}</div>
-                {group.models.flatMap(model => {
-                  const levels = model.reasoning?.efforts ?? []
-                  const base = { provider: group.id, model: model.id }
-                  if (levels.length === 0) {
-                    return [<button key={model.id} type="button" role="menuitemradio" aria-checked={same(own, base)} className="sch-mm-item" data-value={`${group.id}/${model.id}`} onClick={() => { choose(base) }}>{model.name}</button>]
-                  }
-                  return levels.map(level => {
-                    const selection = { ...base, reasoningEffort: level.id }
-                    return <button key={`${model.id}:${level.id}`} type="button" role="menuitemradio" aria-checked={same(own, selection)} className="sch-mm-item" data-value={`${group.id}/${model.id} ${level.id}`} onClick={() => { choose(selection) }}>{model.name}<span className="sch-mm-effort">{level.name}</span></button>
-                  })
-                })}
-              </div>
-            ))}
-          </div>
-        ) : null}
+      <span className="sch-mm-composer" data-scheduler-member-model={own === null ? 'default' : `${own.provider}/${own.model}${own.reasoningEffort === undefined ? '' : ` ${own.reasoningEffort}`}`}>
+        <ModelMenu
+          groups={groups}
+          current={own}
+          label={own === null ? '默认模型' : own.model}
+          defaultLabel="默认模型（创建时的模型）"
+          defaultValue="默认模型"
+          avoid="[data-composer-card]"
+          busy={busy}
+          ariaLabel={`${member.name} 的模型：${label}`}
+          title={`${member.name} 自己用的模型，下一次模型调用生效（/agent-model）。`}
+          onPick={choose}
+        />
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
       </span>
     )
   })
 }
 
-/** Value of the 「分身模型」 select for the lead's model. */
-export const SAME_AS_LEAD = ''
+/**
+ * Encode a default model as a stable value; JSON keeps provider ids with slashes intact.
+ * @param model - the selection, or null for the default.
+ * @returns the value, '' for the default.
+ */
+export const workerModelValue = (model: ForkModel | null | undefined): string =>
+  model === null || model === undefined ? '' : JSON.stringify([model.provider, model.model, ...(model.reasoningEffort === undefined ? [] : [model.reasoningEffort])])
 
 /**
- * Encode a fork model as a select value; JSON keeps provider ids with slashes intact.
- * @param model - the selection, or null for the lead's.
- * @returns the option value.
+ * The `/worker` command line for a choice from the menu.
+ * @param selection - the choice, with its reasoning level, or null for the default.
+ * @returns the command line.
  */
-export const forkModelValue = (model: ForkModel | null | undefined): string =>
-  model === null || model === undefined ? SAME_AS_LEAD : JSON.stringify([model.provider, model.model])
-
-/**
- * The command a select value stands for.
- * @param value - an option value from {@link forkModelValue}.
- * @param current - the current override, whose effort is kept when only re-picking the same model.
- * @returns the `/fork` command line.
- */
-export function forkModelCommand(value: string, current?: ForkModel | null): string {
-  if (value === SAME_AS_LEAD) return '/fork model default'
-  const [provider, model] = JSON.parse(value) as [string, string]
-  const effort = current?.provider === provider && current.model === model ? current.reasoningEffort : undefined
-  return `/fork model ${provider}/${model}${effort === undefined ? '' : ` ${effort}`}`
+export function workerModelCommand(selection: ForkModel | null): string {
+  if (selection === null) return '/worker model default'
+  return `/worker model ${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` ${selection.reasoningEffort}`}`
 }
 
 /**
- * The select's option groups: the catalog, plus the current override when the catalog lacks it
- * (signed out, provider removed), so the select never silently shows another value.
+ * The menu's groups: the catalog, plus the current default when the catalog lacks it
+ * (signed out, provider removed), so the control never silently shows another value.
  * @param groups - catalog groups, in catalog order.
- * @param current - the current override.
+ * @param current - the current default.
  * @returns groups to render.
  */
-export function forkModelGroups(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): readonly CatalogGroup[] {
+export function workerModelGroups(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): readonly CatalogGroup[] {
   if (current === null || current === undefined) return groups
   if (groups.some(g => g.id === current.provider && g.models.some(m => m.id === current.model))) return groups
   return [...groups, { id: current.provider, name: `${current.provider}（不在当前模型列表）`, models: [{ id: current.model, name: current.model }]}]
 }
 
 /**
- * The 「分身模型」 control of the Agents page: shows the Session's `/fork model` override and
+ * What the 「Worker 默认模型」 trigger says for its model part.
+ * @param groups - catalog groups (with any missing current default added).
+ * @param current - the default, or null.
+ * @returns 「默认」 or the model's name.
+ */
+export function workerModelLabel(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): string {
+  if (current === null || current === undefined) return '默认'
+  return catalogModel(groups, current)?.name ?? current.model
+}
+
+/**
+ * The 「Worker 默认模型」 control of the Agents page: shows the Session's `/worker model` default and
  * changes it by running that command, so the log records it like a typed command.
  * @param deps - session, current value, command runner, and catalog loader.
  * @returns the control.
  */
-function ForkModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: () => Promise<readonly CatalogGroup[]> }) {
+function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: () => Promise<readonly CatalogGroup[]> }) {
   const { sessionId, current, run, catalog } = deps
   const [groups, setGroups] = useState<readonly CatalogGroup[] | undefined>(undefined)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -863,29 +837,33 @@ function ForkModelPicker(deps: { sessionId: string; current: ForkModel | null; r
     catalog().then(g => { if (alive) setGroups(g) }, (reason: unknown) => { if (alive) setLoadError(reason instanceof Error ? reason.message : String(reason)) })
     return () => { alive = false }
   }, [sessionId])
-  const value = forkModelValue(current)
-  const change = (next: string) => {
-    if (next === value) return
+  const change = (next: ForkModel | null) => {
     setBusy(true)
     setError(null)
-    run(sessionId, forkModelCommand(next, current)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
+    run(sessionId, workerModelCommand(next)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
   }
-  const shown = forkModelGroups(groups ?? [], current)
+  const shown = workerModelGroups(groups ?? [], current)
+  const label = workerModelLabel(shown, current)
+  const level = effortLabel(shown, current)
+  const value = workerModelValue(current)
   return (
-    <div className="sch-forkmodel" data-scheduler-fork-model={value === SAME_AS_LEAD ? 'lead' : value}>
-      <label className="sch-forkmodel-row" title="之后新开的分身用哪个模型（/fork model）。默认和 lead 用同一个模型，能复用 lead 的提示缓存；换成别的模型后，每个分身都要从头计费、首轮更慢。已在跑的分身不受影响。">
-        <span className="sch-forkmodel-label">分身模型</span>
-        <select aria-label="分身模型" value={value} disabled={busy} onChange={(e) => { change(e.currentTarget.value) }}>
-          <option value={SAME_AS_LEAD}>同 lead（默认）</option>
-          {shown.map(group => (
-            <optgroup key={group.id} label={group.name}>
-              {group.models.map(model => <option key={model.id} value={forkModelValue({ provider: group.id, model: model.id })}>{model.name}</option>)}
-            </optgroup>
-          ))}
-        </select>
-      </label>
-      {value === SAME_AS_LEAD ? null : <div className="sch-forkmodel-note" role="note">分身不再和 lead 同模型，用不上 lead 的提示缓存：每个新分身首轮更慢、更贵。</div>}
-      {loadError === null ? null : <div className="sch-forkmodel-error" role="status" title={loadError}>模型列表加载失败</div>}
+    <div className="sch-forkmodel" data-scheduler-worker-model={value === '' ? 'default' : value}>
+      <div className="sch-forkmodel-row">
+        <span className="sch-forkmodel-label">Worker 默认模型</span>
+        <ModelMenu
+          groups={groups === undefined ? undefined : shown}
+          current={current}
+          label={label}
+          defaultLabel="默认（运行时默认模型）"
+          defaultValue="默认"
+          busy={busy}
+          size="compact"
+          ariaLabel={`Worker 默认模型：${label}${level === undefined ? '' : ` · ${level}`}`}
+          title="之后新建的 worker 用哪个模型和推理等级（/worker model）。lead 创建 worker 时指定了模型就以它为准；都没指定时用运行时默认模型。已有的 worker 不受影响，可以在它自己的对话底栏单独换。分身不能单独换模型，始终和 lead 相同。"
+          onPick={change}
+          failure={loadError === null ? undefined : <div className="sch-mm-empty" role="status" title={loadError}>模型列表加载失败</div>}
+        />
+      </div>
       {error === null ? null : <div className="sch-forkmodel-error" role="status" title={error}>切换失败：{error}</div>}
     </div>
   )
@@ -918,14 +896,14 @@ export function createAgentsPage(ctx: {
     // The browser half updates as soon as the plugin is installed; the host half (and with it
     // /agents) only after DeepSeek Harness restarts. Ask the Session instead of failing on click.
     const [canArchiveHere, setCanArchiveHere] = useState(true)
-    // Sessions started before the rule existed have no /fork; hide the picker there.
-    const [canPickModel, setCanPickModel] = useState(false)
+    // Hosts without /worker (not restarted since the update) hide the picker.
+    const [canPickWorkerModel, setCanPickWorkerModel] = useState(false)
     const sessionId = props.sessionId
     useEffect(() => {
       if (sessionId === undefined) return undefined
       let alive = true
       has(sessionId, 'agents').then(ok => { if (alive) setCanArchiveHere(ok) }, () => undefined)
-      has(sessionId, 'fork').then(ok => { if (alive) setCanPickModel(ok) }, () => undefined)
+      has(sessionId, 'worker').then(ok => { if (alive) setCanPickWorkerModel(ok) }, () => undefined)
       return () => { alive = false }
     }, [sessionId])
     const archive = (target: string) => {
@@ -964,6 +942,13 @@ export function createAgentsPage(ctx: {
     const workers = live.filter(m => m.kind === 'worker')
     const archived = rows.filter(m => m.state === 'archived')
     const counts = countsOf(rows, statuses)
+    // The open chat's row is always visible: opening an archived or handed-back fork (say from
+    // its message's 「查看」) unfolds its group once, so the selection is not hidden in a fold.
+    const selectedIn = selected === undefined ? undefined : archived.some(m => m.id === selected) ? 'archived' : done.some(m => m.id === selected) ? 'done' : undefined
+    useEffect(() => {
+      if (selectedIn === 'archived') setShowArchived(true)
+      else if (selectedIn === 'done') setShowDone(true)
+    }, [selected, selectedIn])
     const openTo = (id: string) => (roster?.openRequests ?? []).filter(r => r.to === id)
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
@@ -1008,7 +993,7 @@ export function createAgentsPage(ctx: {
           </div>
           <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
         </div>
-        {sessionId === undefined || catalog === undefined || !canPickModel ? null : <ForkModelPicker sessionId={sessionId} current={roster?.forkModel ?? null} run={run} catalog={catalog} />}
+        {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0
           ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会交给一个分身。'}</div>
           : (
@@ -1050,7 +1035,7 @@ export function apply(ctx: any): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-agent-scheduler'
-    style.textContent = STYLE
+    style.textContent = STYLE + MODEL_MENU_STYLE
     document.head.appendChild(style)
     return () => { style.remove() }
   }, 'agent-scheduler: styles')
