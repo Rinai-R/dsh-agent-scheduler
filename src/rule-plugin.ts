@@ -239,6 +239,12 @@ export function apply(ctx: Context, config: Config): void {
     workerPreset: config.workerPreset,
     defaultOn: config.defaultOn,
     log: (message, error) => { ctx.logger('agent-scheduler').warn(message, error) },
+    // A worker renamed in a split gets a title to match, when it is resident and titles exist.
+    renameSession: (id, title) => {
+      const session = ctx.agents.get(id)?.session
+      if (titles === undefined || session === undefined) return
+      titles.rename(session, title)
+    },
   })
   ctx.effect(() => () => { scheduler.dispose() }, 'agent-scheduler: queue')
   // Session titles come from user messages; the input rule removes them, so name the session
