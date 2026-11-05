@@ -26,7 +26,7 @@ export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 's
 
 interface Event { type: string; seq: number; time: number; data: Record<string, unknown> }
 type CardState = 'queued' | 'running' | 'done' | 'failed' | 'archived'
-interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: CardState; readonly detail?: string; /** The chat already shows the user's own message (with its images); the card adds only the status. */ readonly logged?: true }
+interface State { readonly seq: number; readonly time: number; readonly text: string; readonly forkId: string; readonly fork: CardState; readonly detail?: string; /** The chat already shows the user's own message (with its images); the card adds only the status. */ readonly logged?: true; /** `fork-N`; absent in the oldest records. */ readonly name?: string }
 
 /** Fork-state record → what the card says. `started` follows a wait in the queue. */
 const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'running', done: 'done', failed: 'failed', archived: 'archived' }
@@ -61,6 +61,7 @@ export const inputDefinition = {
     forkId: String(match.event.data.forkId),
     fork: 'running',
     ...(match.event.data.logged === true ? { logged: true as const } : {}),
+    ...(typeof match.event.data.name === 'string' ? { name: match.event.data.name } : {}),
   }),
   update: (context: Ctx & { state: State }, match: { event: Event }): State => {
     if (match.event.type !== FORK_STATE) return context.state
@@ -165,8 +166,19 @@ const STYLE = `
 .sch-roster-reqs{margin-right:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
-.sch-input-fork{display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
-.sch-input-fork:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
+.sch-input-fork{display:inline-flex;align-items:center;gap:6px;max-width:82%;border:.5px solid var(--dsw-alias-border-l1,transparent);background:var(--dsw-alias-bg-layer-1,transparent);padding:4px 6px 4px 10px;border-radius:999px;color:var(--sch-tone,var(--dsw-alias-label-secondary));font:var(--dsw-font-xxs-12);cursor:pointer;white-space:nowrap}
+.sch-input-fork:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.sch-input-fork:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+.sch-input-what{overflow:hidden;text-overflow:ellipsis}
+.sch-input-name{font-weight:600}
+.sch-input-open{display:inline-flex;align-items:center;gap:1px;padding-left:6px;border-left:.5px solid var(--dsw-alias-border-l1,currentColor);color:var(--dsw-alias-label-tertiary)}
+.sch-input-fork:hover .sch-input-open{color:var(--dsw-alias-label-primary)}
+.sch-input-fork[data-state=running] .sch-input-dot,.sch-input-fork[data-state=queued] .sch-input-dot{animation:sch-pulse 1.4s ease-out infinite}
+.sch-input-fork[data-state=queued]{--sch-dot:var(--dsw-alias-state-warn-primary);--sch-tone:var(--dsw-alias-state-warn-primary)}
+.sch-input-fork[data-state=archived]{--sch-dot:var(--dsw-alias-label-caption)}
+.sch-input-fork[data-state=running] .sch-input-what::after{content:"";display:inline-block;width:1.2em;text-align:left;animation:sch-ellipsis 1.2s steps(4,end) infinite}
+@keyframes sch-ellipsis{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+@media (prefers-reduced-motion:reduce){.sch-input-fork .sch-input-dot,.sch-input-fork .sch-input-what::after{animation:none}}
 .sch-input-dot,.sch-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--sch-dot,var(--dsw-alias-label-caption))}
 :is(.sch-input,.sch-roster,.sch-mode-group) [data-state=running],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=running]{--sch-dot:var(--dsw-alias-brand-primary-new-colorprimary-new-color);--sch-tone:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
 :is(.sch-input,.sch-roster,.sch-mode-group) [data-state=done],:is(.sch-input,.sch-roster,.sch-mode-group) [data-row=done]{--sch-dot:var(--dsw-alias-state-success-primary)}
@@ -250,6 +262,25 @@ const STYLE = `
 `
 
 const INPUT_LABEL: Record<CardState, string> = { queued: '分身排队中', running: '分身处理中', done: '分身已交回', failed: '分身启动失败', archived: '分身已归档' }
+
+/**
+ * What the status line under a handed-off message says: who has it and where it is, so a send
+ * that the lead did not answer still visibly went somewhere.
+ * @param state - the card state.
+ * @returns the line's parts; `name` is bold, `open` is the call to action.
+ */
+export function statusLine(state: Pick<State, 'fork' | 'name' | 'detail'>): { lead: string; name: string; tail: string; open: string } {
+  const name = state.name ?? '分身'
+  switch (state.fork) {
+    case 'queued': return { lead: '已交给 ', name, tail: ' · 排队等空位', open: '查看' }
+    case 'running': return { lead: '已交给 ', name, tail: ' · 处理中', open: '查看' }
+    case 'done': return { lead: '', name, tail: ' 已交回', open: '查看' }
+    // A fork archives itself once it has handed back; to the user it is still "handed back".
+    case 'archived': return { lead: '', name, tail: ' 已交回', open: '查看' }
+    case 'failed': return { lead: '', name, tail: ` 启动失败${state.detail === undefined ? '' : `：${state.detail}`}`, open: '查看' }
+  }
+}
+
 
 const STATE_LABEL: Record<RowState, string> = {
   running: '在跑',
@@ -386,12 +417,14 @@ function countsOf(members: readonly Member[], statuses: Statuses | undefined) {
 export function createInputCard(open: (parent: string, child: string) => void) {
   return memo(function InputCard({ node, sessionId }: { node: { data: State }; sessionId: string }) {
     const { text, fork, forkId, detail, logged } = node.data
+    const line = statusLine(node.data)
     return (
       <div className="sch-input" data-scheduler-input="" data-fork-state={fork} data-logged={logged === true ? 'yes' : 'no'}>
         {logged === true ? null : <div className="sch-input-bubble">{text}</div>}
-        <button type="button" className="sch-input-fork" title={detail ?? forkId} onClick={() => { open(sessionId, forkId) }}>
+        <button type="button" className="sch-input-fork" data-state={fork} title={`${INPUT_LABEL[fork]}${detail === undefined ? '' : `：${detail}`}。点击在右侧打开这个分身的对话`} aria-label={`${line.lead}${line.name}${line.tail}，${line.open}`} onClick={() => { open(sessionId, forkId) }}>
           <span className="sch-input-dot" data-state={fork} />
-          {INPUT_LABEL[fork]}{detail === undefined ? '' : `：${detail}`}
+          <span className="sch-input-what">{line.lead}<span className="sch-input-name">{line.name}</span>{line.tail}</span>
+          <span className="sch-input-open">{line.open}{ICON.chevron}</span>
         </button>
       </div>
     )
