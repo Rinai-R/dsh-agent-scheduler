@@ -125,6 +125,7 @@ describe('/agents seen', () => {
     // `seen all` reads every unread report at once (an old log has them all unread).
     appendAgent(lead.session, { action: 'failed', id: 'w8', name: 'ops', detail: 'x' })
     appendAgent(lead.session, { action: 'failed', id: 'w7', name: 'qa', detail: 'y' })
+    scheduler.forget(lead.id) // refold: these records were appended behind the ledger's back
     expect(await run('seen all')).toMatchObject({ kind: 'success', text: 'Marked every report as read.' })
     expect(scheduler.ledgerOf(lead).state.members.filter(m => reviewOf(m) !== undefined)).toHaveLength(0)
     expect(await run('seen all')).toMatchObject({ kind: 'success', text: 'Nothing unread.' })
