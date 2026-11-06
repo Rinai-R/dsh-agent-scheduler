@@ -567,6 +567,8 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 修完后：pinned（0.2.1-rc.5）200/200 通过；next（0.2.2-rc.1）通过，其中 1 条 P2 范围检查按设计跳过。
 
+**未解决（偶发，只在 0.2.2）**：`tests/recovery.spec.ts`「fails the cut-off request once … also across a second restart」在 next 上偶尔失败。第二次 resume 主会话时，0.2.2 的持久化报 `released v2 row 6 has seq gap (expected 6, got 5)`，拒绝打开日志；本地一次超时、一次 CI 失败，其余几次都通过。像是上一代主会话在 shutDown 之后还有一次延迟写入（结算或退役的定时器），0.2.1 对此宽容，0.2.2 会校验。这不在适配层范围内，留作单独排查：先确认 scheduler 在主会话 dispose 之后是否还会写入它。
+
 ### 7.4 真实 DSH 验证
 
 在隔离的 `DSH_HOME=/tmp/dshhome-probe` 里，把构建好的插件装进 web profile，用宿主的 HTTP API 驱动（没有碰 `~/.dsh`）。在一个 `standard` 预设的会话里：
