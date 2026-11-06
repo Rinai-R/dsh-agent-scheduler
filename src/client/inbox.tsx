@@ -64,7 +64,7 @@ export function dropTarget(items: readonly MailItem[], dragged: string, onto: st
   return group[to + 1]?.id ?? 'end'
 }
 
-const KIND_KEY = { reply: 'inbox.kind.reply', report: 'inbox.kind.report', conclusion: 'inbox.kind.conclusion', failure: 'inbox.kind.failure' } as const
+const KIND_KEY = { reply: 'inbox.kind.reply', report: 'inbox.kind.report', conclusion: 'inbox.kind.conclusion', failure: 'inbox.kind.failure', merged: 'inbox.kind.merged' } as const
 
 const clock = (ms: number): string => {
   const d = new Date(ms)
@@ -187,7 +187,8 @@ export function InboxSection(props: InboxProps) {
                     <span className="sch-inbox-wide">{' · '}{clock(item.at)}{item.held === true ? ` · ${t('inbox.held')}` : ''}</span>
                   </span>
                 </span>
-                <span className="sch-inbox-text">{mailPreview(item.text, 200)}</span>
+                {/* A merge is news, not something to answer: one line, the rest in the tooltip. */}
+                {item.kind === 'merged' ? null : <span className="sch-inbox-text">{mailPreview(item.text, 200)}</span>}
               </button>
               <span className="sch-inbox-acts">
                 {button(item.pinned === true ? 'unpin' : 'pin', item, t(item.pinned === true ? 'inbox.unpin' : 'inbox.pin'), '📌')}

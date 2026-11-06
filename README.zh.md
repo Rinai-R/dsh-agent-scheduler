@@ -106,6 +106,8 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 一直黄。点开会发 `/agents seen`，记一条 `seen` 记录，重启后已读的不会再亮；顶部「全部已读」（`/agents seen all`）一次读完。没读的成员即使已归档也留在
 「分身」「Worker」里，折叠组只收已读的；分组标题和输入框的 Agents 按钮带未读数。
 
+**合并 worker。** `agent_split` 的反操作：`agent_merge`、`/agents merge`，或 worker 行上的「合并到…」。被合并方先写交接（已完成、进行中、决策、未决问题、改过的文件、分支/PR、未提交改动），代码必须先提交或在交接里交给保留方（调度器会在它的目录里查 `git status`）；然后它被归档，名字归保留方（之后按这些名字派的活都落到保留方），保留方可以改名（同一 area 内可改回 split 前的名字），并收到交接消息。写不了交接的被合并方，从它的日志生成。被合并方在跑或有未答请求时拒绝；重启后从最后记录的一步续上。详见 [docs/worker-merge.md](docs/worker-merge.md)。
+
 **lead 收件箱。** lead 忙的时候到的答复、报告、分身结论和失败通知，放在 Agents 页顶部的「待 lead 处理」一栏，不再挤进输入框上方的排队消息（那里只留你自己排的）。lead 空闲时一次合并交给它，排在你给它排的消息之后。可以拖动排序（或 Alt+↑/↓）、📌 置顶、⏸ 暂缓（取消前一直跳过）、⚡ 立即交给 lead（插进它当前回合），或「全部交给 lead」；点条目打开发件人的对话。有回报在等的成员行尾有 ✉，输入框旁的 Agents 按钮显示 ✉N。收件箱是插件记录，重启后还在；lead 的 `agent_list` 里有每条的摘要（发件人、请求号、时间、正文前 120 字）。
 
 ### 模型
@@ -134,6 +136,7 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 | `/agents archive done` | 归档所有已交回、没有欠回答的分身。 |
 | `/agents seen <name>` | 把成员最近一次上报标为已读（在 Agents 页点开成员时自动发送）。 |
 | `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`、`/agents inbox now all`、`/agents inbox move <m-N> [<m-N>\|end]` | 调整 lead 的收件箱（Agents 页会发这些）。 |
+| `/agents merge <被合并的> into <保留的> [--name <新名字>] [--role <职责>]` | 把一个 worker 合并到另一个（split 的反操作；`/agents merge <a> <b>` 自动挑保留方）。Agents 页的「合并到…」做同样的事。 |
 | `/agents seen all` | 把所有未读上报标为已读（Agents 页顶部的「全部已读」）。有圆点之前的旧会话，过去的上报会先显示为未读一次。 |
 | `/worker` | 查看之后新建 worker 的默认模型。 |
 | `/worker model <provider>/<model> [effort]` | 设置之后新建 worker 的默认模型。 |

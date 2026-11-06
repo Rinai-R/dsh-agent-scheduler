@@ -6,7 +6,7 @@
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {
-  AgentRecord, ForkModelRecord, ForkStateRecord, InputRecord, MailRecord, ModeRecord, RequestRecord, TeamRecord, RoleRecord, SeenRecord, SettledRecord,
+  AgentRecord, ForkModelRecord, ForkStateRecord, InputRecord, MailRecord, MergeRecord, ModeRecord, RequestRecord, TeamRecord, RoleRecord, SeenRecord, SettledRecord,
 } from '../../records.js'
 import type { MemberModelRecord } from '../../member-model.js'
 import type { Roster, RosterView } from '../../projection.js'
@@ -24,6 +24,7 @@ declare module '@deepseek-ai/dsh-session/types' {
     'plugin:dsh-agent-scheduler/mode': ModeRecord
     'plugin:dsh-agent-scheduler/seen': SeenRecord
     'plugin:dsh-agent-scheduler/mail': MailRecord
+    'plugin:dsh-agent-scheduler/merge': MergeRecord
     'plugin:dsh-agent-scheduler/team': TeamRecord
     'plugin:dsh-agent-scheduler/member-model': MemberModelRecord
   }

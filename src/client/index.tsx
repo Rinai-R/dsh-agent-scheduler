@@ -13,6 +13,7 @@ import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, RO
 import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
+import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
 import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
 import { list, t, tn, useLocale } from './i18n.js'
@@ -58,6 +59,8 @@ interface Roster {
   /** The lead's inbox in delivery order; absent from a host not restarted since it existed. */
   readonly inbox?: readonly MailItem[]
   readonly delivered?: MailDelivery
+  /** Merges under way; absent from a host not restarted since merges existed. */
+  readonly merging?: readonly { id: string; absorbed: string; survivor: string; state: string }[]
   readonly teams?: Readonly<Record<string, TeamView>>
 }
 /** One Session's live status as the client root hook reports it. */
@@ -264,6 +267,17 @@ const STYLE = `
 :is(.sch-roster-archive,.sch-roster-rename):hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-head-actions{flex:none;display:flex;align-items:center;gap:2px}
 .sch-roster-rename{right:46px}
+.sch-roster-merge{position:absolute;right:76px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-merge[data-slot="1"]{right:46px}
+.sch-roster-merge[data-slot="0"]{right:16px}
+.sch-roster-item:hover .sch-roster-merge,.sch-roster-merge:focus-visible{display:inline-flex}
+.sch-roster-merge:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-item:has(.sch-roster-merge):hover .sch-roster-end{visibility:hidden}
+.sch-roster-item > .sch-roster-form{margin:2px 12px 8px}
+.sch-merge-keep{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-merge-keep label{display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary)}
+select.sch-roster-input{padding:0 4px}
+.sch-roster-item:has(> .sch-roster-form) :is(.sch-roster-archive,.sch-roster-rename,.sch-roster-merge){display:none}
 .sch-roster-rename[data-alone]{right:16px}
 .sch-roster-edit{display:grid;grid-template-columns:7px minmax(0,1fr);align-items:center;column-gap:10px;margin:1px 8px;padding:6px 10px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-input{box-sizing:border-box;width:100%;min-width:0;height:26px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);padding:0 8px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;outline:none}
@@ -532,6 +546,9 @@ const ICON = {
   ),
   plus: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+  ),
+  merge: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 2.5v3.2c0 1.6 1.2 2.6 2.6 3.2L8 9.5M12 2.5v3.2c0 1.6-1.2 2.6-2.6 3.2L8 9.5V13.5M6 11.6l2 2 2-2" /></svg>
   ),
   rename: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.5 2.8 13.2 5.5 6 12.7l-3.2.5.5-3.2 7.2-7.2Z" /></svg>
@@ -1125,6 +1142,8 @@ export function createAgentsPage(ctx: {
     const [draft, setDraft] = useState({ name: '', role: '', cwd: '' })
     const [formError, setFormError] = useState<string | null>(null)
     const [submitting, setSubmitting] = useState(false)
+    // 「合并到…」 on a worker row: the other worker, which side stays, the survivor's new name.
+    const [merging, setMerging] = useState<{ id: string; from: string; other: string; keep: 'other' | 'this'; name: string; error: string | null; busy: boolean } | undefined>(undefined)
     const [renaming, setRenaming] = useState<{ id: string; from: string; value: string; error: string | null; busy: boolean } | undefined>(undefined)
     const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? t('restart.note') : error
     const create = () => {
@@ -1212,7 +1231,11 @@ export function createAgentsPage(ctx: {
       const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
       const second = compact ? '' : hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
       // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
-      const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived'
+      const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
+      const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived' && merge === undefined
+      // Merge into another live worker: there must be one, and neither may be mid-merge.
+      const partners = mergePartners(rows, member, roster?.merging ?? [])
+      const canMerge = canRename && partners.length > 0
       if (renaming?.id === member.id) {
         return (
           <div key={member.id} className="sch-roster-item">
@@ -1245,11 +1268,14 @@ export function createAgentsPage(ctx: {
           </span>
           <span className="sch-roster-end">
             {waiting === 0 ? null : <span className="sch-roster-mail" data-scheduler-mail={waiting} title={tn('inbox.member', waiting)}>✉</span>}
+            {merge === undefined ? null : <span className="sch-roster-reqs" data-scheduler-merging={merge.id}>{t('merge.pending', { id: merge.id })}</span>}
             {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => t('row.request', { id: r.id, text: r.text.replace(/\s+/gu, ' ').slice(0, 80) })).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
             <span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span>
             <span className="sch-roster-chev">{ICON.chevron}</span>
           </span>
         </button>
+        {canMerge ? <button type="button" className="sch-roster-merge" data-slot={(canRename ? 1 : 0) + (canArchive ? 1 : 0)} aria-label={t('merge.aria', { name: member.name })} title={t('merge.action')} disabled={pending.has(member.name)} onClick={() => { setMerging(startMerge(member, partners, statuses, openTo)) }}>{ICON.merge}</button> : null}
+        {merging?.id === member.id ? mergeForm(member, partners) : null}
         {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
         {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
         {!hasTeam ? null : (
@@ -1259,6 +1285,45 @@ export function createAgentsPage(ctx: {
         )}
         {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
         </div>
+      )
+    }
+    const commitMerge = (member: Member) => {
+      if (sessionId === undefined || merging === undefined || merging.busy) return
+      const other = rows.find(m => m.name === merging.other)
+      if (other === undefined) return
+      const [absorbed, survivor] = merging.keep === 'other' ? [member.name, other.name] : [other.name, member.name]
+      const built = mergeCommand(absorbed, survivor, merging.name)
+      if ('error' in built) { setMerging({ ...merging, error: built.error }); return }
+      setMerging({ ...merging, busy: true, error: null })
+      const settle = (error: string | null) => { setMerging(m => m === undefined || m.id !== member.id ? m : error === null ? undefined : { ...m, busy: false, error: restartNote(error) }) }
+      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    const mergeForm = (member: Member, partners: readonly Member[]) => {
+      if (merging === undefined) return null
+      const other = merging.other
+      const keep = (which: 'other' | 'this') => { setMerging(m => m === undefined ? m : { ...m, keep: which, error: null }) }
+      return (
+        <form className="sch-roster-form" data-scheduler-merge={member.name} onSubmit={e => { e.preventDefault(); commitMerge(member) }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setMerging(undefined) } }}>
+          <label>{t('merge.with')}
+            <select className="sch-roster-input" value={other} disabled={merging.busy} onChange={e => { const value = e.currentTarget.value; setMerging(m => m === undefined ? m : { ...startMerge(member, partners.filter(p => p.name === value), statuses, openTo), name: m.name }) }}>
+              {partners.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
+          </label>
+          <div className="sch-merge-keep" role="radiogroup" aria-label={t('merge.keep')}>
+            <span>{t('merge.keep')}</span>
+            <label><input type="radio" name={`keep-${member.id}`} checked={merging.keep === 'other'} disabled={merging.busy} onChange={() => { keep('other') }} />{other}</label>
+            <label><input type="radio" name={`keep-${member.id}`} checked={merging.keep === 'this'} disabled={merging.busy} onChange={() => { keep('this') }} />{member.name}</label>
+          </div>
+          <label>{t('merge.name')}
+            <input className="sch-roster-input" value={merging.name} placeholder={t('merge.namePlaceholder')} spellCheck={false} disabled={merging.busy} onChange={e => { const name = e.currentTarget.value; setMerging(m => m === undefined ? m : { ...m, name, error: null }) }} />
+          </label>
+          <div className="sch-roster-sub">{t('merge.hint')}</div>
+          {merging.error === null ? null : <div className="sch-roster-form-error" role="status">{merging.error}</div>}
+          <div className="sch-roster-form-actions">
+            <button type="button" className="sch-roster-clear" disabled={merging.busy} onClick={() => { setMerging(undefined) }}>{t('merge.cancel')}</button>
+            <button type="submit" className="sch-roster-primary" disabled={merging.busy}>{merging.busy ? t('merge.submitting') : t('merge.submit')}</button>
+          </div>
+        </form>
       )
     }
     const section = (title: string, members: readonly Member[]) => {
@@ -1371,6 +1436,37 @@ export function createAgentsPage(ctx: {
       </div>
     )
   })
+}
+
+/**
+ * Workers a worker can be merged with: live, started, not itself, not mid-merge; same area first.
+ * @returns the candidates.
+ */
+export function mergePartners<M extends Pick<Member, 'id' | 'kind' | 'state' | 'area'>>(rows: readonly M[], member: M, merging: readonly { absorbed: string; survivor: string }[]): M[] {
+  const busy = new Set(merging.flatMap(m => [m.absorbed, m.survivor]))
+  const ok = rows.filter(m => m.kind === 'worker' && m.state === 'started' && m.id !== member.id && !busy.has(m.id))
+  return [...ok.filter(m => m.area !== undefined && m.area === member.area), ...ok.filter(m => m.area === undefined || m.area !== member.area)]
+}
+
+/** The form's first state: the first partner, and which side stays by the scheduler's rule. */
+function startMerge(member: Member, partners: readonly Member[], statuses: Statuses | undefined, openTo: (id: string) => readonly unknown[]) {
+  const other = partners[0]!
+  const busy = (m: Member) => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' || openTo(m.id).length > 0 }
+  const [, survivor] = defaultSurvivor(member, other, busy)
+  return { id: member.id, from: member.name, other: other.name, keep: survivor.id === other.id ? 'other' as const : 'this' as const, name: '', error: null, busy: false }
+}
+
+/**
+ * The command the merge form runs.
+ * @param absorbed - the worker merged away.
+ * @param survivor - the worker that stays.
+ * @param name - the survivor's new name, or '' to keep its own.
+ * @returns the line, or why it cannot run.
+ */
+export function mergeCommand(absorbed: string, survivor: string, name: string): { line: string } | { error: string } {
+  const next = name.trim()
+  if (next !== '' && !/^[a-z][a-z0-9-]{0,39}$/u.test(next)) return { error: t('form.nameRule') }
+  return { line: `/agents merge ${absorbed} into ${survivor}${next === '' ? '' : ` --name ${next}`}` }
 }
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
