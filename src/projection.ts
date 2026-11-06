@@ -6,7 +6,7 @@
  */
 import type { SessionEvent, SessionHeader, SessionLogOffset } from './dsh/types.js'
 import type { Parser } from './dsh/host/services.js'
-import { inputOf, recordReaders as R, type ForkModelSelection, type MailKind } from './records.js'
+import { inputOf, recordReaders as R, type ForkModelSelection, type MailKind, type TeamRecord } from './records.js'
 import { memberModelRecordOf } from './member-model.js'
 import { unread } from './review.js'
 
@@ -67,6 +67,8 @@ export interface RosterRequest {
   readonly messageId?: string | undefined
   readonly answer?: string | undefined
   readonly deliveredTo?: string | undefined
+  /** Its worker's teammates were still working when the round that took it ended. */
+  readonly deferred?: true | undefined
 }
 
 /** One message waiting in the lead's inbox. */
@@ -95,6 +97,8 @@ export interface MailDelivery {
   /** Requests it answered or failed. */
   readonly requests: readonly string[]
 }
+/** The Agent Team one agent leads: its teammates and task board (see {@link TeamRecord}). */
+export type TeamView = Pick<TeamRecord, 'members' | 'tasks'>
 
 /** Whole fold state of one main Session; plain JSON. */
 export interface Roster {
@@ -112,6 +116,8 @@ export interface Roster {
   /** Messages ever queued: the sequence of `m-N`. */
   readonly mailCount?: number
   readonly delivered?: MailDelivery
+  /** Agent Teams led by the lead or a worker, by the Team Lead's Session id. */
+  readonly teams?: Readonly<Record<string, TeamView>>
 }
 
 /** What the client receives: members and the requests still open. */
@@ -128,6 +134,8 @@ export interface RosterView {
   /** The lead's inbox in delivery order; absent from hosts before it existed. */
   readonly inbox?: readonly MailItem[]
   readonly delivered?: MailDelivery
+  /** Agent Teams by the Team Lead's Session id; absent from hosts before it existed. */
+  readonly teams?: Readonly<Record<string, TeamView>>
 }
 
 /** Characters of a message the client view carries (its tooltip). */
@@ -272,6 +280,7 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         messageId: request.messageId ?? r?.messageId,
         answer: request.answer ?? request.detail ?? r?.answer,
         deliveredTo: request.deliveredTo ?? r?.deliveredTo,
+        deferred: request.action === 'sent' ? (request.deferred ?? r?.deferred) : undefined,
       })),
     }
   }
@@ -304,6 +313,12 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const mail = R.mail(event)
   if (mail !== undefined) return applyMail(state, mail, event.time)
+  const team = R.team(event)
+  if (team !== undefined) {
+    const next = { members: team.members, tasks: team.tasks }
+    if (JSON.stringify(state.teams?.[team.owner]) === JSON.stringify(next)) return state
+    return { ...state, teams: { ...state.teams, [team.owner]: next } }
+  }
   const settled = R.settled(event)
   if (settled !== undefined) {
     if (!state.members.some(m => m.id === settled.agent)) return state
@@ -359,6 +374,7 @@ export function rosterView(state: Roster): RosterView {
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
       inbox: mailOrder(state.mail ?? []).map(m => m.text.length > VIEW_TEXT ? { ...m, text: `${m.text.slice(0, VIEW_TEXT)}…` } : m),
       ...(state.delivered === undefined ? {} : { delivered: state.delivered }),
+      ...(state.teams === undefined ? {} : { teams: state.teams }),
     }
     views.set(state, view)
   }
@@ -406,6 +422,16 @@ function checkDelivered(value: unknown): void {
   if (!isRecord(value) || typeof value.count !== 'number' || typeof value.at !== 'number' || !Array.isArray(value.requests) || !value.requests.every(isString)) fail('delivered')
 }
 
+function checkTeams(value: unknown): void {
+  if (value === undefined) return
+  if (!isRecord(value)) fail('teams')
+  for (const team of Object.values(value)) {
+    if (!isRecord(team) || !Array.isArray(team.members) || !Array.isArray(team.tasks)) fail('team')
+    for (const m of team.members) if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.status)) fail('team member')
+    for (const t of team.tasks) if (!isRecord(t) || !isString(t.id) || !isString(t.subject) || !isString(t.status) || !Array.isArray(t.blockedBy)) fail('team task')
+  }
+}
+
 /**
  * Validators for persisted state and the wire copy. They check the shape for real without adding
  * zod to the published dependencies; registerProjection (src/dsh/host/services.ts) adapts them.
@@ -421,10 +447,12 @@ export const rosterSchema = {
       if (!isRecord(r) || !isString(r.id) || !isString(r.from) || !isString(r.to) || !isString(r.text)) fail('request')
       if (r.state !== 'sent' && r.state !== 'answered' && r.state !== 'failed') fail('request state')
       for (const key of ['messageId', 'answer', 'deliveredTo']) if (!optionalString(r[key])) fail(`request ${key}`)
+      if (r.deferred !== undefined && r.deferred !== true) fail('request deferred')
     }
     checkMail(value.mail)
     if (value.mailCount !== undefined && typeof value.mailCount !== 'number') fail('mailCount')
     checkDelivered(value.delivered)
+    checkTeams(value.teams)
     return value as unknown as Roster
   },
 } satisfies Parser<Roster>
@@ -438,6 +466,7 @@ export const rosterViewSchema = {
     for (const m of value.members) checkMember(m, true)
     checkMail(value.inbox)
     checkDelivered(value.delivered)
+    checkTeams(value.teams)
     return value as unknown as RosterView
   },
 } satisfies Parser<RosterView>

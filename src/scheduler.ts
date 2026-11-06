@@ -20,12 +20,12 @@ import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserM
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
   isLive, pendingOf, relayMessage, turnEndOf, removePending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
-  type AgentLookup, type SessionLog, type SubagentPort, type SubagentService,
+  type AgentLookup, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMail, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
+  appendAgent, appendForkState, appendInput, appendMail, appendMode, appendRequest, appendRole, appendSeen, appendSettled, appendTeam, workerModelOf,
   type ForkModelSelection, type MailKind,
 } from './records.js'
 import { schedulingOn } from './projection.js'
@@ -101,6 +101,8 @@ export interface SchedulerDeps {
    * The right-pane tab label is the subagent's creation label, which the runtime cannot change.
    */
   readonly renameSession?: ((id: string, title: string) => void) | undefined
+  /** Agent Teams, through its adapter (src/dsh/host/agent-team.ts); absent: no Teams here. */
+  readonly team?: TeamPort | undefined
 }
 
 type Outcome = 'done' | 'queued' | 'failed'
@@ -363,6 +365,21 @@ export class Scheduler {
     if (!this.ledgers.has(mainId) && (parent === undefined || !isMainSession(parent))) return undefined
     const member = this.ledgerOf(agent).members.get(agent.id)
     return member?.kind === 'fork' ? member.name : undefined
+  }
+
+  /**
+   * Whether an agent is a live worker of a resident main Session (not a fork, not archived or
+   * failed): such a worker leads its own Agent Team.
+   * @param agent - any agent.
+   * @returns membership as a worker.
+   */
+  isWorker(agent: Agent): boolean {
+    const parentId = agent.session.header.parentSession
+    if (parentId === undefined) return false
+    const parent = this.live(parentId)
+    if (parent === undefined || !isMainSession(parent)) return false
+    const member = this.ledgerOf(parent).members.get(agent.id)
+    return member?.kind === 'worker' && member.state === 'started'
   }
 
   /**
@@ -633,6 +650,7 @@ export class Scheduler {
    * @param status - its new status.
    */
   onStatus(agent: Agent, status: 'idle' | 'running'): void {
+    this.syncTeamOf(agent)
     if (status !== 'idle') return
     if (this.queue.length > 0) void this.drain()
     // A lead that finished its turn takes what waited in its inbox, all in one message.
@@ -643,6 +661,59 @@ export class Scheduler {
     const main = this.live(mainIdOf(agent))
     if (main === undefined || !this.ledgerOf(main).members.has(agent.id)) return
     this.settleInBackground(main, agent.id)
+  }
+
+  // ------------------------------------------------------------------ Agent Teams
+
+  /** Whether Agent Teams is mounted: the lead and workers lead Teams of their own. */
+  teamsAvailable(): boolean { return this.deps.team?.available() === true }
+
+  /**
+   * Copy the Team an agent belongs to (as its Lead, or as a teammate of the lead or a worker) into
+   * the main Session, when it changed: the Agents page draws it from there.
+   * @param agent - any agent whose status or Team records changed.
+   */
+  syncTeamOf(agent: Agent): void {
+    if (this.deps.team === undefined) return
+    const parentId = agent.session.header.parentSession
+    // The agent itself leads a Team, or its parent does (it is a teammate of the lead or a worker).
+    for (const candidate of [agent, parentId === undefined ? undefined : this.live(parentId)]) {
+      if (candidate === undefined) continue
+      const main = isMainSession(candidate) ? candidate : this.isWorker(candidate) ? this.live(mainIdOf(candidate)) : undefined
+      if (main === undefined || !this.ledgers.has(main.id)) continue
+      this.syncTeam(main, candidate)
+    }
+  }
+
+  /** Re-read one Team and record it when it changed. */
+  syncTeam(main: Agent, owner: Agent): void {
+    const snapshot = this.deps.team?.snapshot(owner)
+    if (snapshot === undefined) return
+    const known = this.ledgerOf(main).state.teams?.[owner.id]
+    if (known === undefined && snapshot.members.length === 0 && snapshot.tasks.length === 0) return
+    if (JSON.stringify(known) === JSON.stringify({ members: snapshot.members, tasks: snapshot.tasks })) return
+    this.record(main, s => appendTeam(s, { owner: owner.id, members: snapshot.members, tasks: snapshot.tasks }))
+  }
+
+  /**
+   * A Team record changed in some Session (Agent Teams appends to its Lead's log).
+   * @param sessionId - the Session whose log changed.
+   */
+  onTeamRecord(sessionId: string): void {
+    const agent = this.live(sessionId)
+    if (agent === undefined) return
+    queueMicrotask(() => { this.syncTeamOf(agent) })
+  }
+
+  /** Whether a worker's teammates are still at work: its round's answer would be partial. */
+  private teamBusy(memberId: string): boolean {
+    const agent = this.live(memberId)
+    if (agent === undefined || this.deps.team === undefined) return false
+    if (this.deps.team.busy(agent)) return true
+    // A teammate that already finished has its answer waiting in the worker's inbox: the worker
+    // takes it in another round, and that round's summary is the answer, not this one's.
+    const team = this.deps.team.snapshot(agent)
+    return team !== undefined && team.members.length > 0 && pendingOf(agent).length > 0
   }
 
   /** Settle a member outside a lead step; what is for the lead is queued as its own message. */
@@ -1185,7 +1256,10 @@ export class Scheduler {
     const live = (id: string) => this.inflight.has(memberId) || this.queue.some(p => p.memberId === memberId && (p.label === id || p.label === member.name || member.formerNames?.includes(p.label) === true))
     for (const request of ledger.openTo(memberId)) {
       if (!openAtResume.has(request.id) || live(request.id)) continue
-      const fate = log === undefined ? { kind: 'lost' as const } : fateOf(request, unsettled, trace)
+      // A request deferred for a worker's Team is answered by any later round that completed.
+      const fate = log === undefined ? { kind: 'lost' as const }
+        : request.deferred === true && unsettled.some(r => r.stopped === undefined) ? { kind: 'answered' as const }
+        : fateOf(request, unsettled, trace)
       if (fate.kind === 'answered') continue
       if (fate.kind === 'lost') {
         this.fail(main, request, member, `${RESTART_DETAIL} (it never reached ${member.name})`, forLead)
@@ -1296,10 +1370,20 @@ export class Scheduler {
     const rounds = cut < 0 ? all : all.slice(0, cut)
     if (all.some(r => r.stopped !== undefined)) this.stopping.delete(memberId)
     if (rounds.length === 0) return forLead
-    for (const round of rounds) {
+    // A worker that leads a Team and ended its round while teammates still work has not answered
+    // yet: their answers wake it again, and that round's closing answers the request (src/dsh/host/agent-team.ts).
+    const waiting = member.kind === 'worker' && this.teamBusy(memberId)
+    for (const [index, round] of rounds.entries()) {
       let answered = 0
+      const last = index === rounds.length - 1
       for (const request of ledger.openTo(memberId)) {
-        if (request.messageId === undefined || !round.claimed.has(request.messageId)) continue
+        const taken = request.messageId !== undefined && round.claimed.has(request.messageId)
+        if (!taken && request.deferred !== true) continue
+        if (round.stopped === undefined && last && waiting) {
+          if (request.deferred !== true) this.record(main, s => appendRequest(s, { action: 'sent', id: request.id, from: request.from, to: request.to, text: request.text, deferred: true }))
+          answered += 1
+          continue
+        }
         answered += 1
         if (round.stopped !== undefined) {
           // Its message is consumed, so no later round will take it again: it fails now.
@@ -1432,7 +1516,9 @@ export class Scheduler {
    * @returns whether a message was added.
    */
   takeMail(main: Agent, messages: UserMessage[]): boolean {
-    if (!isMainSession(main) || !this.writable(main) || pendingOf(main).some(isUserInput)) return false
+    // Right after DSH cut the lead's turn (shutting down), a late runtime notice can still wake it:
+    // that turn is being torn down too, so the inbox waits for `recover` (or the next free lead).
+    if (!isMainSession(main) || !this.writable(main) || pendingOf(main).some(isUserInput) || cutByHost(main)) return false
     const items = this.ledgerOf(main).mail.filter(m => m.held !== true)
     if (items.length === 0) return false
     this.record(main, s => appendMail(s, { action: 'delivered', ids: items.map(m => m.id), via: 'followup' }))
@@ -1515,10 +1601,22 @@ async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMes
  */
 function cutByHost(main: Agent): boolean {
   const events = eventsOf(main.session)
-  for (let i = events.length - 1; i >= Math.max(0, events.length - 50); i -= 1) {
-    if (events[i]!.type !== 'turn/end') continue
+  // A turn that never ran a step (a late runtime notice woke the lead and the scheduler emptied
+  // it) says nothing about the lead being back: look past it to the last turn that did work.
+  for (let i = events.length - 1; i >= Math.max(0, events.length - 200); i -= 1) {
+    if (events[i]!.type !== 'turn/end' || !turnHasStep(events, i)) continue
     const end = turnEndOf(events[i]!)
     return end.kind === 'interrupted' || (end.kind === 'aborted' && (end.cause === 'disposed' || end.cause === 'parent'))
+  }
+  return false
+}
+
+/** Whether the turn that ends at `end` ran at least one step. */
+function turnHasStep(events: readonly SessionEvent[], end: number): boolean {
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const type = events[i]!.type
+    if (type === 'step/start') return true
+    if (type === 'turn/start' || type === 'turn/end') return false
   }
   return false
 }
