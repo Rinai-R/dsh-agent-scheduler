@@ -9,6 +9,28 @@ import { relayMessage } from './session.js'
 /** Live Agents by Session id: `ctx.agents`, narrowed. */
 export interface AgentLookup { get(id: never): Agent | undefined }
 
+/** `FiberState.ACTIVE` of Cordis (a const enum, so not importable at run time). */
+const FIBER_ACTIVE = 2
+
+/**
+ * Whether an agent captured before an await can still take writes to its Session.
+ *
+ * Its Session may have been released meanwhile: DSH shut down, or the Session was closed and
+ * maybe reopened as a new Agent. Appending to the released one is never right: DSH ≥ 0.2.2
+ * refuses it (`cannot append outside a SessionStore`), and 0.2.1 takes the event into a log
+ * nobody owns any more, so the stored log ends up with a seq gap after a reopen.
+ * @param agent - the agent as captured.
+ * @param agents - live agents.
+ * @returns true while `agent` is the exact agent registered for its Session and its scope is not
+ *   being torn down. Teardown disposes the scope and closes the log before it unregisters the
+ *   agent, so the registry alone answers too late.
+ */
+export function isLive(agent: Agent, agents: AgentLookup): boolean {
+  if (agents.get(agent.id as never) !== agent) return false
+  const state = (agent.ctx as { fiber?: { state?: unknown } } | undefined)?.fiber?.state
+  return state === undefined || state === FIBER_ACTIVE
+}
+
 /** The main Session of a tree has no parent. */
 export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
 

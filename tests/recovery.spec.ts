@@ -29,6 +29,14 @@ async function shutDown(ctx: Awaited<ReturnType<typeof setup>>['ctx'], main: { d
     child.cancel({ kind: 'disposed' })
     await child.whenIdle()
   }
+  // The runtime tells the parent that a child stopped only after the child's teardown. Disposing
+  // the parent before that lands races DSH itself: on 0.2.2-rc.1 the notice can still open a turn
+  // on the parent being released, and those events reach the stored log after the reopened
+  // Session's (a seq gap). That happens with no scheduler mounted at all; here the children are
+  // gone and the parent has taken the notice before DSH goes away.
+  for (const id of children) await vi.waitFor(() => { expect(ctx.agents.get(SessionId(id))).toBeUndefined() })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  await ctx.agents.get(SessionId('main'))?.whenIdle()
   await main.dispose()
 }
 /** Block like a model call in flight; a cancellation ends it the way a real provider does. */
