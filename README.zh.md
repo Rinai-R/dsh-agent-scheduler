@@ -58,11 +58,11 @@ dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 ```
 
 重装 tgz 时换一个文件名：包管理器不会替换同名 tgz 的内容。装完或更新后重启 dsh（桌面应用则完全退出
-再打开）。安装前就已打开的会话仍用旧预设；重启后重新打开它或新建会话，才会出现「调度」chip。
+再打开）。重启后每个会话都会出现「调度」chip，不论它用哪个预设。
 
 ### 打开调度
 
-默认预设下的新会话关闭调度，和普通聊天一样。在输入框底栏的模式行里（access mode 和 Plan 旁边）点
+新会话关闭调度，和普通聊天一样。在输入框底栏的模式行里（access mode 和 Plan 旁边）点
 「调度」；直接输入 `/schedule` 也会打开。chip 变蓝，旁边的 Agents 按钮显示最紧急的计数——`N 等你`、
 `N 在跑`、`N 排队`、`N 失败`——没有的话显示 agent 数量。
 
@@ -74,7 +74,7 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 `agent_archive`、`role_set`、`report`——派活锁和 `rosterVersion` 校验照样生效，worker 的回答、上报和
 失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create`、`agent_split` 时 `for` 可以不填（填了 `fork-N`
 或 `r-N` 仍会校验，每个仍只建一个 worker）；开着时 lead 照旧必须填。开调度时建的分身，关掉之后仍只能
-路由。调度工具注册在预设的每个会话里（工具列表不变才能命中缓存）；关着且还没有分身或 worker 的会话，
+路由。调度工具注册在每个会话里（工具列表不变才能命中缓存）；关着且还没有分身或 worker 的会话，
 系统提示里没有调度段，建出第一个 worker 后多出一段只给 lead 的简短说明。
 
 ### Agents 页
@@ -173,9 +173,13 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 projection 是同一份 fold，所以侧栏画出来的和调度实际依据的不会漂移。子会话都是原生的；重启恢复读
 它们的日志，而不是听 agent 自述。
 
-**预设与开关。** 插件覆盖内置的 `standard` 预设：原有各行不变，只多一行调度规则，所以每个新会话
-都能调度。旧的「调度（旧会话）」预设只为让用它建的会话还能打开；这些会话默认是打开的。关闭调度后，
-之后的消息回到 lead，lead 仍能建 worker、派活；已有的分身和 worker 继续跑，结果照常汇报给 lead。
+**插件行与开关。** `cordis.patch.yml` 在 profile 顶层插入两行：宿主行和调度规则行。顶层的行对所有
+预设的 agent 都生效，所以插件不改任何预设，dsh 升级也不受影响。关闭调度后，之后的消息回到 lead，
+lead 仍能建 worker、派活；已有的分身和 worker 继续跑，结果照常汇报给 lead。
+
+**DSH 适配层。** 所有依赖 DeepSeek Harness 本身的地方（服务、事件与消息格式、运行时文案、侧栏 DOM
+和布局）都在 `src/dsh/`，插件其余部分只调这一层。dsh 缺少调度所需的服务（尤其是工具守卫）时，规则
+不做任何调度，每条命令都会说明缺了什么。详见 [docs/dsh-adapter.md](docs/dsh-adapter.md)。
 
 ## 配置
 
@@ -201,15 +205,15 @@ worktree、`git status` 和 `git log`、正在写的文件、已经启动的 job
 ### 进阶配置
 
 正常使用不需要改配置文件：`/worker model` 和 Agents 页会把 worker 默认模型记在会话里。profile
-配置里预设的规则行仍接受 `worker`（`agent_create` 和 `/worker model` 都没指定模型时，新建 worker
-的后备默认模型）和 `workerPreset`（新 worker 的 preset；留空继承本会话的）。`fork` 已停用并被忽略：
-分身始终用 lead 的模型。`defaultOn` 只属于已停用的 `scheduler` 预设。
+配置里的规则行（`agent-scheduler-rule`）仍接受 `worker`（`agent_create` 和 `/worker model` 都没指定
+模型时，新建 worker 的后备默认模型）和 `workerPreset`（新 worker 的 preset；留空继承本会话的）。
+`fork` 已停用并被忽略：分身始终用 lead 的模型。
 
 ## 已知限制
 
-- 覆盖 `standard` 时复制的是生成 `cordis.patch.yml` 那一版 dsh（当前 `0.2.1-rc.5`）的预设行。dsh
-  升级后用 `npm run gen:preset -- <dump.yml>` 重新生成，否则预设停在旧内容。别的插件也覆盖
-  `standard` 时会冲突。
+- 调度的工具、命令和开关出现在所有预设的会话里，不只 `standard`（调度没开、也没有 worker 时不起作用）。
+- 用已移除的「调度（旧会话）」预设建的会话（0.1.0-rc.3 之前的插件版本）不能再打开：这个预设随
+  `standard` 覆盖一起删掉了。
 - 开关会改变 lead 的系统提示（多出或去掉调度段），切换后 lead 的下一次请求不命中缓存。
 - 分身只路由：工具守卫只放行读类工具（`read`、`glob`、`grep`、网页与会话检索）和 `agent_*`、`role_set`、
   `report`，执行命令、改文件、提交推送、开子任务一律拒绝；拒绝信息会让它交给 worker，或在结论里说明做不了。
@@ -227,22 +231,25 @@ worktree、`git status` 和 `git log`、正在写的文件、已经启动的 job
 需要 Node.js `^22.19.0 || >=24`。
 
 - `src/index.ts`：宿主行——`fork-from` provider、名单 projection 和恢复策略。
-- `src/rule-plugin.ts`：预设行——命令、系统提示段和工具注册。
+- `src/rule-plugin.ts`：规则行——命令、系统提示段和工具注册。
+- `src/dsh/`：DSH 适配层，分宿主（`host/`）和浏览器（`client/`）两半，是唯一直接碰 DeepSeek Harness 的代码。
 - `src/scheduler.ts`：输入规则、队列、请求、结算和重启恢复。
 - `src/client/`：浏览器部分——输入卡、输入框开关、Agents 页和模型菜单。
-- `tests/`：宿主与客户端两半的 vitest。
+- `tests/`：宿主与客户端两半的 vitest；`tests/contract/` 拿真实的 DSH 版本检查每个依赖点。
 
 ```bash
 npm install
 npm run build          # 编译宿主部分，打包 dist/client.js
 npm run typecheck
 npm test
+npm run contract       # 对锁定版本的 dsh 跑契约测试（会下载它的浏览器包）
+npm run contract:next  # 同样的测试对 npm `next` 的 dsh 跑（临时重装，结束后还原）
 npm pack --dry-run
 ```
 
-`npm run gen:preset -- <dump.yml>` 从 `dsh --profile web --dump-default-config` 的输出重新生成
-`cordis.patch.yml`；`standard` 的行来自产出这份 dump 的 dsh 版本。CI 在 Node 24 上跑 typecheck、
-build、test 和 `npm pack --dry-run`。
+CI 在 Node 24 上跑 typecheck、build、test 和 `npm pack --dry-run`，并在每个 PR 和每周对锁定版本和
+`next`（仅提示）跑契约测试。dsh 发新版时：跑 `npm run contract:next`，在 `src/dsh/` 里修失败项，再
+同时放宽 `engines.dsh` 和 peer 范围（`src/dsh/host/version.ts` 的 `DSH_RANGE` 必须一致）。
 
 ## 许可
 

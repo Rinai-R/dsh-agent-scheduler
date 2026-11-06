@@ -1,7 +1,7 @@
 # DSH 适配层（adapter）设计
 
-> 状态：设计稿，待确认。本阶段不改 `src/`。
-> 基线：`main` @ 03ba296（含 feat/user-workers）。下文所有 `文件:行号` 都以此为准。
+> 状态：**已实现**（第 7 节记实现情况和与设计的差异）。第 1 节的 `文件:行号` 是设计时的基线
+> `main` @ 03ba296（含 feat/user-workers），实现后这些位置已搬进 `src/dsh/`。
 > 宿主版本：已核对本机 DeepSeek Harness 0.2.1-rc.5（app.asar），并逐项探测 npm `@next` = 0.2.2-rc.1。
 
 ## 0. 为什么要做
@@ -437,9 +437,9 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 ## 5. 待确认
 
-1. **P3 预设覆盖**：原定「先按现有能力做，继续整段拷贝 standard，靠 `packaging.spec.ts` 守门，向 DSH 提需求」（曾在 DSH 讨论帖 #9431 下评论，调研后已删除）。调研（第 6 节）发现**现有能力就能不拷贝**：把 rule 改成 profile 顶层 `- insert:` 的 host 行。另外实测：现在这份拷贝**在 DSH 0.2.2-rc.1 上会让 standard 预设加载失败**。待用户确认是否改走 6.3 的方案。
+1. ~~**P3 预设覆盖**~~ 已定并已实现：rule 改为 profile 顶层 `- insert:` 的行，不再拷贝 standard（第 6 节）；「调度（旧会话）」预设删除。
 2. ~~关键能力缺失~~ 已定：**直接禁用调度**，不跑不兼容的组合（见 2.1）。
-3. 是否同意为了做契约探针，加 6 个客户端包作为 devDependencies？
+3. ~~客户端包~~ 已定：用于探针，但**不作为 devDependencies**，改由 `scripts/fetch-dsh.mjs` 按版本下载 tarball 只读（见 7.2），免得它们的依赖树进 lockfile。
 4. ~~PR 拆分~~ 已定：**不拆**，第 1-6 步做成一个 PR，等在途分支合完后一起做（见 4.2）。
 
 ## 6. 调研：rule 怎么挂进 standard 预设（P3）
@@ -517,3 +517,62 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 - **`packaging.spec.ts` 守门够不够**：**不够**。它只能在我们这边的 CI 里发现过时（`@next` 档），保护不了已经先升级 DSH 的用户；而且照 6.3 第 1 条，过时的后果是默认预设整个起不来。即便退回这个方案，也必须同时做两件事：
   - `engines.dsh` 的上界收紧到当前验证过的 patch 版本（例如 `<=0.2.1`），而不是 `<0.3.0`；
   - DSH 每次发版当天重新生成并发版。
+
+## 7. 实现情况（第二阶段）
+
+基线 `main` @ c34cf27（worker-split、roster-overflow、create-lock、talk-to-lead 都已合入）。
+
+### 7.1 结构
+
+| 目录 / 文件 | 内容 |
+|---|---|
+| `src/dsh/compat.ts` | 两半共用：`features`（探测结果表）、`warnOnce`、`DshContractError`、`hasFunction` |
+| `src/dsh/types.ts` | 业务用到的全部 DSH 类型，只从这里导入 |
+| `src/dsh/host/runtime.ts` | `subagentPort`（startFork / startWorker / send / interrupt / drain）、`fork-from` provider 与 seed 表、`agentOptionsOf` |
+| `src/dsh/host/agent.ts` | `isMainSession / mainIdOf / cwdOf`、inbox 操作、`statusOf`、`toLead` |
+| `src/dsh/host/session.ts` | 插件记录读写、事件访问器（`turnEndOf / userMessageOf / toolCallOf / inboxSpliceOf / closingText`）、消息来源判断、`admitHidden` |
+| `src/dsh/host/hints.ts` | 宿主文案：返回指引、转发前缀、容量错误码、委托深度提示 |
+| `src/dsh/host/model.ts` | 成员模型：0.2.2 的 `agent.model.select` 与 0.2.1 的 `installModelSelection(ctx, ref)` 两套 |
+| `src/dsh/host/services.ts` | `missingRequired`、`claimOnce`、`onAgents`、工具 / 守卫 / prompt 段 / 命令 / 投影注册、标题、模型校验、日志读取 |
+| `src/dsh/host/version.ts` | `DSH_RANGE`、`hostVersion()` |
+| `src/dsh/host/augment.ts` | `PluginRecordMap` 和投影表的声明合并 |
+| `src/dsh/client/services.ts` | `clientHost(ctx)`：命令执行（两种返回形状）、命令探测、模型目录、子会话地址、投影 face、打开会话；`commandFailure` |
+| `src/dsh/client/sidebar.ts` | 布局类型和形状校验 `layoutOf`、手势 `gesturesOf`、`retainChatTabs` |
+| `src/dsh/client/dom.ts` | `SEL` 选择器表、`HOST_CSS`、`injectStyle`、`steadyTabStrips`、DOM 兜底 `chatPlacement` |
+| `src/dsh/client/ui.ts` | `SLOT` 名、`registerSlot / registerChatEvent / registerTabType / configPage` |
+
+业务模块（scheduler、rule-plugin、rounds、recovery、forks-from、member-model、records、projection、tools、fork-guard、client/*）不再直接 import 任何 `@deepseek-ai/dsh-*`，也不再出现宿主 DOM 属性名；`tests/contract/boundary.spec.ts` 守住这条边界。原来从业务模块导出的名字（`admitHidden`、`isCapacity`、`retainChatTabs`、`commandFailure` 等）保留为再导出，现有测试一条没改。
+
+与第 2 节设计的差异：
+- 文件名按内容分得更细：设计里的 `host.ts` 拆为 runtime / agent / session / services 等，`log.ts` 叫 `session.ts`。
+- `SchedulerDeps.subagents` 仍收 `ctx.subagents`，由 Scheduler 内部包成 `subagentPort`，所以测试夹具不用改。
+- `defaultOn` 配置项随旧预设删除；`SchedulerDeps.defaultOn` 仍保留给测试用。
+- 没有做 `/agents doctor`：`features.report()` 已在，命令留到需要时再加。
+
+### 7.2 契约测试与 CI
+
+- `tests/contract/`：host-api、host-text、client-probe、packaging、adapter（降级）、boundary，共 35 条。
+- 浏览器包和 `dsh-tool-subagent` 不加 devDependencies，由 `scripts/fetch-dsh.mjs <版本|tag>` 下载 tarball 解到 `.cache/dsh/<版本>/` 只读。`npm test` 下没下载时跳过这部分；`npm run contract` 先下载，并要求它们必须跑。
+- `scripts/contract.mjs [tag]`：给 tag 时，把所有 `@deepseek-ai/dsh-*` devDependencies 换成该 tag，把 cordis / schemastery 换成那一版 `@deepseek-ai/dsh` 自带的范围，全新安装后跑 typecheck 和全部测试，结束后还原 `package.json`、lockfile 和 `node_modules`。
+- CI 新增 `contract` job：pinned / next 两档，next 不挡合并；另加每周一定时运行。
+
+### 7.3 对 DSH 0.2.2-rc.1 跑出来的问题（都已在适配层里处理）
+
+| 依赖点 | 0.2.2-rc.1 的变化 | 处理 |
+|---|---|---|
+| H17 成员模型 | `installModelSelection(ctx, ref)` 和 `ModelSelectionRef` 没了；改为 `agent.model.select(selection)`，选择写进成员自己的日志 | `model.ts` 两套都支持，按 API 形状探测；因为选择会持久化，成员每次被重建时都重新确认一次（包括「已恢复默认」），选择没变时不写日志 |
+| H16 投影注册 | `register()` 改为返回 Promise 形式的 disposer | 适配层接受两种返回 |
+| P2 peer 范围 | DSH 0.2.2 带 cordis ~4.1.0、schemastery ~3.19.0，原 peer 范围（~4.0.5 / ~3.18.5）装不上 | peer 放宽为 `~4.0.5 \|\| ~4.1.0`、`~3.18.5 \|\| ~3.19.0`，`packaging.spec.ts` 校验 |
+| P3 预设拷贝 | 删了 `tool-subagent-control/list-agents` 模块 | 本次已不再拷贝预设，不受影响 |
+
+修完后：pinned（0.2.1-rc.5）200/200 通过；next（0.2.2-rc.1）通过，其中 1 条 P2 范围检查按设计跳过。
+
+### 7.4 真实 DSH 验证
+
+在隔离的 `DSH_HOME=/tmp/dshhome-probe` 里，把构建好的插件装进 web profile，用宿主的 HTTP API 驱动（没有碰 `~/.dsh`）。在一个 `standard` 预设的会话里：
+- `/schedule on` 成功；
+- 一条用户消息被交给 `fork-1`，输入记录写进了日志；
+- 分身有全部 `agent_*` 工具和 `# Agent Scheduler` 段；
+- 分身的模型调用因没有 API key 失败后，照常结算。
+这证明顶层行能拿到所有预设 agent 的事件和注册。
+
