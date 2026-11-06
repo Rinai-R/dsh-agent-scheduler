@@ -237,6 +237,14 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
   ]
 }
 
+/** The sentence of LEAD_OFF_NOTICE that Agent Teams changes: its send_message is the lead's own. */
+const TOOLS_CAVEAT = 'Do not use send_message or the subagent tools for this.'
+const TEAM_OFF_CAVEAT = 'Agent Teams is on: spawn_teammate, send_message, list_agents and the team_task tools are your own Team (teammates share your working directory); use them for help inside this conversation, and agent_create / agent_send for workers.'
+/** A worker leads its own Agent Team (src/dsh/host/agent-team.ts). */
+export const WORKER_TEAM_NOTICE = 'You are the Team Lead of your own Agent Team: spawn_teammate creates teammates (they share your working directory), send_message and the team_task tools coordinate them, wait_agent waits for them. Their answers come to you, not to the lead; once they have answered, end your turn with a summary: that is your answer to the request. Teammates cannot form teams of their own.'
+/** While scheduling is on, the lead and forks do not form teams. */
+const ON_TEAM_NOTICE = 'Agent Teams is on, but while scheduling is on the lead and forks do not form teams (spawn_teammate is refused): workers do. Existing teammates of the lead keep messages, tasks and interrupts.'
+
 /**
  * The system-prompt section. Identical for the lead and its forks so a fork keeps the lead's
  * cache prefix; workers get their own.
@@ -252,15 +260,17 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   // The lead with scheduling off talks to the user itself. A plain chat (no forks or workers yet)
   // gets no section at all, so the switch costs nothing until the lead first creates a worker;
   // the tool descriptions say enough for that first creation.
+  const teams = scheduler.teamsAvailable()
   if (isMainSession(agent) && !scheduler.isOn(agent)) {
     if (ledger.state.members.length === 0) return ''
-    return ['# Agent Scheduler', LEAD_OFF_NOTICE, ...(role !== undefined && role !== '' ? [`Role:\n${role}`] : [])].join('\n')
+    return ['# Agent Scheduler', teams ? LEAD_OFF_NOTICE.replace(TOOLS_CAVEAT, TEAM_OFF_CAVEAT) : LEAD_OFF_NOTICE, ...(role !== undefined && role !== '' ? [`Role:\n${role}`] : [])].join('\n')
   }
   const lines = isWorker
     ? [
         '# Agent Scheduler: worker',
         `Your name is "${scheduler.ledgerOf(agent).members.get(agent.id)?.name ?? ''}" (the user may rename you; this is the current one).`,
-        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead. Do not use send_message.',
+        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead.' + (teams ? '' : ' Do not use send_message.'),
+        ...(teams ? [WORKER_TEAM_NOTICE] : []),
       ]
     : [
         '# Agent Scheduler',
@@ -268,6 +278,7 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
         FORK_NOTICE,
         LEAD_NOTICE,
         'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one (coarse: per repository or module), agent_send to delegate, agent_split to split a busy worker\'s area for a new task, agent_merge to merge two workers back into one once their split is no longer needed; all four take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
+        ...(teams ? [ON_TEAM_NOTICE] : []),
       ]
   // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
   const self = isWorker ? scheduler.ledgerOf(agent).members.get(agent.id) : undefined

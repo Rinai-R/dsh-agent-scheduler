@@ -9,13 +9,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
-  claimOnce, eventsOf, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  claimOnce, eventsOf, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
   registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
 } from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { parseModel, schedulerTools, sectionFor } from './tools.js'
 import { forkGuard } from './fork-guard.js'
+import { teamGuard } from './team-guard.js'
 import { list, t } from './i18n/index.js'
 import { installMemberModels, restoreMemberModel, type Validate } from './member-model.js'
 
@@ -301,6 +302,7 @@ export function apply(ctx: Context, config: Config): void {
     workerPreset: config.workerPreset,
     log,
     // A worker renamed in a split gets a title to match, when it is resident and titles exist.
+    team: teamPort(ctx),
     renameSession: (id, title) => {
       const session = ctx.agents.get(id as never)?.session
       if (session !== undefined) names.rename(session, title)
@@ -331,6 +333,10 @@ export function apply(ctx: Context, config: Config): void {
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) registerTool(ctx, tool)
   // Forks route only: every working tool is refused at dispatch (src/fork-guard.ts).
   installGuard(ctx, forkGuard(agent => scheduler.forkNameOf(agent)))
+  // Agent Teams, when mounted: who may form a team (src/team-guard.ts), and workers as Team Leads.
+  installGuard(ctx, teamGuard({ isMain: isMainSession, isOn: agent => scheduler.isOn(agent), forkName: agent => scheduler.forkNameOf(agent), isWorker: agent => scheduler.isWorker(agent) }))
+  installWorkerTeams(ctx, agent => scheduler.isWorker(agent))
+  teamPort(ctx).watch(id => { scheduler.onTeamRecord(id) })
   promptSection(ctx, 'agent-scheduler', 900, agent => sectionFor(scheduler, agent))
   installMemberModels(ctx, scheduler, ctx.agents as never)
   const validate: Validate = modelValidator(ctx)

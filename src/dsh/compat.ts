@@ -9,7 +9,7 @@ export type Feature =
   // host, required
   | 'subagents' | 'agents' | 'tools' | 'tools.guard' | 'systemPrompt' | 'commands' | 'sessionQuery'
   // host, optional
-  | 'sessionTitle' | 'modelSelection' | 'llm.resolve' | 'settings.locale'
+  | 'sessionTitle' | 'modelSelection' | 'llm.resolve' | 'settings.locale' | 'agentTeams.workerLead'
   // client
   | 'conversation.events' | 'slots' | 'sidebar.tabs' | 'sidebar.layout' | 'sidebar.gestures' | 'tabs.keepMounted'
   | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'modelDirectories.catalog' | 'dom.stripTabs' | 'locale'

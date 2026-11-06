@@ -14,6 +14,8 @@ import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { defaultSurvivor } from '../merge-pick.js'
+import type { TeamView } from '../projection.js'
+import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
 import { list, t, tn, useLocale } from './i18n.js'
 import {
   chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
@@ -59,6 +61,7 @@ interface Roster {
   readonly delivered?: MailDelivery
   /** Merges under way; absent from a host not restarted since merges existed. */
   readonly merging?: readonly { id: string; absorbed: string; survivor: string; state: string }[]
+  readonly teams?: Readonly<Record<string, TeamView>>
 }
 /** One Session's live status as the client root hook reports it. */
 
@@ -1207,6 +1210,14 @@ export function createAgentsPage(ctx: {
     }, [selected, selectedIn])
     const openTo = (id: string) => (roster?.openRequests ?? []).filter(r => r.to === id)
     const [listRef, list, below] = useHiddenBelow()
+    // Workers whose team is folded open under their row.
+    const [teamsOpen, setTeamsOpen] = useState<ReadonlySet<string>>(new Set())
+    const openMember = (parent: string, child: string) => {
+      if (tab === undefined) return
+      const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
+      tab.tab.actions.openResource(ctx.chatAddress(parent, child), placement)
+      if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
+    }
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
       const pendingRequests = openTo(member.id)
@@ -1216,7 +1227,9 @@ export function createAgentsPage(ctx: {
       // An archived member is history: one line, no subtitle. A dozen of them must not push the
       // live work off the page. One still unread keeps its full row until it is opened.
       const compact = member.state === 'archived' && review === undefined
-      const second = compact ? '' : subline(member, pendingRequests)
+      const team = member.kind === 'worker' ? roster?.teams?.[member.id] : undefined
+      const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
+      const second = compact ? '' : hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
       // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
       const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
       const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived' && merge === undefined
@@ -1246,7 +1259,7 @@ export function createAgentsPage(ctx: {
         )
       }
       return (
-        <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
+        <div key={member.id} className="sch-roster-item" {...(hasTeam ? { 'data-team': '' } : {})} data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
         <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={rowTitle(member)}>
           <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
           <span className="sch-roster-main">
@@ -1265,6 +1278,12 @@ export function createAgentsPage(ctx: {
         {merging?.id === member.id ? mergeForm(member, partners) : null}
         {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
         {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
+        {!hasTeam ? null : (
+          <button type="button" className="sch-roster-team-toggle" data-scheduler-team-toggle={member.name} aria-expanded={teamsOpen.has(member.id)} aria-label={t(teamsOpen.has(member.id) ? 'team.collapse' : 'team.expand', { name: member.name })} onClick={() => { setTeamsOpen(s => { const n = new Set(s); if (n.has(member.id)) n.delete(member.id); else n.add(member.id); return n }) }}>
+            {teamsOpen.has(member.id) ? '▾' : '▸'} {t('team.toggle')}
+          </button>
+        )}
+        {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
         </div>
       )
     }
@@ -1362,6 +1381,12 @@ export function createAgentsPage(ctx: {
             open={id => { const member = rows.find(m => m.id === id); if (member !== undefined) open(member) }}
           />
         )}
+        {sessionId === undefined || (roster?.teams?.[sessionId]?.members.length ?? 0) === 0 ? null : (
+          <>
+            <div className="sch-roster-section" data-scheduler-lead-team=""><span className="sch-roster-section-title">{t('team.lead')}</span><span>{roster?.enabled === true ? t('team.leadOn') : teamSummary(roster!.teams![sessionId]!)}</span></div>
+            <TeamBlock team={roster!.teams![sessionId]!} owner={sessionId} open={openMember} />
+          </>
+        )}
         {rows.length === 0
           ? <div className="sch-roster-empty">{t('empty.none')}<br />{t(roster?.enabled === true ? 'empty.on' : 'empty.off')}</div>
           : (
@@ -1452,7 +1477,7 @@ export function apply(ctx: any): void {
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
-  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE), 'agent-scheduler: styles')
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + TEAM_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)
