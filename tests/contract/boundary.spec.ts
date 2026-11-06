@@ -25,4 +25,10 @@ describe('adapter boundary', () => {
       .map(({ f, i, line }) => `${f}:${i}: ${line.trim().slice(0, 100)}`)
     expect(offenders).toEqual([])
   })
+
+  it('only the Agent Teams adapter touches Agent Teams', () => {
+    const all = sources('src').filter(f => !/agent-team\.ts$/u.test(f))
+    const offenders = all.filter(f => ownFile(f).split('\n').some(line => !/^\s*(\*|\/\/)/u.test(line) && /\.agentTeams\b|'agentTeams'|dsh-experimental-|\.roster\.tryMembership/u.test(line)))
+    expect(offenders).toEqual([])
+  })
 })

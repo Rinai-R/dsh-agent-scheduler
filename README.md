@@ -51,6 +51,18 @@ lead — the only agent whose replies you read.
 - **Restart-aware.** A request cut off by a dsh restart either fails and is reported, or resumes in
   the worker's own session, according to the recovery policy.
 
+
+**Agent Teams.** With DSH's experimental Agent Teams bundle on, every worker leads a team of its
+own: it gets `spawn_teammate`, `send_message`, the team task board and `wait_agent`, its teammates
+are its own children (they share its working directory), and their answers come back to it. A
+request the lead gave that worker is answered only once its teammates have stopped and it has
+summed up. While scheduling is off the lead may form a team too; while it is on, the lead and forks
+may not (`spawn_teammate` is refused; an existing team keeps messages, tasks and interrupts), and
+a worker's teammates never form teams of their own. The Agents page shows a worker's team (▸ Team)
+under its row and the lead's team in a section of its own. Agent Teams is experimental: the plugin
+reaches into it through one adapter (`src/dsh/host/agent-team.ts`) and turns this off, with one
+warning, when it does not find what it expects.
+
 ## Getting Started
 
 The plugin's interface and command replies follow DeepSeek Harness's language setting (all of its languages: 中文, English, 日本語, Español, Français, Deutsch, Русский, Português; see [docs/i18n.md](docs/i18n.md)), switching without a reload; prompts and tool descriptions for the model stay English.

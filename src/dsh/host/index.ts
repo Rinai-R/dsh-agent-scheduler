@@ -6,6 +6,7 @@
 import './augment.js'
 
 export * from './agent.js'
+export * from './agent-team.js'
 export * from './hints.js'
 export * from './locale.js'
 export * from './model.js'
