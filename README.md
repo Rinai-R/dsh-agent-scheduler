@@ -133,6 +133,15 @@ or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not 
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 
+**Merging workers.** The reverse of `agent_split`: `agent_merge`, `/agents merge`, or 「合并到…」 on a
+worker row. The absorbed worker first writes a handoff (done, in progress, decisions, open questions,
+files, branch/PR, uncommitted changes) and must commit or hand over its changes (the scheduler checks
+`git status` in its directory); then it is archived, its names reach the survivor (requests to them go
+there), the survivor may take a new name (within one area, the area's name from before the split),
+and the survivor gets the handoff as a message. A worker that cannot write one gets a handoff built
+from its log. Refused while the absorbed worker runs or owes answers; a restart resumes the merge from
+its last recorded step. See [docs/worker-merge.md](docs/worker-merge.md).
+
 **The lead's inbox.** Answers, reports, fork conclusions and failures that arrive while the lead is
 busy wait in the 「待 lead 处理」 section at the top of the Agents page, not in the composer's list
 of queued messages (that list stays yours). When the lead is free it gets them all in one message,
@@ -170,6 +179,7 @@ All of these run in the main session.
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
 | `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`, `/agents inbox now all`, `/agents inbox move <m-N> [<m-N>\|end]` | Arrange the lead's inbox (the Agents page sends these). |
+| `/agents merge <absorbed> into <survivor> [--name <new>] [--role <text>]` | Merge a worker into another (the reverse of a split; `/agents merge <a> <b>` picks the survivor). The Agents page's 「合并到…」 does the same. |
 | `/agents seen all` | Mark every unread report read (the Agents page's 「全部已读」). A session from before review marks shows its past reports unread once. |
 | `/worker` | Show the model later workers start with. |
 | `/worker model <provider>/<model> [effort]` | Set the default model for later workers. |

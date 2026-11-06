@@ -182,7 +182,32 @@ export function parseNewWorker(raw: string): { name: string; role: string; cwd?:
  * @param validate - checks a `--model` selection is routable.
  * @returns the command's outcome.
  */
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+/**
+ * Parse `/agents merge <a> into <b> [--name <new>] [--role <text>]` (or `<a> <b>`: the scheduler picks).
+ * @param raw - text after `merge`.
+ * @returns the merge, or an error message.
+ */
+export function parseMerge(raw: string): { a: string; b: string; into?: string; name?: string; role?: string } | string {
+  const all = words(raw)
+  const flag = all.findIndex(w => w === '--name' || w === '--role')
+  const head = flag < 0 ? all : all.slice(0, flag)
+  let name: string | undefined
+  let role: string | undefined
+  for (let i = flag < 0 ? all.length : flag; i < all.length;) {
+    const key = all[i]
+    const values: string[] = []
+    i += 1
+    while (i < all.length && all[i] !== '--name' && all[i] !== '--role') values.push(all[i++]!)
+    if (values.length === 0) return t('cmd.agents.needsValue', { flag: key! })
+    if (key === '--name') { if (values.length > 1) return t('cmd.agents.mergeUsage'); name = values[0] } else role = values.join(' ')
+  }
+  const opts = { ...(name === undefined ? {} : { name }), ...(role === undefined ? {} : { role }) }
+  if (head.length === 3 && head[1] === 'into') return { a: head[0]!, b: head[2]!, into: head[2]!, ...opts }
+  if (head.length === 2 && !head.includes('into')) return { a: head[0]!, b: head[1]!, ...opts }
+  return t('cmd.agents.mergeUsage')
+}
+
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -201,6 +226,13 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: t('cmd.agents.renameUsage') }
       const done = await scheduler.rename(invocation.agent, from, to)
       return { kind: 'success', text: done.from === done.to ? t('cmd.agents.sameName', { name: done.to }) : t('cmd.agents.renamed', { from: done.from, to: done.to }) }
+    }
+    if (verb === 'merge') {
+      const parsed = parseMerge(rest)
+      if (typeof parsed === 'string') return { kind: 'error', text: parsed }
+      const pair = parsed.into === undefined ? scheduler.pickSurvivor(invocation.agent, parsed.a, parsed.b) : { absorbed: parsed.a, into: parsed.b }
+      const started = await scheduler.merge(invocation.agent, { ...pair, name: parsed.name, role: parsed.role })
+      return { kind: 'success', text: t(started.request === undefined ? 'cmd.agents.mergeFromLog' : 'cmd.agents.mergeStarted', { absorbed: started.absorbed, into: started.into, name: started.name, id: started.merge }) }
     }
     if (verb === 'inbox') {
       const [action, id, before, ...extra] = words(rest)
@@ -312,8 +344,8 @@ export function apply(ctx: Context, config: Config): void {
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/agents',
     name: 'agents',
-    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read; arrange the lead\'s inbox',
-    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all | inbox pin|unpin|hold|release|now|move <m-N>',
+    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read; arrange the lead\'s inbox; merge one worker into another',
+    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all | inbox pin|unpin|hold|release|now|move <m-N> | merge <name> into <name> [--name <new>] [--role <text>]',
     run: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
   registerCommand(ctx, {

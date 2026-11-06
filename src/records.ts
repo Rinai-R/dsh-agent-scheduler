@@ -16,6 +16,7 @@ export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
 export const SEEN_RECORD = 'plugin:dsh-agent-scheduler/seen'
 export const MAIL_RECORD = 'plugin:dsh-agent-scheduler/mail'
+export const MERGE_RECORD = 'plugin:dsh-agent-scheduler/merge'
 
 /** The user opened a member's chat: its latest report is read (`/agents seen`). */
 export interface SeenRecord {
@@ -25,7 +26,7 @@ export interface SeenRecord {
 }
 
 /** What a message for the lead is: a reply, a report, a fork's conclusion, or a failure. */
-export type MailKind = 'reply' | 'report' | 'conclusion' | 'failure'
+export type MailKind = 'reply' | 'report' | 'conclusion' | 'failure' | 'merged'
 
 /**
  * The lead's inbox: messages for the lead wait here, not in the runtime's queue, until the lead
@@ -48,6 +49,53 @@ export interface MailRecord {
   /** `moved`: the message it now stands before; null puts it last. */
   readonly before?: string | null
   readonly via?: 'followup' | 'steer'
+}
+
+/**
+ * One worker merged into another (the reverse of a split), step by step:
+ * `requested` → `handoff` → `settled` → `merged` → `delivered`, or `failed` at any step.
+ */
+export interface MergeRecord {
+  readonly version: 1
+  readonly action: 'requested' | 'handoff' | 'settled' | 'merged' | 'delivered' | 'failed'
+  /** `mg-N`. */
+  readonly id: string
+  /** `requested`: the worker merged away (Session id). */
+  readonly absorbed?: string
+  /** `requested`: the worker that stays (Session id). */
+  readonly survivor?: string
+  /** `requested`: the survivor's new name, if any; `merged`: its name from then on. */
+  readonly name?: string
+  /** `requested`: the survivor's new role, if given; `merged`: its role from then on. */
+  readonly role?: string
+  /** `requested`: the handoff request the absorbed worker answers. */
+  readonly request?: string
+  /** `requested`: Session id of whoever asked. */
+  readonly by?: string
+  /** `requested`: the fork-N or r-N the lead acted on. */
+  readonly for?: string
+  /** `handoff`: the handoff text; `source` says who wrote it. */
+  readonly text?: string
+  readonly source?: 'worker' | 'log'
+  /** `settled`: what git showed in the absorbed worker's directory. */
+  readonly facts?: GitFacts
+  /** `merged`: the survivor's name before, and the area from then on. */
+  readonly previousName?: string
+  readonly area?: string
+  /** `delivered`: inbox id of the handoff message in the survivor's session. */
+  readonly messageId?: string
+  /** `failed`: why. */
+  readonly detail?: string
+}
+
+/** The state of a worker's directory as git reports it. */
+export interface GitFacts {
+  readonly cwd: string
+  readonly branch?: string
+  /** `git status --porcelain` lines. */
+  readonly dirty: readonly string[]
+  /** Commits not on its upstream; absent when it has no upstream. */
+  readonly ahead?: number
 }
 
 /** Whether this Session hands each user message to a fork, switched by `/schedule on|off`. */
@@ -139,6 +187,8 @@ export interface RequestRecord {
   readonly messageId?: string
   readonly text?: string
   readonly answer?: string
+  /** `handoff`: a merge's request for the worker's handoff; its answer goes to the survivor. */
+  readonly kind?: 'handoff'
   /** Where the answer went: always the lead. */
   readonly deliveredTo?: string
   readonly detail?: string
@@ -176,6 +226,8 @@ export const appendSeen = (session: Session, record: Fields<SeenRecord>): Sessio
   appendPluginRecord(session, SEEN_RECORD, { version: 1, ...record })
 export const appendMail = (session: Session, record: Fields<MailRecord>): SessionSeq =>
   appendPluginRecord(session, MAIL_RECORD, { version: 1, ...record })
+export const appendMerge = (session: Session, record: Fields<MergeRecord>): SessionSeq =>
+  appendPluginRecord(session, MERGE_RECORD, { version: 1, ...record })
 export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
   appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
@@ -246,10 +298,23 @@ export const recordReaders = {
   workerModel: (e: SessionEvent) => modelRecord(e, WORKER_MODEL_RECORD),
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
   mail: (e: SessionEvent) => mailOf(e),
+  merge: (e: SessionEvent) => mergeOf(e),
+}
+
+const MERGE_ACTIONS = new Set(['requested', 'handoff', 'settled', 'merged', 'delivered', 'failed'])
+
+/** A well-formed merge record, or undefined. */
+function mergeOf(e: SessionEvent): MergeRecord | undefined {
+  const d = dataOf<Partial<MergeRecord>>(e, MERGE_RECORD)
+  if (d === undefined || typeof d.id !== 'string' || !MERGE_ACTIONS.has(d.action as string)) return undefined
+  if (d.action === 'requested' && (typeof d.absorbed !== 'string' || typeof d.survivor !== 'string' || typeof d.request !== 'string')) return undefined
+  if (d.action === 'handoff' && typeof d.text !== 'string') return undefined
+  if (d.action === 'merged' && typeof d.name !== 'string') return undefined
+  return d as MergeRecord
 }
 
 const MAIL_ACTIONS = new Set(['queued', 'pinned', 'unpinned', 'held', 'released', 'moved', 'delivered'])
-const MAIL_KINDS = new Set(['reply', 'report', 'conclusion', 'failure'])
+const MAIL_KINDS = new Set(['reply', 'report', 'conclusion', 'failure', 'merged'])
 
 /** A well-formed mail record, or undefined. */
 function mailOf(e: SessionEvent): MailRecord | undefined {

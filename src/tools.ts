@@ -157,6 +157,10 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
           })),
           openRequests: [...ledger.requests.values()].filter(r => r.state === 'sent').map(r => ({ id: r.id, from: ledger.nameOf(r.from), to: ledger.nameOf(r.to), text: r.text.slice(0, 120) })),
           queued: scheduler.queued(ledger.mainId),
+          ...(() => {
+            const merging = ledger.merges.filter(m => m.state === 'requested' || m.state === 'handoff' || m.state === 'settled')
+            return merging.length === 0 ? {} : { merging: merging.map(m => ({ id: m.id, absorbed: ledger.nameOf(m.absorbed), into: ledger.nameOf(m.survivor), state: m.state })) }
+          })(),
           // Only the lead's own: what waits for it, summarized; the whole text comes when it is free.
           ...(isMainSession(caller(exec)) ? { inbox: ledger.mail.map(m => ({
             id: m.id, from: ledger.nameOf(m.from), kind: m.kind, ...(m.request === undefined ? {} : { request: m.request }),
@@ -165,6 +169,33 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
           })) } : {}),
           rosterVersion: scheduler.rosterVersion(ledger),
         }
+      },
+    }),
+    defineTool({
+      name: 'agent_merge',
+      description: 'Merge one worker into another, the reverse of agent_split: when two workers (usually split from one area) should be one again. The absorbed worker first writes a handoff (what is done, in progress, decided, open, which files, branch/PR, uncommitted changes) and must have committed its code or handed the changes over; then it is archived, its names reach the survivor, and the survivor gets the handoff as a message. Refused while the absorbed worker is running or owes answers. Pass the rosterVersion from agent_list; the lead passes for while scheduling is on. Without into, the side with work in hand (then the area\'s original owner, then the older) stays. The outcome comes to the lead as "[merged mg-N: …]" or "[merge mg-N … failed: …]".',
+      parameters: {
+        worker: { type: 'string', required: true, description: 'One of the two workers.' },
+        with: { type: 'string', required: true, description: 'The other worker.' },
+        into: { type: 'string', description: 'Which of the two stays; default as described.' },
+        name: { type: 'string', description: 'The survivor\'s new name: a new one, one it had, or, within one area, a name the other had (e.g. the area\'s name from before the split).' },
+        role: { type: 'string', description: 'The survivor\'s role after the merge; default its own widened by the other\'s.' },
+        rosterVersion: VERSION,
+        for: { type: 'string', description: 'The lead only, as for agent_create: the fork-N or r-N you act on; optional while scheduling is off.' },
+      },
+      output: { schema: OK, render: json },
+      execute: async (args, exec) => {
+        const a = args as { worker: string; with: string; into?: string; name?: string; role?: string; rosterVersion?: string; for?: string }
+        const agent = caller(exec)
+        requireVersion(agent, a.rosterVersion)
+        const named = a.for === '' ? undefined : a.for
+        if (isMainSession(agent) && named === undefined && scheduler.isOn(agent)) throw new DispatchRefused('The lead must say what this merge is for: pass for: the fork-N whose conclusion or the r-N whose reply you act on.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
+        let pair: { absorbed: string; into: string }
+        if (a.into === undefined || a.into === '') pair = scheduler.pickSurvivor(agent, a.worker, a.with)
+        else if (a.into === a.worker) pair = { absorbed: a.with, into: a.worker }
+        else if (a.into === a.with) pair = { absorbed: a.worker, into: a.with }
+        else throw new Error(`into must be "${a.worker}" or "${a.with}"`)
+        return scheduler.merge(agent, { ...pair, name: a.name, role: a.role, rosterVersion: a.rosterVersion, for: named })
       },
     }),
     defineTool({
@@ -236,7 +267,7 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
         'The user talks to a lead; every user message is handed to a fresh fork of the lead.',
         FORK_NOTICE,
         LEAD_NOTICE,
-        'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one (coarse: per repository or module), agent_send to delegate, agent_split to split a busy worker\'s area for a new task; all three take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
+        'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one (coarse: per repository or module), agent_send to delegate, agent_split to split a busy worker\'s area for a new task, agent_merge to merge two workers back into one once their split is no longer needed; all four take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
       ]
   // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
   const self = isWorker ? scheduler.ledgerOf(agent).members.get(agent.id) : undefined
