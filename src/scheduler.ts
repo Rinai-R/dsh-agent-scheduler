@@ -19,7 +19,7 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserMessage } from './dsh/types.js'
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
-  pendingOf, removePending, replacePending, rewriteSettled, SessionId, settledSender, statusOf, subagentPort, textOf, toLead, withoutReturnGuidance,
+  isLive, pendingOf, removePending, replacePending, rewriteSettled, SessionId, settledSender, statusOf, subagentPort, textOf, toLead, withoutReturnGuidance,
   type AgentLookup, type SessionLog, type SubagentPort, type SubagentService,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
@@ -275,6 +275,8 @@ export class Scheduler {
    * creating or delivering, and recording inside it, so none decides on a roster another changed.
    */
   private readonly dispatching = new Map<string, Promise<void>>()
+  /** Released main agents already warned about, so a burst of skipped records logs once. */
+  private readonly released = new WeakSet<Agent>()
 
   /** @param deps - services and policy. */
   /** The runtime's subagent service, through the adapter. */
@@ -299,7 +301,8 @@ export class Scheduler {
     if (ledger === undefined) {
       const main = this.live(mainId) ?? (isMainSession(agent) ? agent : undefined)
       ledger = Ledger.from(mainId, main === undefined ? [] : eventsOf(main.session))
-      this.ledgers.set(mainId, ledger)
+      // A released main Session's fold is not cached: a reopened one folds its own log.
+      if (main === undefined || this.writable(main)) this.ledgers.set(mainId, ledger)
     }
     return ledger
   }
@@ -462,8 +465,31 @@ export class Scheduler {
     throw new DispatchRefused(`${key} was already dispatched${earlier.createdAt === undefined ? '' : ` at ${earlier.createdAt}`} to ${earlier.name}${request === undefined ? '' : ` (${request})`}${earlier.createdBy === undefined ? '' : ` by ${ledger.nameOf(earlier.createdBy)}`}. Each message or reply gets one worker: use agent_send to ${earlier.name} for anything more about it, or say in your conclusion what else is needed.`, this.rosterSummary(ledger))
   }
 
-  /** Forget a main Session (it was disposed); the log stays authoritative. */
-  forget(mainId: string): void { this.ledgers.delete(mainId) }
+  /**
+   * Forget a main Session (it was disposed); the log stays authoritative. Work still waiting for
+   * a slot is dropped with it: its parent is gone, and `recover` fails what was queued when the
+   * Session is opened again.
+   */
+  forget(mainId: string): void {
+    this.ledgers.delete(mainId)
+    for (let i = this.queue.length - 1; i >= 0; i -= 1) if (this.queue[i]!.mainId === mainId) this.queue.splice(i, 1)
+  }
+
+  /**
+   * Whether the main Session still takes records (see {@link isLive}); warns once when it does not.
+   * Every write to the main Session goes through here, so work that resumes after an await
+   * (a drain, a log read, a delivery, a queued retry) never appends to a released Session.
+   * @param main - the main agent, as captured before the await.
+   * @returns false when it was released: the caller skips the write and returns quietly.
+   */
+  private writable(main: Agent): boolean {
+    if (isLive(main, this.deps.agents)) return true
+    if (!this.released.has(main)) {
+      this.released.add(main)
+      this.deps.log?.(`main session ${main.id} was released; scheduler records for it are skipped and settled from the logs when it is opened again`)
+    }
+    return false
+  }
 
   private mainOf(agent: Agent): Agent {
     const main = isMainSession(agent) ? agent : this.live(mainIdOf(agent))
@@ -471,10 +497,16 @@ export class Scheduler {
     return main
   }
 
-  /** Append through the ledger, so the fold and the log never disagree. */
-  private record(main: Agent, append: (session: Session) => unknown): void {
+  /**
+   * Append through the ledger, so the fold and the log never disagree. Nothing is written to a
+   * main Session that was released meanwhile (see {@link writable}).
+   * @returns whether the record was written.
+   */
+  private record(main: Agent, append: (session: Session) => unknown): boolean {
+    if (!this.writable(main)) return false
     append(main.session)
     this.ledgerOf(main).apply(lastEvent(main.session))
+    return true
   }
 
   private async logOf(id: string): Promise<SessionLog> {
@@ -539,6 +571,8 @@ export class Scheduler {
    */
   private async run(main: Agent, memberId: string, label: string, attempt: () => Promise<void>, hooks: { queued?: () => void; failed: (error: unknown) => void }): Promise<Outcome> {
     const once = async (): Promise<'done' | 'capacity' | 'failed'> => {
+      // A retry that comes after the main Session was released has no parent to start under.
+      if (!this.writable(main)) return 'failed'
       try {
         await attempt()
         return 'done'
@@ -971,10 +1005,17 @@ export class Scheduler {
     this.stopping.add(target.id)
     const forLead: string[] = []
     if (!neverStarted) {
-      await this.port.drain(main, [target.id])
+      try {
+        await this.port.drain(main, [target.id])
+      } catch (error) {
+        // Released meanwhile, the runtime refuses to drain for it; the next open settles the member.
+        if (!this.writable(main)) return
+        throw error
+      }
       // Rounds it completed still answer; the one it was cut off in fails its requests.
       forLead.push(...await this.settleOnce(main, target.id))
     }
+    if (!this.writable(main)) return
     // A concluded fork may have retired itself while this archive waited.
     if (ledger.members.get(target.id)?.state !== 'archived') {
       this.record(main, s => target.kind === 'fork'
@@ -1085,6 +1126,7 @@ export class Scheduler {
         if (this.settling.get(member.id) === next) this.settling.delete(member.id)
       }
       // Rounds that completed before the restart still answer through the ordinary settlement.
+      if (!this.writable(main)) return
       const after = ledger.members.get(member.id)
       if (after !== undefined && after.state !== 'failed' && (ledger.openTo(member.id).length > 0 || (after.kind === 'fork' && after.state === 'started'))) this.settleInBackground(main, member.id)
     }
@@ -1111,6 +1153,7 @@ export class Scheduler {
     } catch (error) {
       this.deps.log?.(`reading ${member.name} after a restart failed`, error)
     }
+    if (!this.writable(main)) return
     const all = log === undefined ? [] : completedRounds(log.events, log.inherited)
     const unsettled = all.filter(r => r.endSeq > (member.settledThrough ?? -1))
     const trace: ChildTrace = log === undefined ? { pending: new Set(), taken: new Set(), requestMessages: new Map(), resumes: new Map() } : traceChild(log.events.slice(log.inherited))
@@ -1236,6 +1279,8 @@ export class Scheduler {
     // The delivery settles this member itself once its message id is recorded.
     if (this.inflight.has(memberId)) return forLead
     const log = await this.logOf(memberId)
+    // Released while the log was read: the next open settles these rounds.
+    if (!this.writable(main)) return forLead
     const member = ledger.members.get(memberId)!
     const all = completedRounds(log.events, Math.max(log.inherited, (member.settledThrough ?? -1) + 1))
     // A round the host's shutdown cut off (not this scheduler's own interrupt or archive) is left
@@ -1293,13 +1338,15 @@ export class Scheduler {
   private async retire(main: Agent, forkId: string): Promise<void> {
     const ledger = this.ledgerOf(main)
     const fork = ledger.members.get(forkId)
-    if (fork?.kind !== 'fork' || fork.state !== 'done') return
+    if (!this.writable(main) || fork?.kind !== 'fork' || fork.state !== 'done') return
     try {
       await this.port.drain(main, [forkId])
     } catch (error) {
       this.deps.log?.(`releasing ${fork.name} failed`, error)
     }
-    if (ledger.members.get(forkId)?.state !== 'done') return
+    // The main Session may have been released while the fork drained (DSH shutting down): then
+    // the fork stays `done`, and archiveConcluded or the next retire archives it after a reopen.
+    if (!this.writable(main) || ledger.members.get(forkId)?.state !== 'done') return
     this.record(main, s => appendForkState(s, { forkId, state: 'archived' }))
   }
 
@@ -1324,6 +1371,8 @@ export class Scheduler {
 
   /** Give the lead a message outside a step it is admitting: queued for its next turn. */
   private toLead(main: Agent, text: string, sender: string): void {
+    // Queuing a message appends to the log too; a released lead gets it from `recover` instead.
+    if (!this.writable(main)) return
     toLead(main, text, sender)
   }
 }
