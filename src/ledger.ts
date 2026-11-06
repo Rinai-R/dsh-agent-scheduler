@@ -3,7 +3,7 @@
  * uses ({@link applyRoster}); this class only caches lookups for the current state.
  */
 import type { SessionEvent } from './dsh/types.js'
-import { applyRoster, EMPTY_ROSTER, mailOrder, type MailItem, type Roster, type RosterMember, type RosterRequest } from './projection.js'
+import { applyRoster, EMPTY_ROSTER, mailOrder, mergePending, type MailItem, type MergeState, type Roster, type RosterMember, type RosterRequest } from './projection.js'
 
 export type { MemberState, RosterMember as Member, RosterRequest as Request } from './projection.js'
 
@@ -75,7 +75,32 @@ export class Ledger {
   find(key: string): RosterMember | undefined {
     // A renamed worker is still found by an old name: names are never reused, so it is unambiguous,
     // and a lead or fork that learned the old name keeps reaching it.
-    return this.members.get(key) ?? this.current.members.find(m => m.name === key) ?? this.current.members.find(m => m.formerNames?.includes(key) === true)
+    let found = this.members.get(key) ?? this.current.members.find(m => m.name === key) ?? this.current.members.find(m => m.formerNames?.includes(key) === true)
+    // A worker merged into another is found as the one it went into (by name; its id stays its own).
+    for (let hops = 0; found?.mergedInto !== undefined && hops < 16 && !this.members.has(key); hops += 1) found = this.members.get(found.mergedInto) ?? found
+    return found
+  }
+
+  /** @returns every merge, in order. */
+  get merges(): readonly MergeState[] { return this.current.merges ?? [] }
+
+  /** @returns the next merge id, `mg-N`. */
+  nextMergeId(): string { return `mg-${this.merges.length + 1}` }
+
+  /**
+   * @param memberId - a member's Session id.
+   * @returns the merge under way it takes part in, either side.
+   */
+  mergingOf(memberId: string): MergeState | undefined {
+    return this.merges.find(m => mergePending(m) && (m.absorbed === memberId || m.survivor === memberId))
+  }
+
+  /**
+   * @param requestId - a request id.
+   * @returns the merge whose handoff request it is.
+   */
+  mergeOfRequest(requestId: string): MergeState | undefined {
+    return this.merges.find(m => m.request === requestId)
   }
 
   /**

@@ -25,12 +25,14 @@ import {
 import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMail, appendMode, appendRequest, appendRole, appendSeen, appendSettled, appendTeam, workerModelOf,
+  appendAgent, appendForkState, appendInput, appendMail, appendMerge, appendMode, appendRequest, appendRole, appendSeen, appendSettled, appendTeam, workerModelOf,
   type ForkModelSelection, type MailKind,
 } from './records.js'
-import { schedulingOn } from './projection.js'
+import { mergePending, schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
 import { unread } from './review.js'
+import { defaultSurvivor, gitFacts, handoffFromLog, handoffMessage, handoffRequest, mergedRole, unsettled } from './merge.js'
+import type { MergeState } from './projection.js'
 import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type ChildTrace } from './recovery.js'
 
 /**
@@ -212,6 +214,8 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
 export function checkWorkerName(ledger: Ledger, name: string, opts: { failedFree: boolean }): void {
   if (!/^[a-z][a-z0-9-]{0,39}$/u.test(name)) throw new Error('name must be lower-kebab-case, start with a letter, at most 40 characters')
   if (name === 'lead' || name === 'user' || /^fork-\d+$/u.test(name)) throw new Error(`"${name}" is reserved`)
+  const reserved = ledger.merges.find(m => mergePending(m) && m.name === name)
+  if (reserved !== undefined) throw new Error(`"${name}" is reserved by merge ${reserved.id}`)
   const holder = ledger.find(name)
   if (holder === undefined) return
   if (opts.failedFree && holder.kind === 'worker' && holder.state === 'failed' && holder.name === name) return
@@ -238,6 +242,31 @@ export interface SplitWorker extends Dispatch {
   readonly task: string
   /** As for agent_create: what the new worker is for (the lead names a fork-N or r-N). */
   readonly for?: string | undefined
+}
+
+/** Arguments of a merge (see {@link Scheduler.merge}). */
+export interface MergeWorkers extends Dispatch {
+  /** The worker merged away: it writes a handoff and is archived. */
+  readonly absorbed: string
+  /** The worker that stays and takes over its work. */
+  readonly into: string
+  /** The survivor's new name. */
+  readonly name?: string | undefined
+  /** The survivor's new role; by default its own widened by the absorbed one's. */
+  readonly role?: string | undefined
+  /** As for agent_create: the fork-N or r-N the lead acts on. */
+  readonly for?: string | undefined
+}
+
+/** What starting a merge returns. */
+export type MergeStarted = {
+  readonly merge: string
+  readonly request?: string
+  readonly absorbed: string
+  readonly into: string
+  readonly name: string
+  readonly note: string
+  readonly rosterVersion: string
 }
 
 /** A checked worker creation, ready to record and start. */
@@ -905,6 +934,7 @@ export class Scheduler {
     const ledger = this.ledgerOf(main)
     this.checkVersion(ledger, args)
     const owner = this.lookup(ledger, args.owner)
+    this.refuseMerging(ledger, owner)
     if (owner.kind !== 'worker') throw new Error(`"${owner.name}" is a fork; only a worker owns an area`)
     if (gone(owner)) throw new Error(`"${owner.name}" is ${owner.state}`)
     if (args.ownerName === owner.name) throw new Error(`give "${owner.name}" a new, narrower name for the work it keeps (ownerName), not its current one`)
@@ -982,6 +1012,7 @@ export class Scheduler {
     if (target === undefined) throw new Error(`no agent named "${name}"`)
     if (target.kind !== 'worker') throw new Error(`"${target.name}" is a fork; only a worker can be renamed`)
     if (target.state === 'archived') throw new Error(`"${target.name}" is archived`)
+    this.refuseMerging(ledger, target)
     if (next === target.name) return { from: target.name, to: next }
     // Taking back one of its own earlier names is no reuse: no one else can hold it.
     if (target.formerNames?.includes(next) !== true) checkWorkerName(ledger, next, { failedFree: false })
@@ -1018,6 +1049,8 @@ export class Scheduler {
     const ledger = this.ledgerOf(main)
     this.checkVersion(ledger, dispatch)
     const target = this.lookup(ledger, to)
+    const merging = ledger.mergingOf(target.id)
+    if (merging?.absorbed === target.id) throw new Error(`"${target.name}" is being merged into ${ledger.nameOf(merging.survivor)} (${merging.id}); send to ${ledger.nameOf(merging.survivor)} instead`)
     if (target.id === caller.id) throw new Error('cannot send a request to yourself')
     if (gone(target)) throw new Error(`"${to}" is ${target.state}`)
     // A running target takes the message at its next step boundary, inside the round it is in;
@@ -1167,6 +1200,244 @@ export class Scheduler {
     return member?.kind === 'worker' ? member.role : ledger.role
   }
 
+  // ------------------------------------------------------------------ merge
+
+  /** Refuse to rename, split or delegate around a worker a merge is under way for. */
+  private refuseMerging(ledger: Ledger, member: Member): void {
+    const merging = ledger.mergingOf(member.id)
+    if (merging === undefined) return
+    throw new Error(`"${member.name}" is in merge ${merging.id} (${ledger.nameOf(merging.absorbed)} into ${ledger.nameOf(merging.survivor)}); wait until it is done`)
+  }
+
+  /** Whether a member has work in hand: running, owing answers, or waiting for a slot. */
+  private busy(ledger: Ledger, member: Member): boolean {
+    return statusOf(this.deps.agents, member.id) === 'running' || ledger.openTo(member.id).length > 0 || this.queue.some(p => p.memberId === member.id)
+  }
+
+  /**
+   * Which of two workers stays when a merge names none (see `defaultSurvivor` in merge.ts).
+   * @param caller - the agent asking.
+   * @returns the absorbed and the surviving worker's names.
+   */
+  pickSurvivor(caller: Agent, a: string, b: string): { absorbed: string; into: string } {
+    const ledger = this.ledgerOf(this.mainOf(caller))
+    const [x, y] = [this.lookup(ledger, a), this.lookup(ledger, b)]
+    const [absorbed, survivor] = defaultSurvivor(x, y, m => this.busy(ledger, m))
+    return { absorbed: absorbed.name, into: survivor.name }
+  }
+
+  /**
+   * Merge a worker into another, the reverse of a split. Checked and recorded in the dispatch
+   * lock; the absorbed worker is then asked for its handoff, and the rest runs when it answers
+   * ({@link advanceMerge}). See docs/worker-merge.md.
+   * @param caller - the lead, a fork, or the user's command (the main agent).
+   * @param args - who goes into whom, and the survivor's new name and role.
+   * @returns the merge, its handoff request, and the roster version.
+   */
+  async merge(caller: Agent, args: MergeWorkers): Promise<MergeStarted> {
+    const main = this.mainOf(caller)
+    return this.exclusive(main.id, () => this.mergeLocked(main, caller, args))
+  }
+
+  private async mergeLocked(main: Agent, caller: Agent, args: MergeWorkers): Promise<MergeStarted> {
+    const ledger = this.ledgerOf(main)
+    if (ledger.members.get(caller.id)?.kind === 'worker') throw new Error('only the lead (or a fork) merges workers')
+    this.checkVersion(ledger, args)
+    const absorbed = this.lookup(ledger, args.absorbed)
+    const survivor = this.lookup(ledger, args.into)
+    if (absorbed.kind !== 'worker' || survivor.kind !== 'worker') throw new Error('only workers merge; forks are archived instead')
+    if (absorbed.id === survivor.id) throw new Error(`"${args.absorbed}" and "${args.into}" are the same worker`)
+    if (absorbed.mergedInto !== undefined) throw new Error(`"${absorbed.name}" was already merged into ${ledger.nameOf(absorbed.mergedInto)}`)
+    if (gone(survivor) || survivor.state === 'queued') throw new Error(`"${survivor.name}" is ${survivor.state}; merge into a live worker`)
+    this.refuseMerging(ledger, absorbed)
+    this.refuseMerging(ledger, survivor)
+    // Only a worker that ran can write its own handoff; a failed, archived or never-started one
+    // gets one built from its log.
+    const writes = absorbed.state === 'started'
+    if (writes) {
+      if (statusOf(this.deps.agents, absorbed.id) === 'running') throw new Error(`"${absorbed.name}" is running; wait until its round ends (or agent_interrupt it), then merge`)
+      const open = ledger.openTo(absorbed.id).map(r => r.id)
+      if (open.length > 0) throw new Error(`"${absorbed.name}" still owes ${open.join(', ')}; wait for those answers (or interrupt or archive it), then merge`)
+      if (this.queue.some(p => p.memberId === absorbed.id)) throw new Error(`"${absorbed.name}" has a delivery waiting for a slot; merge once it ran`)
+    }
+    const name = args.name === undefined || args.name === '' ? survivor.name : args.name
+    if (name !== survivor.name) {
+      // Its own earlier names come back freely; the absorbed worker's only within one area (undoing a split).
+      const sameArea = absorbed.area !== undefined && absorbed.area === survivor.area
+      const theirs = sameArea ? [absorbed.name, ...(absorbed.formerNames ?? [])] : []
+      if (!(survivor.formerNames ?? []).includes(name) && !theirs.includes(name)) checkWorkerName(ledger, name, { failedFree: false })
+    }
+    const role = args.role === undefined || args.role.trim() === '' ? undefined : args.role.trim()
+    const id = ledger.nextMergeId()
+    const requestId = writes ? ledger.nextRequestId() : ''
+    this.record(main, s => appendMerge(s, {
+      action: 'requested', id, absorbed: absorbed.id, survivor: survivor.id, request: requestId, by: caller.id,
+      ...(name === survivor.name ? {} : { name }), ...(role === undefined ? {} : { role }), ...(args.for === undefined ? {} : { for: args.for }),
+    }))
+    if (writes) {
+      const text = handoffRequest(name)
+      this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: absorbed.id, text, kind: 'handoff' }))
+      const from = ledger.nameOf(caller.id)
+      let failure = ''
+      const outcome = await this.run(main, absorbed.id, requestId, () => this.delivering(main, absorbed.id, async () => {
+        const messageId = await this.port.send(main, absorbed.id, this.requestText(requestId, from, text, absorbed))
+        this.record(main, s => appendRequest(s, { action: 'sent', id: requestId, from: caller.id, to: absorbed.id, text, kind: 'handoff', messageId }))
+      }), {
+        failed: error => {
+          failure = messageOf(error)
+          const request = ledger.requests.get(requestId)
+          if (request !== undefined) this.fail(main, request, absorbed, `the handoff request was not delivered: ${failure}`, [])
+        },
+      })
+      if (outcome === 'failed') this.deps.log?.(`asking ${absorbed.name} for its handoff failed: ${failure}`)
+    } else {
+      void this.advanceMerge(main, id)
+    }
+    const into = name === survivor.name ? survivor.name : `${survivor.name} (to be renamed ${name})`
+    const note = writes
+      ? `${absorbed.name} writes its handoff now (${requestId}); once it answers, its code is checked, it is archived, its names reach ${name}, and ${into} gets the handoff. The outcome comes to you as "[merged ${id}: …]" or "[merge ${id} … failed: …]".`
+      : `${absorbed.name} is ${absorbed.state}: its handoff is built from its log, then it is merged into ${into}. The outcome comes to you as "[merged ${id}: …]".`
+    return { merge: id, ...(writes ? { request: requestId } : {}), absorbed: absorbed.name, into: survivor.name, name, note, rosterVersion: this.rosterVersion(ledger) }
+  }
+
+  private readonly advancing = new Map<string, Promise<void>>()
+
+  /**
+   * Take a merge as far as it can go now, one step at a time, each recorded before the next, so
+   * a restart goes on from the last one. Steps of one merge run one at a time.
+   * @param main - the main agent.
+   * @param id - the merge.
+   */
+  advanceMerge(main: Agent, id: string): Promise<void> {
+    const previous = this.advancing.get(id) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(() => this.stepMerge(main, id)).catch((error: unknown) => { this.deps.log?.(`merge ${id} failed to advance`, error) })
+    this.advancing.set(id, next)
+    void next.finally(() => { if (this.advancing.get(id) === next) this.advancing.delete(id) })
+    return next
+  }
+
+  private async stepMerge(main: Agent, id: string): Promise<void> {
+    for (let guard = 0; guard < 8; guard += 1) {
+      if (!this.writable(main)) return
+      const ledger = this.ledgerOf(main)
+      const merge = ledger.merges.find(m => m.id === id)
+      if (merge === undefined) return
+      const absorbed = ledger.members.get(merge.absorbed)
+      if (absorbed === undefined) { this.failMerge(main, merge, 'the absorbed worker is not in the roster'); return }
+      switch (merge.state) {
+        case 'requested': {
+          const request = merge.request === '' ? undefined : ledger.requests.get(merge.request)
+          // Still with its worker: the round that answers it moves the merge on.
+          if (request?.state === 'sent') return
+          if (request?.state === 'answered' && (request.answer ?? '').trim() !== '') {
+            this.record(main, s => appendMerge(s, { action: 'handoff', id, text: request.answer!, source: 'worker' }))
+            continue
+          }
+          let log: SessionLog | undefined
+          try {
+            if (absorbed.state !== 'queued') log = await this.logOf(absorbed.id)
+          } catch (error) {
+            this.deps.log?.(`reading ${absorbed.name} for its handoff failed`, error)
+          }
+          if (!this.writable(main)) return
+          const text = handoffFromLog(absorbed, ledger.state.requests.filter(r => r.to === absorbed.id), log?.events, log?.inherited)
+          this.record(main, s => appendMerge(s, { action: 'handoff', id, text, source: 'log' }))
+          continue
+        }
+        case 'handoff': {
+          let facts: Awaited<ReturnType<typeof gitFacts>>
+          try {
+            facts = await gitFacts(absorbed.cwd)
+          } catch (error) {
+            if (!this.writable(main)) return
+            this.failMerge(main, merge, error instanceof Error ? error.message : String(error))
+            return
+          }
+          if (!this.writable(main)) return
+          const why = unsettled(facts, merge.handoff ?? '', merge.source ?? 'worker')
+          if (why !== undefined) { this.failMerge(main, merge, why); return }
+          this.record(main, s => appendMerge(s, { action: 'settled', id, ...(facts === undefined ? {} : { facts }) }))
+          continue
+        }
+        case 'settled':
+          await this.exclusive(main.id, () => this.finishMerge(main, id))
+          continue
+        case 'merged':
+          await this.deliverHandoff(main, merge)
+          return
+        default:
+          return
+      }
+    }
+  }
+
+  /** The roster part of a merge, in the dispatch lock: archive the absorbed worker, rename the survivor. */
+  private async finishMerge(main: Agent, id: string): Promise<void> {
+    const ledger = this.ledgerOf(main)
+    const merge = ledger.merges.find(m => m.id === id)
+    if (merge?.state !== 'settled') return
+    const absorbed = ledger.members.get(merge.absorbed)!
+    const survivor = ledger.members.get(merge.survivor)
+    if (survivor === undefined || gone(survivor)) { this.failMerge(main, merge, `${survivor?.name ?? 'the survivor'} is ${survivor?.state ?? 'gone'}`); return }
+    if (absorbed.state === 'started') {
+      this.stopping.add(absorbed.id)
+      try {
+        await this.port.drain(main, [absorbed.id])
+      } catch (error) {
+        if (!this.writable(main)) return
+        this.deps.log?.(`releasing ${absorbed.name} for merge ${id} failed`, error)
+      }
+      if (!this.writable(main)) return
+    }
+    const name = merge.name ?? survivor.name
+    const role = merge.role ?? mergedRole(survivor, absorbed)
+    const area = survivor.area ?? absorbed.area
+    this.record(main, s => appendMerge(s, { action: 'merged', id, name, previousName: survivor.name, role, ...(area === undefined ? {} : { area }) }))
+    // Its last report went to the survivor in the handoff: nothing of it is left to review (#9).
+    const archived = ledger.members.get(absorbed.id)
+    if (archived !== undefined && unread(archived)) this.record(main, s => appendSeen(s, { agent: absorbed.id }))
+    this.retitle(survivor.id, name, role)
+    const renamed = name === survivor.name ? '' : ` (formerly ${survivor.name})`
+    this.toLead(main, `[merged ${id}: ${absorbed.name} into ${name}${renamed}; its handoff went to ${name}]\n${name} now also answers to ${[absorbed.name, ...(absorbed.formerNames ?? [])].join(', ')}. Role: ${role}`, survivor.id)
+  }
+
+  /** Give the survivor the handoff, once: a message already in its session is not sent again. */
+  private async deliverHandoff(main: Agent, merge: MergeState): Promise<void> {
+    const ledger = this.ledgerOf(main)
+    const survivor = ledger.members.get(merge.survivor)
+    const absorbed = ledger.members.get(merge.absorbed)
+    if (survivor === undefined || absorbed === undefined) return
+    const marker = `[handoff ${merge.id} from `
+    try {
+      const log = await this.logOf(survivor.id)
+      if (log.events.some(e => e.type === 'user/message' && JSON.stringify(e.data).includes(marker))) {
+        if (this.writable(main)) this.record(main, s => appendMerge(s, { action: 'delivered', id: merge.id }))
+        return
+      }
+    } catch {
+      // No log to read: deliver.
+    }
+    if (!this.writable(main)) return
+    const text = handoffMessage({
+      id: merge.id, absorbed: absorbed.name, name: survivor.name, formerNames: survivor.formerNames ?? [], role: survivor.role ?? survivor.text,
+      area: survivor.area, handoff: merge.handoff ?? '', facts: merge.facts,
+    })
+    let failure = ''
+    const outcome = await this.run(main, survivor.id, `handoff ${merge.id}`, async () => {
+      const messageId = await this.port.send(main, survivor.id, text)
+      this.record(main, s => appendMerge(s, { action: 'delivered', id: merge.id, messageId }))
+    }, { failed: error => { failure = messageOf(error) } })
+    // The roster part is done; a handoff that could not be delivered is sent again after a restart.
+    if (outcome === 'failed') this.deps.log?.(`delivering the handoff of ${merge.id} to ${survivor.name} failed: ${failure}`)
+  }
+
+  /** End a merge that cannot go on; the roster is left as it was. */
+  private failMerge(main: Agent, merge: MergeState, detail: string): void {
+    const ledger = this.ledgerOf(main)
+    if (!this.record(main, s => appendMerge(s, { action: 'failed', id: merge.id, detail }))) return
+    this.toLead(main, `[merge ${merge.id} of ${ledger.nameOf(merge.absorbed)} into ${ledger.nameOf(merge.survivor)} failed: ${detail}]\nBoth workers stay as they were.`, merge.absorbed)
+  }
+
   // ------------------------------------------------------------------ restart recovery
 
   /**
@@ -1210,6 +1481,8 @@ export class Scheduler {
       const after = ledger.members.get(member.id)
       if (after !== undefined && after.state !== 'failed' && (ledger.openTo(member.id).length > 0 || (after.kind === 'fork' && after.state === 'started'))) this.settleInBackground(main, member.id)
     }
+    // A merge a restart caught halfway goes on from the step it recorded.
+    for (const merge of ledger.merges) if (merge.state !== 'failed' && merge.state !== 'delivered') void this.advanceMerge(main, merge.id)
     // What waited in the inbox when DSH stopped is still there: a free lead takes it now.
     this.deliverMail(main)
   }
@@ -1390,6 +1663,13 @@ export class Scheduler {
           this.fail(main, request, member, `${member.name}'s round ended (${round.stopped}) before answering`, forLead)
           continue
         }
+        const merge = ledger.mergeOfRequest(request.id)
+        if (merge !== undefined) {
+          // A handoff goes on to the merge, not to the lead.
+          this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: merge.survivor }))
+          void this.advanceMerge(main, merge.id)
+          continue
+        }
         this.record(main, s => appendRequest(s, { action: 'answered', id: request.id, answer: round.answer, deliveredTo: ledger.mainId }))
         forLead.push(`${this.headerOf(ledger, request, `reply to ${request.id} from ${member.name}`)}\n${round.answer}`)
       }
@@ -1454,6 +1734,13 @@ export class Scheduler {
   /** Record a request as failed and tell the lead. */
   private fail(main: Agent, request: Request, by: Member, detail: string, forLead: string[]): void {
     const ledger = this.ledgerOf(main)
+    const merge = ledger.mergeOfRequest(request.id)
+    if (merge !== undefined) {
+      // A handoff its worker could not write: the merge builds one from its log instead.
+      this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail, deliveredTo: merge.survivor }))
+      void this.advanceMerge(main, merge.id)
+      return
+    }
     this.record(main, s => appendRequest(s, { action: 'failed', id: request.id, detail, deliveredTo: ledger.mainId }))
     forLead.push(this.headerOf(ledger, request, `request ${request.id} to ${by.name} failed: ${detail}`))
   }
@@ -1629,6 +1916,8 @@ function turnHasStep(events: readonly SessionEvent[], end: number): boolean {
 export function mailKindOf(text: string): { kind: MailKind; request?: string } {
   const reply = /^\[reply to (r-\d+)\b/u.exec(text)
   if (reply !== null) return { kind: 'reply', request: reply[1]! }
+  if (/^\[merged mg-\d+\b/u.test(text)) return { kind: 'merged' }
+  if (/^\[merge mg-\d+ .*? failed\b/u.test(text)) return { kind: 'failure' }
   const failed = /^\[request (r-\d+) to .*? failed\b/u.exec(text)
   if (failed !== null) return { kind: 'failure', request: failed[1]! }
   if (text.startsWith('The user said: ')) return { kind: 'conclusion' }

@@ -6,7 +6,7 @@
  */
 import type { SessionEvent, SessionHeader, SessionLogOffset } from './dsh/types.js'
 import type { Parser } from './dsh/host/services.js'
-import { inputOf, recordReaders as R, type ForkModelSelection, type MailKind, type TeamRecord } from './records.js'
+import { inputOf, recordReaders as R, type ForkModelSelection, type GitFacts, type MailKind, type TeamRecord } from './records.js'
 import { memberModelRecordOf } from './member-model.js'
 import { unread } from './review.js'
 
@@ -53,6 +53,8 @@ export interface RosterMember {
   readonly reportFailed?: true | undefined
   /** Time (ms) the user opened this member since its latest report (see src/review.ts). */
   readonly seenAt?: number | undefined
+  /** Archived by a merge: the worker it was merged into. Its names now find that worker. */
+  readonly mergedInto?: string | undefined
 }
 
 /** One piece of delegated work with its latest state. */
@@ -67,9 +69,31 @@ export interface RosterRequest {
   readonly messageId?: string | undefined
   readonly answer?: string | undefined
   readonly deliveredTo?: string | undefined
+  /** `handoff`: a merge asked for this worker's handoff. */
+  readonly kind?: 'handoff' | undefined
   /** Its worker's teammates were still working when the round that took it ended. */
   readonly deferred?: true | undefined
 }
+
+/** One merge of a worker into another, and how far it got (see docs/worker-merge.md). */
+export interface MergeState {
+  readonly id: string
+  readonly absorbed: string
+  readonly survivor: string
+  readonly state: 'requested' | 'handoff' | 'settled' | 'merged' | 'delivered' | 'failed'
+  readonly request: string
+  readonly name?: string | undefined
+  readonly role?: string | undefined
+  readonly by?: string | undefined
+  readonly for?: string | undefined
+  readonly handoff?: string | undefined
+  readonly source?: 'worker' | 'log' | undefined
+  readonly facts?: GitFacts | undefined
+  readonly detail?: string | undefined
+}
+
+/** Merges still under way: neither failed nor merged. */
+export const mergePending = (m: MergeState): boolean => m.state === 'requested' || m.state === 'handoff' || m.state === 'settled'
 
 /** One message waiting in the lead's inbox. */
 export interface MailItem {
@@ -116,6 +140,8 @@ export interface Roster {
   /** Messages ever queued: the sequence of `m-N`. */
   readonly mailCount?: number
   readonly delivered?: MailDelivery
+  /** Merges, in order; absent in states saved before they existed. */
+  readonly merges?: readonly MergeState[]
   /** Agent Teams led by the lead or a worker, by the Team Lead's Session id. */
   readonly teams?: Readonly<Record<string, TeamView>>
 }
@@ -134,6 +160,8 @@ export interface RosterView {
   /** The lead's inbox in delivery order; absent from hosts before it existed. */
   readonly inbox?: readonly MailItem[]
   readonly delivered?: MailDelivery
+  /** Merges still under way, so the page can mark both workers. */
+  readonly merging?: readonly Pick<MergeState, 'id' | 'absorbed' | 'survivor' | 'state'>[]
   /** Agent Teams by the Team Lead's Session id; absent from hosts before it existed. */
   readonly teams?: Readonly<Record<string, TeamView>>
 }
@@ -264,7 +292,9 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     // Archiving fails what the member still owed; the user did that themselves, nothing to review.
     const owner = request.action === 'sent' ? undefined : (request.to ?? known?.to)
     const archived = request.action === 'failed' && state.members.some(m => m.id === owner && m.state === 'archived')
-    const members = owner !== undefined && !archived && state.members.some(m => m.id === owner)
+    // A handoff goes to the worker it is merged into, not to the user: nothing to review.
+    const handoff = (request.kind ?? known?.kind) === 'handoff'
+    const members = owner !== undefined && !archived && !handoff && state.members.some(m => m.id === owner)
       ? upsert(state.members, owner, m => reported(m!, event.time, request.action === 'failed'))
       : state.members
     return {
@@ -280,6 +310,7 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         messageId: request.messageId ?? r?.messageId,
         answer: request.answer ?? request.detail ?? r?.answer,
         deliveredTo: request.deliveredTo ?? r?.deliveredTo,
+        kind: request.kind ?? r?.kind,
         deferred: request.action === 'sent' ? (request.deferred ?? r?.deferred) : undefined,
       })),
     }
@@ -313,6 +344,8 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const mail = R.mail(event)
   if (mail !== undefined) return applyMail(state, mail, event.time)
+  const merge = R.merge(event)
+  if (merge !== undefined) return applyMerge(state, merge)
   const team = R.team(event)
   if (team !== undefined) {
     const next = { members: team.members, tasks: team.tasks }
@@ -355,6 +388,39 @@ function applyMail(state: Roster, mail: NonNullable<ReturnType<typeof R.mail>>, 
   return { ...state, mail: items.map(m => m === item ? (on ? { ...rest, [flag]: true as const } : rest) : m) }
 }
 
+function applyMerge(state: Roster, merge: NonNullable<ReturnType<typeof R.merge>>): Roster {
+  const merges = state.merges ?? []
+  if (merge.action === 'requested') {
+    if (merges.some(m => m.id === merge.id)) return state
+    const next = compact<MergeState>({ id: merge.id, absorbed: merge.absorbed!, survivor: merge.survivor!, state: 'requested', request: merge.request!, name: merge.name, role: merge.role, by: merge.by, for: merge.for })
+    return { ...state, merges: [...merges, next] }
+  }
+  const known = merges.find(m => m.id === merge.id)
+  if (known === undefined || known.state === 'failed' || known.state === 'delivered') return state
+  const with_ = (patch: Partial<MergeState>): Roster => ({ ...state, merges: merges.map(m => m === known ? compact({ ...m, ...patch }) : m) })
+  switch (merge.action) {
+    case 'handoff': return with_({ state: 'handoff', handoff: merge.text, source: merge.source ?? 'worker' })
+    case 'settled': return with_({ state: 'settled', facts: merge.facts })
+    case 'failed': return known.state === 'merged' ? state : with_({ state: 'failed', detail: merge.detail })
+    case 'delivered': return known.state === 'merged' ? with_({ state: 'delivered' }) : state
+    case 'merged': {
+      if (known.state === 'merged') return state
+      const absorbed = state.members.find(m => m.id === known.absorbed)
+      const survivor = state.members.find(m => m.id === known.survivor)
+      if (absorbed === undefined || survivor === undefined) return with_({ state: 'merged' })
+      const name = merge.name!
+      // Every name either had now finds the survivor; the one it takes back is current again.
+      const former = [...(survivor.formerNames ?? []), ...(survivor.name === name ? [] : [survivor.name]), absorbed.name, ...(absorbed.formerNames ?? [])]
+      const formerNames = [...new Set(former)].filter(n => n !== name)
+      const role = merge.role ?? survivor.role
+      let members = upsert(state.members, absorbed.id, m => compact({ ...m!, state: 'archived' as const, mergedInto: survivor.id, detail: `merged into ${name}` }))
+      members = upsert(members, survivor.id, m => compact({ ...m!, name, formerNames: formerNames.length === 0 ? undefined : formerNames, role, text: role ?? m!.text, area: merge.area ?? m!.area }))
+      return { ...state, members, merges: merges.map(m => m === known ? { ...m, state: 'merged' as const } : m) }
+    }
+    default: return state
+  }
+}
+
 const views = new WeakMap<Roster, RosterView>()
 
 /**
@@ -374,6 +440,7 @@ export function rosterView(state: Roster): RosterView {
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
       inbox: mailOrder(state.mail ?? []).map(m => m.text.length > VIEW_TEXT ? { ...m, text: `${m.text.slice(0, VIEW_TEXT)}…` } : m),
       ...(state.delivered === undefined ? {} : { delivered: state.delivered }),
+      merging: (state.merges ?? []).filter(mergePending).map(({ id, absorbed, survivor, state: s }) => ({ id, absorbed, survivor, state: s })),
       ...(state.teams === undefined ? {} : { teams: state.teams }),
     }
     views.set(state, view)
@@ -398,7 +465,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
-  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt']) if (!optionalString(m[key])) fail(`member ${key}`)
+  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt', 'mergedInto']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (m.formerNames !== undefined && !(Array.isArray(m.formerNames) && m.formerNames.every(isString))) fail('member formerNames')
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
@@ -412,7 +479,7 @@ function checkMail(value: unknown): void {
   if (!Array.isArray(value)) fail('mail')
   for (const m of value) {
     if (!isRecord(m) || !isString(m.id) || !isString(m.from) || !isString(m.text) || typeof m.at !== 'number') fail('mail item')
-    if (!['reply', 'report', 'conclusion', 'failure'].includes(m.kind as string)) fail('mail kind')
+    if (!['reply', 'report', 'conclusion', 'failure', 'merged'].includes(m.kind as string)) fail('mail kind')
     if (!optionalString(m.request) || (m.pinned !== undefined && m.pinned !== true) || (m.held !== undefined && m.held !== true)) fail('mail item')
   }
 }
@@ -450,6 +517,7 @@ export const rosterSchema = {
       if (r.deferred !== undefined && r.deferred !== true) fail('request deferred')
     }
     checkMail(value.mail)
+    if (value.merges !== undefined && !(Array.isArray(value.merges) && value.merges.every(m => isRecord(m) && isString(m.id) && isString(m.absorbed) && isString(m.survivor) && isString(m.state) && isString(m.request)))) fail('merges')
     if (value.mailCount !== undefined && typeof value.mailCount !== 'number') fail('mailCount')
     checkDelivered(value.delivered)
     checkTeams(value.teams)
