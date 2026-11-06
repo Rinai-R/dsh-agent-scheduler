@@ -4,17 +4,17 @@
  * agent lookup rejects them, and the composer seat hides itself for addressed subagents), so the
  * main Session owns the choice: a plugin record in the main log, folded into the roster (so the
  * chat composer can show it), and applied to the child Agent with the runtime's own
- * `installModelSelection` now if it is live and again every time it is created (an idle member
+ * model selection (src/dsh/host/model.ts) now if it is live and again every time it is created (an idle member
  * is released, and a host restart recreates it from its log). The runtime's `model/selection`
  * event is not used: subagent Sessions never install the controller's selection that reads it.
  * @module dsh-agent-scheduler/member-model
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-llm'
-import { installModelSelection, type Agent, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import { CommandDefinitionId, type CommandInvocation, type CommandResult } from '@deepseek-ai/dsh-commands'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import { appendPluginRecord, pluginRecordOf, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Agent, CommandInvocation, CommandResult, SessionEvent } from './dsh/types.js'
+import {
+  appendRecord as appendPluginRecord, applyModelSelection, canSelectModel, isMainSession, lastEvent, modelValidator, recordOf as pluginRecordOf, registerCommand, SessionId,
+  type AgentLookup,
+} from './dsh/host/index.js'
 import type { Scheduler } from './scheduler.js'
 
 /** Command name; run in the main Session, naming the member. */
@@ -55,11 +55,7 @@ export interface MemberModelRecord {
   readonly selection: MemberModel
 }
 
-declare module '@deepseek-ai/dsh-session/types' {
-  interface PluginRecordMap {
-    'plugin:dsh-agent-scheduler/member-model': MemberModelRecord
-  }
-}
+// Its entry in DSH's PluginRecordMap is declared in src/dsh/host/augment.ts.
 
 /**
  * Read one member-model record.
@@ -76,32 +72,14 @@ export function memberModelRecordOf(event: SessionEvent): { agent: string; selec
 }
 
 
-const toAgentSelection = (selection: NonNullable<MemberModel>): ModelSelection => ({
-  provider: selection.provider,
-  model: selection.model,
-  ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
-})
-
-/** One installed selection per live member Agent. */
-const installed = new WeakMap<Agent, ModelSelectionRef>()
-
 /**
  * Point a live member's later requests at a selection; `null` returns it to the model it was
  * started with. The step already assembling keeps its model, as with the runtime's selector.
  * @param agent - the member Agent.
  * @param selection - the selection, or null.
+ * @returns false when this DSH cannot switch one Agent's model.
  */
-export function applyMemberModel(agent: Agent, selection: MemberModel): void {
-  let ref = installed.get(agent)
-  if (ref === undefined) {
-    if (selection === null) return
-    ref = { current: undefined, assembled: undefined }
-    installed.set(agent, ref)
-    const dispose = installModelSelection(agent.ctx, ref)
-    agent.ctx.effect(() => dispose, 'agent-scheduler: member model')
-  }
-  ref.current = selection === null ? undefined : toAgentSelection(selection)
-}
+export const applyMemberModel = (agent: Agent, selection: MemberModel): boolean => applyModelSelection(agent, selection)
 
 /**
  * Execute `/agent-model <member> <provider>/<model> [effort] | <member> default` in the main Session.
@@ -112,7 +90,7 @@ export function applyMemberModel(agent: Agent, selection: MemberModel): void {
  */
 export function runMemberModelCommand(
   scheduler: Pick<Scheduler, 'ledgerOf'>,
-  agents: { get(id: SessionId): Agent | undefined },
+  agents: AgentLookup,
   invocation: CommandInvocation,
   validate?: Validate,
 ): Promise<CommandResult> {
@@ -126,8 +104,8 @@ export type Validate = (selection: NonNullable<MemberModel>) => Promise<NonNulla
  * Record a member's model in the main Session and apply it to the member if it is live.
  * @returns the command outcome.
  */
-export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, agents: { get(id: SessionId): Agent | undefined }, main: Agent, rawInput: string, validate?: Validate): Promise<CommandResult> {
-  if (main.session.header.parentSession !== undefined) return { kind: 'error', text: `/${MEMBER_MODEL_COMMAND} only applies in the main session.` }
+export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, agents: AgentLookup, main: Agent, rawInput: string, validate?: Validate): Promise<CommandResult> {
+  if (!isMainSession(main)) return { kind: 'error', text: `/${MEMBER_MODEL_COMMAND} only applies in the main session.` }
   const parsed = parseMemberModel(rawInput)
   if (parsed === undefined) return { kind: 'error', text: `Usage: /${MEMBER_MODEL_COMMAND} <name> <provider>/<model> [effort] | <name> default` }
   const member = scheduler.ledgerOf(main).find(parsed.member)
@@ -145,10 +123,11 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
       return { kind: 'error', text: `${parsed.selection!.provider}/${parsed.selection!.model}: ${error instanceof Error ? error.message : String(error)}` }
     }
   }
+  if (!canSelectModel()) return { kind: 'error', text: 'This DSH cannot give one agent a model of its own (no per-agent model selection).' }
   const ledger = scheduler.ledgerOf(main)
   appendPluginRecord(main.session, MEMBER_MODEL_RECORD, { version: 1, agent: member.id, selection })
-  ledger.apply(main.session.snapshotEvents().at(-1)!)
-  const child = agents.get(SessionId(member.id))
+  ledger.apply(lastEvent(main.session))
+  const child = agents.get(SessionId(member.id) as never)
   if (child !== undefined) applyMemberModel(child, selection)
   return {
     kind: 'success',
@@ -164,27 +143,29 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
  * @param agent - any created Agent; main Sessions and non-members are left alone.
  */
 export function restoreMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, agent: Agent): void {
-  if (agent.session.header.parentSession === undefined) return
-  const selection = scheduler.ledgerOf(agent).members.get(agent.id)?.pickedModel
-  if (selection !== undefined) applyMemberModel(agent, selection)
+  if (isMainSession(agent)) return
+  const member = scheduler.ledgerOf(agent).members.get(agent.id)
+  // Only a worker has a model of its own. Its state is re-asserted on every creation, including
+  // "none" (a runtime that keeps the choice in the member's own log would otherwise bring back
+  // one the user cleared while the member was released).
+  if (member?.kind === 'worker') applyMemberModel(agent, member.pickedModel ?? null)
 }
 
 /**
- * Register the command, and restore each member's own selection whenever its Agent is created
- * (first start, host restart, resume after release).
- * @param ctx - preset-scoped context.
- * @param scheduler - the scheduler of this preset.
+ * Register `/agent-model`. Restoring each member's own selection whenever its Agent is created
+ * (first start, host restart, resume after release) is the rule's `created` hook
+ * ({@link restoreMemberModel}).
+ * @param ctx - the rule's context.
+ * @param scheduler - the scheduler.
+ * @param agents - live Agents.
  */
-export function installMemberModels(ctx: Context, scheduler: Pick<Scheduler, 'ledgerOf'>): void {
-  ctx.on('agent/created', ({ agent }) => { restoreMemberModel(scheduler, agent); return undefined })
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/agent-model'),
+export function installMemberModels(ctx: Context, scheduler: Pick<Scheduler, 'ledgerOf'>, agents: AgentLookup): void {
+  const validate = modelValidator(ctx, 'resolved')
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/agent-model',
     name: MEMBER_MODEL_COMMAND,
     description: 'Set the model one fork or worker uses from its next step',
-    input: { hint: '<name> <provider>/<model> [effort] | <name> default' },
-    handler: (invocation) => runMemberModelCommand(scheduler, ctx.agents as never, invocation, async (selection) => {
-      const resolved = await ctx.llm.resolveCallConfig({ provider: selection.provider, model: selection.model, ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }) })
-      return { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: String(resolved.reasoningEffort) }) }
-    }),
+    hint: '<name> <provider>/<model> [effort] | <name> default',
+    run: (invocation) => runMemberModelCommand(scheduler, agents, invocation, validate),
   })
 }

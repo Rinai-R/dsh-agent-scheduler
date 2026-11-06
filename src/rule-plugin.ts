@@ -1,35 +1,31 @@
 /**
- * Preset-scoped half of the plugin. Mounted in the standard preset; each main Session switches it
- * with `/schedule on|off`, and a Session that is off behaves as an ordinary chat.
+ * The scheduling half of the plugin: a top-level row, so it reaches the Agents of every preset
+ * (cordis.patch.yml). Each main Session switches it with `/schedule on|off`; a Session that is off
+ * behaves as an ordinary chat. If this DSH lacks a service scheduling needs, the row registers
+ * only commands that say so (src/dsh/host/services.ts `missingRequired`).
  * @module dsh-agent-scheduler/rule
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-agent'
-import { CommandDefinitionId, type CommandInvocation, type CommandResult } from '@deepseek-ai/dsh-commands'
-import type {} from '@deepseek-ai/dsh-subagent'
 import z from '@deepseek-ai/schemastery'
-import type {} from '@deepseek-ai/dsh-session-query'
-import type { Session } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-system-prompt'
-import type {} from '@deepseek-ai/dsh-tools'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import type { CommandInvocation, CommandResult } from './dsh/types.js'
+import {
+  claimOnce, eventsOf, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
+} from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { parseModel, schedulerTools, sectionFor } from './tools.js'
 import { forkGuard } from './fork-guard.js'
-import { installMemberModels, type Validate } from './member-model.js'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { installMemberModels, restoreMemberModel, type Validate } from './member-model.js'
 
 export const name = 'agent-scheduler-rule'
-export const inject = ['subagents', 'agents', 'commands', 'tools', 'systemPrompt', 'sessionQuery', 'llm']
+export const inject = RULE_SERVICES
 
 /** Plugin configuration. */
 export interface Config {
   fork?: ForkModelSelection | undefined
   worker?: ForkModelSelection | undefined
   workerPreset?: string | undefined
-  /** Sessions with no recorded switch schedule; only for the retired `scheduler` preset. */
-  defaultOn?: boolean | undefined
 }
 
 const modelConfig = z.union([
@@ -46,7 +42,6 @@ export const Config: z<Config> = z.object({
   fork: modelConfig.description('Retired and ignored: forks always use the lead\'s model (and its prompt cache).'),
   worker: modelConfig.description('Default model for workers. Empty uses the runtime default.'),
   workerPreset: z.string().description('Preset for new workers. Empty inherits this session\'s preset.'),
-  defaultOn: z.boolean().description('Schedule in sessions that never used /schedule. Only the retired scheduler preset sets it.'),
 }) as unknown as z<Config>
 
 /**
@@ -93,7 +88,7 @@ export function runForkCommand(invocation: CommandInvocation): CommandResult {
 export async function runWorkerModelCommand(invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/worker only applies in the main session.' }
   if (invocation.rawInput.trim() === '') {
-    const current = workerModelOf(invocation.agent.session.snapshotEvents())
+    const current = workerModelOf(eventsOf(invocation.agent.session))
     return { kind: 'success', text: current === null ? 'Workers use the default model.' : `Workers use ${routeOf(current)}.` }
   }
   let selection = parseForkCommand(invocation.rawInput)
@@ -222,111 +217,110 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
   }
 }
 
+/** What every command says when this DSH cannot run scheduling. */
+export function incompatible(missing: readonly string[], version = hostVersion()): string {
+  return `dsh-agent-scheduler cannot run on this DeepSeek Harness${version === undefined ? '' : ` (${version})`}: it lacks ${missing.join(', ')}. Scheduling is off; the plugin supports DSH ${DSH_RANGE}. Update the plugin or DeepSeek Harness.`
+}
+
+/** The plugin's slash commands, as the composer lists them. */
+const COMMANDS = ['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model'] as const
+
 /**
  * Install the input rule.
- * @param ctx - preset-scoped context.
+ * @param ctx - the rule row's context (top level: it sees every Agent).
  * @param config - plugin configuration.
  */
 export function apply(ctx: Context, config: Config): void {
+  const log = hostLog(ctx)
+  ctx.effect(() => setWarnSink(log), 'agent-scheduler: warnings')
+  // A second copy (an old profile patch that still mounts the rule in a preset) stays off.
+  if (!claimOnce('agent-scheduler-rule', ctx)) return
+  // Scheduling never runs on a DSH that lacks what it needs: no guard means no forks at all.
+  const missing = missingRequired(ctx)
+  if (missing.length > 0) {
+    const text = incompatible(missing)
+    log(text)
+    if (typeof ctx.commands?.register === 'function') {
+      for (const name of COMMANDS) registerCommand(ctx, { id: `dsh-agent-scheduler/${name}`, name, description: 'Unavailable: this DeepSeek Harness is not supported', run: () => ({ kind: 'error', text }) })
+    }
+    return
+  }
+  const names = titleService(ctx, log)
   const scheduler = new Scheduler({
     subagents: ctx.subagents,
-    agents: ctx.agents,
-    readLog: async (id) => {
-      using observed = await ctx.sessionQuery.observeSession(SessionId(id), { projectionMode: 'none' })
-      return { events: [...observed.events], inherited: Number(observed.inheritedEventCount) }
-    },
+    agents: ctx.agents as never,
+    readLog: logReader(ctx),
     configuredWorkerModel: config.worker,
     workerPreset: config.workerPreset,
-    defaultOn: config.defaultOn,
-    log: (message, error) => { ctx.logger('agent-scheduler').warn(message, error) },
+    log,
     // A worker renamed in a split gets a title to match, when it is resident and titles exist.
     renameSession: (id, title) => {
-      const session = ctx.agents.get(id)?.session
-      if (titles === undefined || session === undefined) return
-      titles.rename(session, title)
+      const session = ctx.agents.get(id as never)?.session
+      if (session !== undefined) names.rename(session, title)
     },
   })
   ctx.effect(() => () => { scheduler.dispose() }, 'agent-scheduler: queue')
-  // Session titles come from user messages; the input rule removes them, so name the session
-  // from the first input. Optional: profiles without the title service keep working.
-  let titles: { get(session: Session): unknown; rename(session: Session, title: string): unknown } | undefined
-  ctx.inject(['sessionTitle'], (scoped) => {
-    titles = scoped.sessionTitle
-    scoped.effect(() => () => { titles = undefined }, 'agent-scheduler: titles')
+  onAgents(ctx, {
+    inserted: (agent, message) => {
+      // Session titles come from user messages; the input rule removes them, so name the session
+      // from the first input. Optional: profiles without the title service keep working.
+      const took = scheduler.onInserted(agent, message)
+      if (took && isMainSession(agent) && isUserInput(message)) names.name(agent.session, textOf(message.content))
+    },
+    preStep: (payload, next) => preStep(scheduler, payload, next),
+    status: (agent, status) => { scheduler.onStatus(agent, status) },
+    created: (agent, resumed) => {
+      restoreMemberModel(scheduler, agent)
+      // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
+      // After creation resolves: the runtime only delivers to children of a published parent.
+      if (!resumed || !isMainSession(agent)) return
+      setTimeout(() => {
+        if (ctx.agents.get(agent.id) !== agent || scheduler.ledgerOf(agent).state.members.length === 0) return
+        void scheduler.recover(agent).catch((error: unknown) => { log('restart recovery failed', error) })
+      }, 0)
+    },
+    disposed: (agent) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() },
   })
-  const nameSession = (session: Session, text: string): void => {
-    if (titles === undefined || titles.get(session) !== undefined) return
-    const short = text.trim().replace(/\s+/gu, ' ').slice(0, 40)
-    if (short === '') return
-    try { titles.rename(session, short) } catch (error) { ctx.logger('agent-scheduler').warn('naming the session failed', error) }
-  }
-  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
-    const took = scheduler.onInserted(agent, message)
-    if (took && isMainSession(agent) && message.source.kind === 'user') nameSession(agent.session, textOf(message.content))
-  })
-  ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
-  ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
-  // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
-  // After creation resolves: the runtime only delivers to children of a published parent.
-  ctx.on('agent/created', ({ agent, source }) => {
-    if (source !== 'resume' || !isMainSession(agent)) return undefined
-    setTimeout(() => {
-      if (ctx.agents.get(agent.id) !== agent || scheduler.ledgerOf(agent).state.members.length === 0) return
-      void scheduler.recover(agent).catch((error: unknown) => { ctx.logger('agent-scheduler').warn('restart recovery failed', error) })
-    }, 0)
-    return undefined
-  })
-  ctx.on('agent/disposed', ({ agent }) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() })
-  for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.effect(() => ctx.tools.register(tool), `agent-scheduler: ${tool.name}`)
+  for (const tool of schedulerTools(scheduler, ctx.agents as never)) registerTool(ctx, tool)
   // Forks route only: every working tool is refused at dispatch (src/fork-guard.ts).
-  ctx.effect(() => ctx.tools.guard(forkGuard(agent => scheduler.forkNameOf(agent))), 'agent-scheduler: fork guard')
-  ctx.effect(() => ctx.systemPrompt.section({
-    name: 'agent-scheduler',
-    order: 900,
-    text: (context) => context.agent === undefined ? '' : sectionFor(scheduler, context.agent),
-  }), 'agent-scheduler: section')
-  installMemberModels(ctx, scheduler)
-  // Same check as the runtime's own selector: the route must resolve and the effort must be one
-  // the model advertises (an unknown effort is refused here rather than at the first call).
-  const validate: Validate = async (selection) => {
-    const resolved = await ctx.llm.resolveCallConfig({ provider: selection.provider, model: selection.model, ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }) })
-    return { provider: resolved.provider, model: resolved.model, ...(selection.reasoningEffort === undefined || resolved.reasoningEffort === undefined ? {} : { reasoningEffort: String(resolved.reasoningEffort) }) }
-  }
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/schedule'),
+  installGuard(ctx, forkGuard(agent => scheduler.forkNameOf(agent)))
+  promptSection(ctx, 'agent-scheduler', 900, agent => sectionFor(scheduler, agent))
+  installMemberModels(ctx, scheduler, ctx.agents as never)
+  const validate: Validate = modelValidator(ctx)
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/schedule',
     name: 'schedule',
     description: 'Hand each later message to a fork of this session (on), or stop (off)',
-    input: { hint: '[on | off]' },
-    handler: (invocation) => runScheduleCommand(scheduler, invocation),
+    hint: '[on | off]',
+    run: (invocation) => runScheduleCommand(scheduler, invocation),
   })
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/agents'),
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/agents',
     name: 'agents',
     description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read',
-    input: { hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all' },
-    handler: (invocation) => runAgentsCommand(scheduler, invocation, validate),
+    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all',
+    run: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/fork'),
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/fork',
     name: 'fork',
     description: 'Forks always use the lead\'s model; says so (a fork model can no longer be set)',
-    // No `input`: it takes no arguments, and the runtime rejects an empty hint (the whole preset
-    // then fails to load, see tests/input.spec.ts).
-    handler: runForkCommand,
+    // No hint: it takes no arguments (registerCommand omits an empty one, see tests/input.spec.ts).
+    run: runForkCommand,
   })
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/worker'),
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/worker',
     name: 'worker',
     description: 'Show or set the model new workers use when the lead names none',
-    input: { hint: 'model <provider>/<model> [effort] | model default' },
-    handler: (invocation) => runWorkerModelCommand(invocation, validate),
+    hint: 'model <provider>/<model> [effort] | model default',
+    run: (invocation) => runWorkerModelCommand(invocation, validate),
   })
-  ctx.commands.register({
-    definitionId: CommandDefinitionId('dsh-agent-scheduler/role'),
+  registerCommand(ctx, {
+    id: 'dsh-agent-scheduler/role',
     name: 'role',
     description: 'Show or set the lead\'s role',
-    input: { hint: '[<role text>]' },
-    handler: (invocation) => {
+    hint: '[<role text>]',
+    run: (invocation) => {
       if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/role only applies in the main session.' }
       const text = invocation.rawInput.trim()
       if (text === '') return { kind: 'success', text: scheduler.roleFor(invocation.agent) ?? 'No role set.' }

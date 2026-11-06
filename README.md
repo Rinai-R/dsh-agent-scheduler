@@ -71,13 +71,12 @@ dsh plugin --profile web add dsh-agent-scheduler     # into a specific profile
 ```
 
 Give a reinstalled tarball a new file name: the package manager does not replace the contents of a
-same-named tarball. Restart dsh (quit and reopen the desktop app) after installing or updating. A
-session that was already open before the install keeps its old preset; after the restart, reopen it
-or start a new session to get the 「调度」 (Scheduling) chip.
+same-named tarball. Restart dsh (quit and reopen the desktop app) after installing or updating; the
+「调度」 (Scheduling) chip then appears in every session, whatever its preset.
 
 ### Turn scheduling on
 
-New sessions in the default preset start with scheduling off and behave as an ordinary chat. In
+New sessions start with scheduling off and behave as an ordinary chat. In
 the composer's mode row, next to access mode and Plan, click 「调度」 (Scheduling); a bare
 `/schedule` also turns it on. The chip turns blue, and an Agents button appears beside it with the
 most urgent count — `N 等你` (waiting), `N 在跑` (running), `N 排队` (queued), `N 失败` (failed) —
@@ -224,11 +223,16 @@ ledger and the client's `agentScheduler` projection are the same fold over those
 the sidebar draws and what the scheduler routes by cannot drift apart. Child sessions are native;
 restart recovery reads their logs rather than trusting what an agent says about itself.
 
-**Preset and switch.** The plugin overrides the shipped `standard` preset with its rows unchanged
-plus the scheduler rule, so every new session can schedule. The retired `调度（旧会话）` preset stays
-only so sessions created with it still open; those start with scheduling on. Turning the switch off
-returns later messages to the lead, which can still create and use workers; existing forks and
-workers keep running and still answer to it.
+**Rows and switch.** `cordis.patch.yml` inserts two top-level rows: the host row and the scheduler
+rule. A top-level row reaches the Agents of every preset, so the plugin changes no preset and a dsh
+upgrade leaves it alone. Turning the switch off returns later messages to the lead, which can still
+create and use workers; existing forks and workers keep running and still answer to it.
+
+**DSH adapter.** Everything that depends on DeepSeek Harness itself (its services, event and
+message formats, runtime wording, the sidebar's DOM and layout) lives in `src/dsh/`; the rest of
+the plugin calls only that layer. On a dsh that lacks a service scheduling needs (the tool guard
+above all), the rule schedules nothing and every command says what is missing. See
+[docs/dsh-adapter.md](docs/dsh-adapter.md).
 
 ## Configuration
 
@@ -258,17 +262,20 @@ child's rounds ended from the child's own log.
 ### Advanced configuration
 
 Normal use needs no config file: `/worker model` and the Agents page record the worker default in
-the session. The preset's rule row in the profile config still accepts `worker` (a fallback model
-for new workers when neither `agent_create` nor `/worker model` names one) and `workerPreset` (the
-preset for new workers; empty inherits the session's). `fork` is retired and ignored: forks always
-use the lead's model. `defaultOn` belongs only to the retired `scheduler` preset.
+the session. The rule row (`agent-scheduler-rule`) in the profile config still accepts `worker` (a
+fallback model for new workers when neither `agent_create` nor `/worker model` names one) and
+`workerPreset` (the preset for new workers; empty inherits the session's). `fork` is retired and
+ignored: forks always use the lead's model.
 
 ## Known limitations
 
-- The `standard` override copies its rows from the dsh version that generated `cordis.patch.yml`
-  (currently `0.2.1-rc.5`). Regenerate after a dsh upgrade with `npm run gen:preset -- <dump.yml>`,
-  or the preset keeps the old rows. Another bundle that also overrides `standard` conflicts with
-  this one.
+- The scheduler's tools, commands and switch are present in sessions of every preset, not only
+  `standard`. With scheduling off and no workers the system prompt has no scheduler section and
+  no message is forked, but the eight tools (`agent_*`, `role_set`, `report`) are still in every
+  request's tool list (about 8.6 KB of definitions, e.g. 3 → 11 tools in the minimal preset), and
+  since the switch only decides who takes user messages, the lead there can use them.
+- Sessions created with the retired `调度（旧会话）` preset (plugin versions before 0.1.0-rc.3) no
+  longer open: that preset was removed with the `standard` override.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
   lead request misses the prompt cache once.
 - Forks only route. A tool guard refuses a fork every tool except reading (`read`, `glob`, `grep`,
@@ -291,23 +298,29 @@ use the lead's model. `defaultOn` belongs only to the retired `scheduler` preset
 Requires Node.js `^22.19.0 || >=24`.
 
 - `src/index.ts`: the host row — the `fork-from` provider, the roster projection and recovery policy.
-- `src/rule-plugin.ts`: the preset row — commands, system-prompt section and tool registration.
+- `src/rule-plugin.ts`: the rule row — commands, system-prompt section and tool registration.
+- `src/dsh/`: the DSH adapter — host (`host/`) and browser (`client/`) halves, the only code that
+  touches DeepSeek Harness directly.
 - `src/scheduler.ts`: the input rule, queue, requests, settlement and restart recovery.
 - `src/client/`: the browser half — input cards, the composer switch, the Agents page and model
   pickers.
-- `tests/`: vitest specs for the host and client halves.
+- `tests/`: vitest specs for the host and client halves; `tests/contract/` checks every DSH
+  dependency against a real DSH release.
 
 ```bash
 npm install
 npm run build          # compile the host half and bundle dist/client.js
 npm run typecheck
 npm test
+npm run contract       # contract tests against the pinned dsh (fetches its browser bundles)
+npm run contract:next  # the same against npm's `next` dsh (reinstalls, then restores)
 npm pack --dry-run
 ```
 
-`npm run gen:preset -- <dump.yml>` rebuilds `cordis.patch.yml` from the output of
-`dsh --profile web --dump-default-config`; the `standard` rows come from the dsh version that
-produced the dump. CI runs typecheck, build, test and `npm pack --dry-run` on Node 24.
+CI runs typecheck, build, test and `npm pack --dry-run` on Node 24, and the contract tests against
+the pinned dsh and against `next` (advisory) on every PR and weekly. When a new dsh is released:
+run `npm run contract:next`, fix what fails in `src/dsh/`, then widen `engines.dsh` and the peer
+ranges together (`DSH_RANGE` in `src/dsh/host/version.ts` must match).
 
 ## License
 

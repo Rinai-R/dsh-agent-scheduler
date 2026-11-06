@@ -1,9 +1,10 @@
 /** The plugin's model catalog: the composer's own store, live; a fallback copy on the same triggers. */
 import { describe, expect, it, vi } from 'vitest'
-import { CATALOG_EVENTS, fallbackCatalog, fromHostCatalog, hostCatalogSource, isStale, orderProviders } from '../src/client/catalog-source.js'
+import { catalogSource, fallbackCatalog, fromHostCatalog, isStale, orderProviders } from '../src/client/catalog-source.js'
+import type { CatalogGroup } from '../src/client/model-menu.js'
 
-const magpie = { id: 'magpie', name: 'Magpie', models: [{ id: 'claude-opus', name: 'Claude Opus' }, { id: 'gpt', name: 'GPT' }] }
-const moved = [{ id: 'magpie', name: 'Magpie', models: [{ id: 'gpt', name: 'GPT' }] }, { id: 'magpie-anthropic', name: 'Magpie (Anthropic)', models: [{ id: 'claude-opus', name: 'Claude Opus' }] }]
+const magpie: CatalogGroup = { id: 'magpie', name: 'Magpie', models: [{ id: 'claude-opus', name: 'Claude Opus' }, { id: 'gpt', name: 'GPT' }] }
+const moved: CatalogGroup[] = [{ id: 'magpie', name: 'Magpie', models: [{ id: 'gpt', name: 'GPT' }] }, { id: 'magpie-anthropic', name: 'Magpie (Anthropic)', models: [{ id: 'claude-opus', name: 'Claude Opus' }] }]
 
 /** A stand-in for `modelDirectories.catalog`: a snapshot store the Host replaces on a model-list change. */
 function hostCatalog(groups: unknown) {
@@ -45,39 +46,38 @@ describe('model catalog source', () => {
     expect(host.load).toHaveBeenCalledTimes(1)
   })
 
-  it('prefers the Host composer\'s store over its own copy', () => {
+  it('prefers the composer\'s store over its own copy', () => {
     const host = hostCatalog([magpie])
     const modelCatalog = vi.fn()
-    const source = hostCatalogSource({ get: (name: string) => name === 'modelDirectories' ? { catalog: host } : undefined, remote: { session: { modelCatalog } } })
+    const source = catalogSource({ composerCatalog: () => host as never, modelCatalog, onCatalogChange: () => () => undefined })
     expect(source.getSnapshot().groups!.map(g => g.id)).toEqual(['magpie'])
     host.publish({ value: { groups: moved, failures: [] }, status: 'ready', error: null })
     expect(source.getSnapshot().groups!.map(g => g.id)).toEqual(['magpie', 'magpie-anthropic'])
     expect(modelCatalog).not.toHaveBeenCalled()
   })
 
-  it('without the Host store: loads the same RPC and reloads on the composer\'s events and on demand', async () => {
-    let groups: unknown = [magpie]
-    const modelCatalog = vi.fn(async () => ({ ok: true as const, value: { groups: groups as never } }))
-    const handlers = new Map<string, () => void>()
+  it('without the composer\'s store: loads the same read and reloads on the Host\'s catalog events', async () => {
+    let groups = [magpie]
+    const modelCatalog = vi.fn(async () => ({ groups }))
+    let changed: (() => void) | undefined
     const off = vi.fn()
-    const source = hostCatalogSource({ remote: { session: { modelCatalog }, $on: (event: string, listener: () => void) => { handlers.set(event, listener); return off } } })
+    const source = catalogSource({ composerCatalog: () => undefined, modelCatalog: modelCatalog as never, onCatalogChange: (listener) => { changed = listener; return off } })
     expect(source.getSnapshot().groups).toBeUndefined()
     const notified = vi.fn()
     source.subscribe(notified)
-    expect([...handlers.keys()]).toEqual([...CATALOG_EVENTS])
     source.load()
     await vi.waitFor(() => { expect(source.getSnapshot().groups?.map(g => g.id)).toEqual(['magpie']) })
     groups = moved
-    handlers.get('settings/document-updated')!()
+    changed!()
     await vi.waitFor(() => { expect(source.getSnapshot().groups?.map(g => g.id)).toEqual(['magpie', 'magpie-anthropic']) })
     expect(notified).toHaveBeenCalledTimes(2)
     source.dispose()
-    expect(off).toHaveBeenCalledTimes(CATALOG_EVENTS.length)
+    expect(off).toHaveBeenCalledTimes(1)
   })
 
   it('a failed reload keeps the last list and reports the error', async () => {
     let fail = false
-    const source = fallbackCatalog({ modelCatalog: async () => fail ? { ok: false as const, error: { code: 'x', message: 'down' } } : { ok: true as const, value: { groups: [magpie] } } })
+    const source = fallbackCatalog({ modelCatalog: async () => { if (fail) throw new Error('x: down'); return { groups: [magpie] } } })
     source.load()
     await vi.waitFor(() => { expect(source.getSnapshot().groups).toHaveLength(1) })
     fail = true

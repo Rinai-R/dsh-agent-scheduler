@@ -1,0 +1,72 @@
+/**
+ * What the plugin reads and changes on a live Agent: its place in the Session tree, its inbox,
+ * its status, and the follow-up queue the lead receives results through (dsh-agent).
+ * @module dsh-agent-scheduler/dsh/host/agent
+ */
+import type { Agent, UserMessage } from '../types.js'
+import { relayMessage } from './session.js'
+
+/** Live Agents by Session id: `ctx.agents`, narrowed. */
+export interface AgentLookup { get(id: never): Agent | undefined }
+
+/** The main Session of a tree has no parent. */
+export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
+
+/**
+ * @param agent - the main agent or one of its children.
+ * @returns the main Session's id (a child's parent: every member is a direct child).
+ */
+export const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? agent.id
+
+/**
+ * @param agent - any agent.
+ * @returns the directory its Session was created in, if recorded.
+ */
+export const cwdOf = (agent: Agent): string | undefined => agent.session.header.cwd
+
+/**
+ * @param agent - any agent.
+ * @returns messages waiting for its next step, then its next turn.
+ */
+export const pendingOf = (agent: Agent): UserMessage[] => [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+
+/**
+ * @param agent - any agent.
+ * @param id - a message id.
+ * @returns whether that message is still waiting in its inbox.
+ */
+export const isPending = (agent: Agent, id: string): boolean => pendingOf(agent).some(m => m.id === id)
+
+/**
+ * @param agent - any agent.
+ * @param id - a message id.
+ * @returns whether it was removed.
+ */
+export const removePending = (agent: Agent, id: string): boolean => agent.inbox.remove(id as never)
+
+/**
+ * @param agent - any agent.
+ * @param message - the new content of a message still waiting, same id.
+ * @returns whether it was replaced.
+ */
+export const replacePending = (agent: Agent, message: UserMessage): boolean => agent.inbox.replace(message.id, message)
+
+/**
+ * @param agents - live agents.
+ * @param id - a Session id.
+ * @returns `running` or `idle` for a resident agent, undefined when it is not resident.
+ */
+export const statusOf = (agents: AgentLookup, id: string): 'running' | 'idle' | undefined => {
+  const status = agents.get(id as never)?.status
+  return status === undefined ? undefined : status === 'running' ? 'running' : 'idle'
+}
+
+/**
+ * Give the lead a message from a member outside a step it is admitting: queued for its next turn.
+ * @param main - the main agent.
+ * @param text - what the lead reads.
+ * @param sender - the member's Session id.
+ */
+export function toLead(main: Agent, text: string, sender: string): void {
+  main.followup(relayMessage(text, sender))
+}

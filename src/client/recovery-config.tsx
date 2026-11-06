@@ -6,6 +6,7 @@
  * host row's volatile fields are editable there, which is why the option lives on that row.
  */
 import { useEffect, useState } from 'react'
+import { configPage, type ConfigForm } from '../dsh/client/ui.js'
 
 /** The host row id in cordis.patch.yml, which is also its settings namespace. */
 export const HOST_NS = 'dsh-agent-scheduler'
@@ -13,19 +14,15 @@ const PACKAGE = 'dsh-agent-scheduler'
 
 type Mode = 'fail' | 'resume'
 interface Recovery { onInterrupted?: Mode; maxResumes?: number }
-interface Snapshot { status: string; value?: { recovery?: Recovery }; writable: boolean }
-interface Form {
-  getSnapshot(): Snapshot
-  subscribe(listener: () => void): () => void
-  mutate(ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[]): Promise<boolean>
-}
+type Form = ConfigForm<{ recovery?: Recovery }>
+type Snapshot = ReturnType<Form['getSnapshot']>
 
 const CSS = `
 .sch-rc{display:flex;flex-direction:column;gap:14px;padding:4px 0 8px}
 .sch-rc h3{margin:0;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
 .sch-rc p{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
-.sch-rc-opt{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;border:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.25));cursor:pointer}
-.sch-rc-opt[data-on=yes]{border-color:var(--dsw-alias-accent,#4d6bfe)}
+.sch-rc-opt{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.25));cursor:pointer}
+.sch-rc-opt[data-on=yes]{border-color:var(--dsw-alias-state-business-primary,#4d6bfe)}
 .sch-rc-opt input{margin-top:3px}
 .sch-rc-opt b{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
 .sch-rc-row{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dsw-alias-label-secondary)}
@@ -79,15 +76,9 @@ function RecoveryPage(props: { form: Form }) {
  * Register the page while the Host serves the host row's settings.
  * @param ctx - the browser plugin context.
  */
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
 export function registerRecoveryConfig(ctx: any): void {
   // Optional: a deployment without the settings client simply has no page, and a failure here
   // must not stop the rest of the browser half from mounting.
-  if (typeof ctx.inject !== 'function') return
-  ctx.inject(['configForms', 'slots'], (scoped: any) => {
-    const form = scoped.configForms.get(HOST_NS) as Form
-    scoped.effect(() => scoped.configForms.whileServed([HOST_NS], () => scoped.slots.inject('plugins.bundle.config', () => scoped.slots.register({
-      name: 'plugins.bundle.config',
-      key: PACKAGE,
-    }, ({ view }: { view?: string }) => view === 'summary' ? null : <RecoveryPage form={form} />))), 'agent-scheduler: recovery config page')
-  })
+  configPage<{ recovery?: Recovery }>(ctx, HOST_NS, PACKAGE, (form, view) => view === 'summary' ? null : <RecoveryPage form={form} />)
 }
