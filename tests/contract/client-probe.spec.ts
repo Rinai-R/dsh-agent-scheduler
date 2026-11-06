@@ -7,7 +7,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CHAT_FLOW_KINDS, SEL, SLOT, SUBAGENT_CHAT_ADDRESS, SUBAGENT_CHAT_KIND } from '../../src/dsh/client/index.js'
+import { CATALOG_EVENTS, CHAT_FLOW_KINDS, SEL, SLOT, SUBAGENT_CHAT_ADDRESS, SUBAGENT_CHAT_KIND } from '../../src/dsh/client/index.js'
 import { fetched, ownFile, probesAvailable, ROOT } from './probe.js'
 
 const attribute = (selector: string): string => /\[([a-z-]+)/u.exec(selector)![1]!
@@ -40,6 +40,19 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
     expect(code).toMatch(/subagentAddress\(sessionId\)\s*\{/u)
     expect(code).toContain('faceOf')
     expect(code).toMatch(/binding\(/u)
+  })
+
+  it('C13: the composer still lists models from the modelDirectories catalog store, reloaded on the same Host events', () => {
+    const code = fetched('dsh-client-ui-model-selection')
+    // The service the plugin reads, and its one shared catalog.
+    expect(code).toMatch(/super\(ctx, "modelDirectories"\)/u)
+    expect(code).toMatch(/this\.catalog = new ModelCatalogDirectory\(/u)
+    // A snapshot store of { value, status, error }, value being the modelCatalog() answer.
+    expect(code).toMatch(/store = \(0, [\w$]+\.createSnapshotStore\)\(\{\s*value: null,\s*status: "idle",\s*error: null/u)
+    expect(code).toMatch(/load\(\) \{[\s\S]{0,600}this\.ctx\.remote\.session\.modelCatalog\(\)/u)
+    // The composer's own seat renders that store, so the two stay one source.
+    expect(code).toContain('directory: directory.store')
+    for (const event of CATALOG_EVENTS) expect(code, event).toMatch(new RegExp(`\\$on\\("${event}", \\(\\) => \\{\\s*this\\.catalog\\.refresh\\(\\)`, 'u'))
   })
 
   it('C12: Session status rows still carry running and pendingInteraction', () => {

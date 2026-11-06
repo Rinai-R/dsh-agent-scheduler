@@ -19,6 +19,7 @@ export const PROBED = [
   'dsh-api-session-controller',
   'dsh-web-frontend',
   'dsh-client-ui-plugin-manager',
+  'dsh-client-ui-model-selection',
 ]
 
 const root = resolve(import.meta.dirname, '..')
