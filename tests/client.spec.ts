@@ -1,6 +1,7 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it } from 'vitest'
-import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelGroups, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle, hiddenBelow, hiddenLabel } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle, hiddenBelow, hiddenLabel } from '../src/client/index.js'
+import { isStale } from '../src/client/catalog-source.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
@@ -95,15 +96,12 @@ describe('worker default model picker', () => {
     // Values differ by level, so the attribute the GUI test reads shows it.
     expect(workerModelValue(high)).not.toBe(workerModelValue(opus))
   })
-  it('keeps a default the catalog no longer lists visible instead of showing another value', () => {
-    expect(workerModelGroups(groups, null)).toBe(groups)
-    expect(workerModelGroups(groups, { provider: 'deepseek', model: 'v4' })).toBe(groups)
-    const shown = workerModelGroups(groups, { provider: 'gone', model: 'm' })
-    expect(shown).toHaveLength(3)
-    expect(shown[2]).toMatchObject({ id: 'gone', models: [{ id: 'm' }] })
+  it('a default the catalog no longer lists is not dressed up as an entry: it is named by its id and flagged stale', () => {
     expect(workerModelLabel(groups, null)).toBe('默认')
     expect(workerModelLabel(groups, { provider: 'glm-gateway', model: 'claude/opus', reasoningEffort: 'high' })).toBe('Opus')
-    expect(workerModelLabel(shown, { provider: 'gone', model: 'm' })).toBe('m')
+    expect(workerModelLabel(groups, { provider: 'gone', model: 'm' })).toBe('m')
+    expect(isStale({ groups, failures: [] }, { provider: 'gone', model: 'm' })).toBe(true)
+    expect(isStale({ groups, failures: [] }, { provider: 'glm-gateway', model: 'claude/opus' })).toBe(false)
   })
 })
 

@@ -172,6 +172,9 @@ export const MODEL_MENU_STYLE = `
 .sch-mt:disabled{color:var(--dsw-alias-label-dimmed,var(--dsw-alias-label-tertiary));cursor:default}
 .sch-mt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sch-mt-detail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));flex-shrink:1000}
+.sch-mt-stale{flex:none;white-space:nowrap;color:var(--dsw-alias-state-warn-primary,#d97706);font-size:12px}
+.sch-mt[data-stale] .sch-mt-label{text-decoration:line-through;color:var(--dsw-alias-label-tertiary)}
+.sch-mm-cell[data-stale] .sch-mm-cell-value{color:var(--dsw-alias-state-warn-primary,#d97706)}
 .sch-mt-chev{flex:none;display:inline-flex;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));transition:transform .12s}
 .sch-mt[aria-expanded=true] .sch-mt-chev{transform:rotate(180deg)}
 .sch-mm-menu{position:fixed;z-index:1100;isolation:isolate;display:flex;flex-direction:column;box-sizing:border-box;width:max-content;min-width:min(240px,100vw - 32px);max-width:min(420px,100vw - 32px);padding:4px;border:0;border-radius:var(--dsw-radius-lg,16px);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-prominent,0 0 0 .5px var(--dsw-alias-border-l1,rgba(127,127,127,.25)),0 3px 8px rgba(0,0,0,.04),0 0 20px rgba(0,0,0,.05));overflow:hidden;font-size:13px;line-height:20px}
@@ -203,6 +206,21 @@ export const MODEL_MENU_STYLE = `
 type Pane = 'root' | 'model' | 'effort'
 
 /**
+ * Render the open menu into document.body, as the composer's selector does (it portals its
+ * MenuSurface): a fixed-position menu inside a docked pane is otherwise clipped by the pane (a
+ * narrow Agents column next to an open chat). `react-dom` comes from the client module loader's
+ * `require` (the bundle keeps it external); where that is missing (unit tests) it renders in place.
+ * @param node - the menu.
+ * @returns a portal, or the node itself.
+ */
+function inBody(node: ReactNode): ReactNode {
+  const load = (globalThis as { document?: Document }).document === undefined ? undefined : (typeof require === 'function' ? require : undefined)
+  let dom: { createPortal?: (child: ReactNode, target: Element) => ReactNode } | undefined
+  try { dom = load?.('react-dom') as typeof dom } catch { dom = undefined }
+  return dom?.createPortal === undefined ? node : dom.createPortal(node, document.body)
+}
+
+/**
  * A model trigger and its menu.
  * @param props - the current choice, the catalog, labels, and what picking does.
  * @returns the control.
@@ -228,6 +246,13 @@ export function ModelMenu(props: {
   avoid?: string | undefined
   /** Extra attribute for tests and styles. */
   testId?: string | undefined
+  /**
+   * The recorded choice is no longer in the catalog (the provider or model was removed or
+   * renamed). The trigger says so and asks for a new pick; nothing is changed by itself.
+   */
+  stale?: boolean | undefined
+  /** Called when the menu opens, so the caller can ask for a fresh catalog. */
+  onOpen?: (() => void) | undefined
 }) {
   const groups = props.groups ?? []
   const [open, setOpen] = useState(false)
@@ -248,7 +273,8 @@ export function ModelMenu(props: {
   const effort = effectiveEffort(model, props.current)
   const level = effortLabel(groups, props.current)
   const defaultValue = props.defaultValue ?? props.label
-  const modelValue = props.current === null ? defaultValue : model?.name ?? props.current.model
+  const stale = props.stale === true && props.current !== null
+  const modelValue = props.current === null ? defaultValue : stale ? `已失效：${props.current.provider}/${props.current.model}` : model?.name ?? props.current.model
   // The root lists 「推理等级」 only for a model with levels, as the runtime does.
   const cells: Pane[] = levels.length > 0 ? ['model', 'effort'] : ['model']
 
@@ -268,6 +294,7 @@ export function ModelMenu(props: {
   }
   const back = (from: Pane) => { setPane('root'); setQuery(''); setActive(Math.max(0, cells.indexOf(from))) }
   const openMenu = () => {
+    props.onOpen?.()
     setKeyboard(false)
     setQuery('')
     setActive(0)
@@ -378,15 +405,16 @@ export function ModelMenu(props: {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={props.ariaLabel}
-        title={props.title}
+        title={stale ? `${props.current!.provider}/${props.current!.model} 已不在模型列表里（模型或 provider 被删除或改名），请重新选择。${props.title === undefined ? '' : `\n${props.title}`}` : props.title}
+        {...(stale ? { 'data-stale': '' } : {})}
         onClick={() => { if (open) close(); else openMenu() }}
         onKeyDown={(event) => { if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); openMenu() } }}
       >
         <span className="sch-mt-label">{props.current === null ? defaultValue : model?.name ?? props.label}</span>
-        {level === undefined ? null : <span className="sch-mt-detail">{level}</span>}
+        {stale ? <span className="sch-mt-stale">已失效 · 请重选</span> : level === undefined ? null : <span className="sch-mt-detail">{level}</span>}
         <span className="sch-mt-chev">{CHEVRON}</span>
       </button>
-      {open ? (
+      {open ? inBody(
         <div
           ref={menu}
           className="sch-mm-menu"
@@ -407,6 +435,7 @@ export function ModelMenu(props: {
               tabIndex={-1}
               className="sch-mm-cell"
               data-cell={cell}
+              {...(cell === 'model' && stale ? { 'data-stale': '' } : {})}
               {...(i === active ? { 'data-active': '' } : {})}
               onMouseMove={() => { setKeyboard(false); if (i !== active) setActive(i) }}
               onClick={() => { drill(cell) }}
@@ -485,7 +514,7 @@ export function ModelMenu(props: {
                 <span className="sch-mm-check">{row.effort === effort ? CHECK : null}</span>
               </button>
             ))) : null}
-        </div>
+        </div>,
       ) : null}
     </>
   )
