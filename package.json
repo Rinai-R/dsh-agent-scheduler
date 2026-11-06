@@ -38,6 +38,8 @@
     "@deepseek-ai/dsh-agent-loop-testkit": "0.2.1-rc.5",
     "@deepseek-ai/dsh-agent-preset": "0.2.1-rc.5",
     "@deepseek-ai/dsh-commands": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-experimental-agent-team": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-experimental-tool-agent-team": "0.2.1-rc.5",
     "@deepseek-ai/dsh-fs-local": "0.2.1-rc.5",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session": "0.2.1-rc.5",

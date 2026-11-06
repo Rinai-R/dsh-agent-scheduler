@@ -39,6 +39,9 @@ worker 负责干活，每条请求、答复和结论都回到 lead——你只�
   每个 worker 还能在它的对话里单独换。
 - **重启不丢。** 被 dsh 重启打断的请求，按恢复策略要么判失败并汇报，要么在 worker 自己的会话里续跑。
 
+
+**智能体团队（Agent Teams）。** 开了 DSH 的实验组合包「智能体团队」后，每个 worker 都是自己团队的 Team Lead：可以用 `spawn_teammate`、`send_message`、团队任务板和 `wait_agent`；它的 teammate 是它自己的子会话（共用它的工作目录），答复回到它。lead 交给这个 worker 的请求，要等它的 teammate 都停下、它汇总后才算答复。调度关时 lead 也可以自己组队；调度开时 lead 和分身不能组队（`spawn_teammate` 会被拒绝，已有的团队仍可发消息、改任务、中断）；worker 的 teammate 不能再组队。Agents 页在 worker 行下显示它的团队（▸ 团队），lead 的团队单独一个分区。Agent Teams 是实验包：插件只经一个适配层（`src/dsh/host/agent-team.ts`）接入，形状对不上就关掉这项能力并提示一次。
+
 ## 开始使用
 
 界面和命令回复跟随 DeepSeek Harness 的语言设置（中文或英文），切换后无需刷新；给模型看的提示词和工具描述保持英文。

@@ -1,6 +1,6 @@
 # 每个 worker 都是 teammate：Agent Teams 适配层与组队权限 设计稿
 
-> 状态：**设计稿，待用户 CR**。本阶段不改 `src/`。
+> 状态：**已实现（第 6 节）**。用户 CR 结论：走「运行时替换判定，让 worker 原生当 Team Lead」；8 个待定点按推荐定（第 6.1 节）。第 0–5 节保留为设计过程记录；其中 1.6 的 L3（深度）已更正，第 3 节的「调度层自建团队」降为后备方案。
 > 基线：`main` @ e149cba（v0.1.0-rc.3）。宿主：本机 DeepSeek Harness 0.2.2-rc.1（app.asar）。Agent Teams 各包同为 0.2.2-rc.1，npm 上 pinned 对应 0.2.1-rc.5、`next` 对应 0.2.2-rc.1。
 > 用户原话：
 > - 「每一个 worker 自己就是一个完整的 session，我希望每个 worker 都可以是一个 teammate」
@@ -9,6 +9,8 @@
 下文 `AT/` 指 app.asar 里的 `dsh/node_modules/@deepseek-ai/dsh-experimental-`，例如 `AT/agent-team/lib/index.js:1007`。文件用 `/tmp/dshasar/rd.mjs cat` 解出。
 
 ## 0. 结论先行
+
+> **更新（实现后）**：下面「worker 随时组队：用原生 Agent Teams 做不到」中的第 1、2 条，可以通过运行时替换 `roster.tryMembership` 绕过；第 3 条（深度）本身是误判。最终实现见第 6 节。
 
 - **Agent Teams**：lead 下的一组具名、可续写的原生子会话（teammate），由 `ctx.subagents.startActivation` 创建。roster 和任务板写在 lead 日志里，成员之间可以直接发消息，共享一块带依赖、认领和 CAS 版本号的任务板。它是实验包：共享一个 cwd、名字不可改，只有 lead 能建人。
 - **用户的规则在宿主现状下有一半能直接做，另一半不能：**
@@ -79,9 +81,9 @@
 |---|---|---|
 | L1 | `tryMembership(agent)`：agent 有父会话、父会话的 Team 状态里没有它，**且它有 subagent descriptor** → 返回 `undefined`（非成员）。只有不带 descriptor 的会话才会被判为 `lead`。我们的 worker 是带 descriptor 的可续写子会话，所以既不是 teammate，也不是 Team Lead | `AT/agent-team/lib/index.js:873-910`（:893 `if (this.subagentDescriptor(agent)) return void 0`）、`:1186-1188` |
 | L2 | Team 工具只装给成员：`maybeInstall` 跳过 `tryMembership === undefined` 的 agent，所以 worker 拿不到 `spawn_teammate` 这 9 个工具 | `AT/tool-agent-team/lib/index.js:538-545` |
-| L3 | `@deepseek-ai/dsh-subagent` 的 `maxDepth` 默认是 1，`dsh-base` 的 `subagent` 行没有覆盖它。worker 深度为 1，它再建的子会话深度为 2，会被拒（`subagent depth 2 exceeds maxDepth 1`） | `dsh/node_modules/@deepseek-ai/dsh-subagent/lib/index.js:2993`、`:262-266`；`dsh-base/cordis.patch.yml:363-364` |
+| ~~L3~~ | **更正：深度不是障碍。** `maxDepth` 默认 1 是 `subagent` **工具插件**的配置（`dsh-subagent/lib/index.js:2993`，经 `resolveMaxDepth` 只用于 `dsh-tool-subagent`）；服务的 `startActivation` 只在 `request.maxDepth` 有值时才拦（`resolveChildDepth`，`:280-283`、`:1402-1405`）。Agent Teams 的 `spawnTeammate` 不传 `maxDepth`（`agent-team/lib/index.js:1043-1052`），我们的插件也不传，所以 worker（深度 1）建 teammate（深度 2）不会被拒；隔离环境实测通过 | 同左 |
 
-要绕过 L1 / L2，只能伪造 Team 记录或改宿主。要绕过 L3，需要改用户 profile 里的 subagent 配置，而这个配置对所有会话生效。这些都不应由插件去做，所以 worker 的团队由我们自己实现（第 3 节）。
+**官方 hook：没有。** Agent Teams 的 Config 只有 `maxMembers` / `maxTasks` / `maxMessageBytes` / `disposalTimeoutMs`；判定写死在 `TeamRoster.tryMembership`，没有事件、注册接口或可注入的判定函数。但 `TeamService.tryMembership` / `membership` 都委托给 `this.roster.tryMembership`，工具插件也走 `ctx.agentTeams.tryMembership`。所以**在运行时包一层 `ctx.agentTeams.roster.tryMembership`** 就能让我们的 worker 被判为自己团队的 Lead（第 6 节）。这是对实验包私有字段的替换，只放在适配层里，形状对不上就整体不启用；同时起草了上游 issue（`docs/upstream-issue-agent-team-lead.md`，未提交）。
 
 ## 2. 我们已有的能力（方案要和这些共存）
 
@@ -309,3 +311,63 @@ flowchart LR
 6. **worker 团队的人数上限**：沿用全局并发容量（`maxActiveSubagents`），还是每个团队单独设上限（例如 6）？
 7. **长期方向**：要不要给 DSH 提需求，让 Agent Teams 允许「子会话当 Team Lead」并放开深度（L1、L3）？放开后适配层可以把 worker 团队切到原生实现，届时 worker 的团队也能进 Team 浮层。
 8. **方案 D 何时启动**：等宿主放开 L1，还是在第一阶段之后就把「顶层 worker」做成可选类型？如果要做，接受右栏并排和 `agent_split` 继承对话的损失吗？
+
+## 6. 实现：运行时替换判定，worker 原生当 Team Lead
+
+### 6.1 用户定的点
+
+1. 调度关时，lead 用原生 Agent Teams 建的成员**不算我们的 worker**，只在 Agents 页「lead 的团队」分区显示；`spawn_teammate` 和 `agent_create` 都放行。
+2. 调度从关切到开：lead 已有的团队保留，只禁止新建成员（守卫拒绝 `spawn_teammate`）；发消息、改任务、中断照常。
+3. worker 团队内部的答复不进 lead 收件箱。原生路线下 teammate 的答复本来就回 worker（它是 worker 的子会话）。默认折叠的「团队动态」摘要依赖收件箱（PR #22），等 #22 合并后再接上。
+4. 团队不嵌套：worker 的 teammate 不能再组队（守卫拒绝）。
+5. lead 交给带队 worker 的请求，要等 worker 的 teammate 都停下、worker 给出汇总答复后才结算（延后结算）。
+6. 人数上限沿用 Agent Teams 的 `maxMembers`，同时受全局并发容量约束。
+7. 上游 issue 只起草，放在 `docs/upstream-issue-agent-team-lead.md`，由用户决定是否提交。
+8. 方案 D 不做。
+
+### 6.2 代码
+
+| 文件 | 内容 |
+|---|---|
+| `src/dsh/host/agent-team.ts` | 唯一碰 Agent Teams 的地方。<br>`installWorkerTeams`：经 `ctx.inject(['agentTeams'])` 拿到服务后，包一层 `roster.tryMembership`：原判定为 undefined、且是我们 ledger 里的活跃 worker 时，返回 `{ root: agent, role: 'lead' }`，其余原样委托；插件卸载时还原。形状不对时记 `agentTeams.workerLead` 不可用，warn 一次，不包。<br>`teamPort`：只读的 `snapshot`（成员、任务）、`busy`（是否还有 teammate 在跑）、`watch`（`session/event` 里的 `team/*` 记录）。<br>`TEAM_TOOLS`：9 个工具名 |
+| `src/team-guard.ts` | 按角色和调度开关拒绝：分身拒绝全部 Team 工具；调度开时 lead 只拒绝 `spawn_teammate`；worker 放行；其余（worker 的 teammate）拒绝 `spawn_teammate`。和分身守卫叠加，用同一个 `ctx.tools.guard` |
+| `src/scheduler.ts` | `isWorker`；`syncTeam` 把 lead 和 worker 的团队快照写成 `plugin:dsh-agent-scheduler/team` 记录（变化时才写），供 Agents 页读取；**延后结算**：worker 回合结束时如果还有 teammate 在跑，它认领的请求记为 `deferred`，由之后完整结束的回合答复；`recover` 里，延后的请求只要之后有完整结束的回合，就算已答 |
+| `src/tools.ts` | 提示随探测结果变化：worker 加「你是自己团队的 Team Lead……汇总后再结束回合」；调度关时 lead 的 `send_message` 说明改为「这是你自己的 Team」；调度开时说明 lead 和分身不组队 |
+| `src/projection.ts`、`src/records.ts` | `teams` 折叠；请求的 `deferred` 标记；投影 stateVersion 升到 8 |
+| `src/client/team.tsx`、`src/client/index.tsx` | Agents 页：worker 行下方「▸ 团队」可以展开成员（点击打开成员会话）和任务板；另有「lead 的团队」分区。中英文 |
+
+依赖级别：`roster.tryMembership` 是私有字段（C 级）；`listMembers`、`listTasks` 是服务的公开方法，但整个包是实验性的；`session/event` 是 B 级。
+
+### 6.3 测试
+
+- `tests/worker-team.spec.ts`（挂真实的 Agent Teams 服务和工具）：
+  - worker 拿到 Team 工具，`spawn_teammate` 成功；
+  - teammate 的答复只进 worker 的日志，lead 只收到 worker 的汇总；
+  - Team 记录写在 worker 的日志里；
+  - worker 先结束回合、teammate 后答复时，请求延后，直到汇总才结算（去掉延后逻辑这条测试就失败）；
+  - 权限矩阵；
+  - 没有 Agent Teams 时降级。
+- `tests/contract/agent-team.spec.ts`（pinned 0.2.1-rc.5 和 next 0.2.2-rc.1）：
+  - AT1：`roster.tryMembership`、`listMembers`、`listTasks` 存在；
+  - AT2：带 descriptor 的子会话原本不是成员，包上后是自己团队的 lead，其他人不受影响。如果原本就成了成员，说明宿主放开了，可以撤掉这层包装；
+  - AT3：9 个工具名，以及工具仍按 `ctx.agentTeams.tryMembership(agent)` 安装；
+  - AT4：`team/member`、`team/task` 记录名。
+- `tests/contract/boundary.spec.ts`：除了 `agent-team.ts`，任何文件都不能出现 `agentTeams`、`dsh-experimental-` 或 `roster.tryMembership`。
+- `tests/team-view.spec.ts`：团队视图渲染和投影折叠。
+
+### 6.4 隔离环境实测
+
+环境：`DSH_HOME=/tmp/team-gui/home`，`dsh-experimental-agent-team-profile@0.2.2-rc.1` 加本分支，mock 模型。
+
+| 场景 | 截图 | 结果 |
+|---|---|---|
+| 调度关，lead 建 worker tw → tw 用 `spawn_teammate` 建 helper → `team_task_create` → `wait_agent` → helper 答复回到 tw → tw 汇总答复 lead | [worker-team-1-team.png](img/worker-team-1-team.png) | lead 只收到「TW 汇总……」；Agents 页 tw 行下能展开 helper 和 task-1 |
+| 重启 DSH 后，lead 再问 tw | [worker-team-2-after-restart.png](img/worker-team-2-after-restart.png) | tw 仍是 Team Lead，`list_agents` 列出 helper；团队仍在 tw 的日志里 |
+| 调度开，分身和 lead 都试 `spawn_teammate` | [worker-team-3-lead-refused.png](img/worker-team-3-lead-refused.png) | lead 收到「Scheduling is on: the lead does not form teams…」；分身收到分身守卫的拒绝（「fork-1 is a fork: forks only route, so spawn_teammate is not available…」，见 mock 请求日志） |
+
+### 6.5 已知限制
+
+- 已经在跑的 worker 只有在下一次创建或恢复时才会装上 Team 工具：工具插件只在 `agent/created` 和启动时判定一次。新建的 worker 和重启后的 worker 都正常。
+- teammate 和 worker 共用 worker 的 cwd（Agent Teams 不支持独立目录）。worker 自己仍是一个 worktree 一个 worker。
+- 「团队动态」摘要等 PR #22（收件箱）合并后再接。
+- 投影 stateVersion：#22 也升到 8；后合并的一方要改成 9。

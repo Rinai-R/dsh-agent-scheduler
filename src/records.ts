@@ -16,6 +16,20 @@ export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
 export const SEEN_RECORD = 'plugin:dsh-agent-scheduler/seen'
 export const MAIL_RECORD = 'plugin:dsh-agent-scheduler/mail'
+export const TEAM_RECORD = 'plugin:dsh-agent-scheduler/team'
+
+/**
+ * The Agent Team one agent leads (the lead, or a worker), as last seen: what the Agents page
+ * shows. The Team itself lives in that agent's own log (dsh-experimental-agent-team); this is a
+ * copy in the main Session, written when it changes.
+ */
+export interface TeamRecord {
+  readonly version: 1
+  /** Session id of the Team Lead: the main Session or one of its workers. */
+  readonly owner: string
+  readonly members: readonly { readonly id: string; readonly name: string; readonly description: string; readonly status: string }[]
+  readonly tasks: readonly { readonly id: string; readonly subject: string; readonly status: string; readonly owner?: string; readonly blockedBy: readonly string[] }[]
+}
 
 /** The user opened a member's chat: its latest report is read (`/agents seen`). */
 export interface SeenRecord {
@@ -142,6 +156,8 @@ export interface RequestRecord {
   /** Where the answer went: always the lead. */
   readonly deliveredTo?: string
   readonly detail?: string
+  /** On `sent`: its worker ended a round while its teammates still worked; a later round of that worker answers it. */
+  readonly deferred?: true
 }
 
 /** The role text of the lead (no `agent`) or of one worker. */
@@ -176,6 +192,8 @@ export const appendSeen = (session: Session, record: Fields<SeenRecord>): Sessio
   appendPluginRecord(session, SEEN_RECORD, { version: 1, ...record })
 export const appendMail = (session: Session, record: Fields<MailRecord>): SessionSeq =>
   appendPluginRecord(session, MAIL_RECORD, { version: 1, ...record })
+export const appendTeam = (session: Session, record: Fields<TeamRecord>): SessionSeq =>
+  appendPluginRecord(session, TEAM_RECORD, { version: 1, ...record })
 export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
   appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
@@ -245,6 +263,7 @@ export const recordReaders = {
   forkModel: (e: SessionEvent) => modelRecord(e, FORK_MODEL_RECORD),
   workerModel: (e: SessionEvent) => modelRecord(e, WORKER_MODEL_RECORD),
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
+  team: (e: SessionEvent) => { const d = dataOf<TeamRecord>(e, TEAM_RECORD); return typeof d?.owner === 'string' && Array.isArray(d.members) && Array.isArray(d.tasks) ? d : undefined },
   mail: (e: SessionEvent) => mailOf(e),
 }
 
