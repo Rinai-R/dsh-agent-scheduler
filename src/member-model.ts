@@ -16,6 +16,7 @@ import {
   type AgentLookup,
 } from './dsh/host/index.js'
 import type { Scheduler } from './scheduler.js'
+import { t } from './i18n/index.js'
 
 /** Command name; run in the main Session, naming the member. */
 export const MEMBER_MODEL_COMMAND = 'agent-model'
@@ -105,16 +106,16 @@ export type Validate = (selection: NonNullable<MemberModel>) => Promise<NonNulla
  * @returns the command outcome.
  */
 export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, agents: AgentLookup, main: Agent, rawInput: string, validate?: Validate): Promise<CommandResult> {
-  if (!isMainSession(main)) return { kind: 'error', text: `/${MEMBER_MODEL_COMMAND} only applies in the main session.` }
+  if (!isMainSession(main)) return { kind: 'error', text: t('cmd.mainOnly', { command: MEMBER_MODEL_COMMAND }) }
   const parsed = parseMemberModel(rawInput)
-  if (parsed === undefined) return { kind: 'error', text: `Usage: /${MEMBER_MODEL_COMMAND} <name> <provider>/<model> [effort] | <name> default` }
+  if (parsed === undefined) return { kind: 'error', text: t('cmd.model.usage', { command: MEMBER_MODEL_COMMAND }) }
   const member = scheduler.ledgerOf(main).find(parsed.member)
-  if (member === undefined) return { kind: 'error', text: `no fork or worker named "${parsed.member}"` }
+  if (member === undefined) return { kind: 'error', text: t('cmd.model.noMember', { name: parsed.member }) }
   // An archived member is released but still answers when spoken to in its chat; the choice
   // applies when that wakes it (agent/created restores it). One that failed never started.
-  if (member.state === 'failed') return { kind: 'error', text: `${member.name} is ${member.state}` }
+  if (member.state === 'failed') return { kind: 'error', text: t('cmd.model.failed', { name: member.name }) }
   // A fork always runs on the lead's model (it replays the lead's history and its prompt cache).
-  if (member.kind === 'fork') return { kind: 'error', text: `${member.name} is a fork: forks always use the lead's model. Give the task to a worker to run it on another model.` }
+  if (member.kind === 'fork') return { kind: 'error', text: t('cmd.model.fork', { name: member.name }) }
   let selection = parsed.selection
   if (selection !== null && validate !== undefined) {
     try {
@@ -123,7 +124,7 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
       return { kind: 'error', text: `${parsed.selection!.provider}/${parsed.selection!.model}: ${error instanceof Error ? error.message : String(error)}` }
     }
   }
-  if (!canSelectModel()) return { kind: 'error', text: 'This DSH cannot give one agent a model of its own (no per-agent model selection).' }
+  if (!canSelectModel()) return { kind: 'error', text: t('cmd.model.unsupported') }
   const ledger = scheduler.ledgerOf(main)
   appendPluginRecord(main.session, MEMBER_MODEL_RECORD, { version: 1, agent: member.id, selection })
   ledger.apply(lastEvent(main.session))
@@ -132,8 +133,8 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
   return {
     kind: 'success',
     text: selection === null
-      ? `${member.name} goes back to the model it started with from its next model call.`
-      : `${member.name} uses ${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` (${selection.reasoningEffort})`} from its next model call.`,
+      ? t('cmd.model.reset', { name: member.name })
+      : t('cmd.model.set', { name: member.name, route: `${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` (${selection.reasoningEffort})`}` }),
   }
 }
 

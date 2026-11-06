@@ -9,6 +9,7 @@
  * @module dsh-agent-scheduler/client/model-menu
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { t, useLocale } from './i18n.js'
 
 /** Provider route, model id and optional effort. */
 export interface ModelChoice { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
@@ -254,6 +255,7 @@ export function ModelMenu(props: {
   /** Called when the menu opens, so the caller can ask for a fresh catalog. */
   onOpen?: (() => void) | undefined
 }) {
+  useLocale()
   const groups = props.groups ?? []
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<Pane>('root')
@@ -274,7 +276,7 @@ export function ModelMenu(props: {
   const level = effortLabel(groups, props.current)
   const defaultValue = props.defaultValue ?? props.label
   const stale = props.stale === true && props.current !== null
-  const modelValue = props.current === null ? defaultValue : stale ? `已失效：${props.current.provider}/${props.current.model}` : model?.name ?? props.current.model
+  const modelValue = props.current === null ? defaultValue : stale ? t('menu.staleValue', { route: `${props.current.provider}/${props.current.model}` }) : model?.name ?? props.current.model
   // The root lists 「推理等级」 only for a model with levels, as the runtime does.
   const cells: Pane[] = levels.length > 0 ? ['model', 'effort'] : ['model']
 
@@ -405,13 +407,13 @@ export function ModelMenu(props: {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={props.ariaLabel}
-        title={stale ? `${props.current!.provider}/${props.current!.model} 已不在模型列表里（模型或 provider 被删除或改名），请重新选择。${props.title === undefined ? '' : `\n${props.title}`}` : props.title}
+        title={stale ? `${t('menu.staleTitle', { route: `${props.current!.provider}/${props.current!.model}` })}${props.title === undefined ? '' : `\n${props.title}`}` : props.title}
         {...(stale ? { 'data-stale': '' } : {})}
         onClick={() => { if (open) close(); else openMenu() }}
         onKeyDown={(event) => { if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); openMenu() } }}
       >
         <span className="sch-mt-label">{props.current === null ? defaultValue : model?.name ?? props.label}</span>
-        {stale ? <span className="sch-mt-stale">已失效 · 请重选</span> : level === undefined ? null : <span className="sch-mt-detail">{level}</span>}
+        {stale ? <span className="sch-mt-stale">{t('menu.staleBadge')}</span> : level === undefined ? null : <span className="sch-mt-detail">{level}</span>}
         <span className="sch-mt-chev">{CHEVRON}</span>
       </button>
       {open ? inBody(
@@ -440,7 +442,7 @@ export function ModelMenu(props: {
               onMouseMove={() => { setKeyboard(false); if (i !== active) setActive(i) }}
               onClick={() => { drill(cell) }}
             >
-              <span className="sch-mm-cell-label">{cell === 'model' ? '模型' : '推理等级'}</span>
+              <span className="sch-mm-cell-label">{t(cell === 'model' ? 'menu.model' : 'menu.effort')}</span>
               <span className="sch-mm-cell-value">{cellValue(cell)}</span>
               <span className="sch-mm-cell-chev">{CHEVRON_RIGHT}</span>
             </button>
@@ -453,15 +455,15 @@ export function ModelMenu(props: {
                   type="text"
                   role="searchbox"
                   value={query}
-                  placeholder="搜索模型…"
-                  aria-label="搜索模型…"
+                  placeholder={t('menu.search')}
+                  aria-label={t('menu.search')}
                   aria-activedescendant={rows[active] === undefined ? undefined : `sch-mm-row-${active}`}
                   onChange={(event) => { setQuery(event.currentTarget.value); setActive(0) }}
                 />
-                {query === '' ? null : <button type="button" className="sch-mm-clear" aria-label="清除搜索" onClick={() => { setQuery(''); setActive(0); search.current?.focus() }}>{CLEAR}</button>}
+                {query === '' ? null : <button type="button" className="sch-mm-clear" aria-label={t('menu.searchClear')} onClick={() => { setQuery(''); setActive(0); search.current?.focus() }}>{CLEAR}</button>}
               </div>
               {props.failure}
-              <div ref={list} className="sch-mm-list" role="menu" aria-label="模型">
+              <div ref={list} className="sch-mm-list" role="menu" aria-label={t('menu.model')}>
                 {sections.map(section => (
                   <section key={section.key} className="sch-mm-group" role="group" aria-label={section.title ?? props.defaultLabel}>
                     {section.title === undefined ? null : <div className="sch-mm-head">{section.title}</div>}
@@ -491,12 +493,12 @@ export function ModelMenu(props: {
                     })}
                   </section>
                 ))}
-                {rows.length === 1 && query !== '' ? <div className="sch-mm-empty" role="status">没有匹配的模型。</div> : null}
+                {rows.length === 1 && query !== '' ? <div className="sch-mm-empty" role="status">{t('menu.searchEmpty')}</div> : null}
               </div>
             </>
           ) : null}
           {pane === 'effort' ? (levels.length === 0
-            ? <div className="sch-mm-empty">当前模型未提供推理等级。</div>
+            ? <div className="sch-mm-empty">{t('menu.noEfforts')}</div>
             : levels.map((row, i) => (
               <button
                 key={row.key}

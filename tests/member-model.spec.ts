@@ -7,6 +7,9 @@ import { body, forksOf, install, until, user } from './support/scheduler.js'
 import { MEMBER_MODEL_RECORD, parseMemberModel, runMemberModelCommand } from '../src/member-model.js'
 import { rosterSchema, rosterView, rosterViewSchema } from '../src/projection.js'
 import { memberModelCommand, memberModelLabel, memberOf } from '../src/client/index.js'
+import { inLanguage } from './support/language.js'
+
+inLanguage('en')
 
 afterEach(teardown)
 
@@ -132,7 +135,7 @@ describe('member model', () => {
     expect(memberModelCommand('hub', null)).toBe('/agent-model hub default')
     expect(memberModelCommand('hub', { provider: 'p', model: 'm', reasoningEffort: 'high' })).toBe('/agent-model hub p/m high')
     const groups = [{ id: 'p', name: 'P', models: [{ id: 'm', name: 'Model M', reasoning: { efforts: [{ id: 'high', name: 'High' }] } }] }]
-    expect(memberModelLabel(groups, null)).toBe('默认模型')
+    expect(memberModelLabel(groups, null)).toBe('Default model')
     expect(memberModelLabel(groups, { provider: 'p', model: 'm', reasoningEffort: 'high' })).toBe('Model M · High')
     expect(memberModelLabel(groups, { provider: 'gone', model: 'x' })).toBe('x')
     const roster = { role: null, members: [{ id: 's1', name: 'hub', kind: 'worker' as const, state: 'started', text: '' }, { id: 's2', name: 'old', kind: 'fork' as const, state: 'archived', text: '' }], openRequests: [] }

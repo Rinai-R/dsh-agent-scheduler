@@ -11,8 +11,9 @@ import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGro
 import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE } from './layout.js'
 import { reviewOf } from '../review.js'
+import { list, t, tn, useLocale } from './i18n.js'
 import {
-  chatPlacement, clientHost, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
+  chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
   steadyTabStrips, SUBAGENT_CHAT_KIND, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
 } from '../dsh/client/index.js'
 
@@ -146,10 +147,11 @@ export const requestDefinition = {
 
 /** The card for {@link requestDefinition}. */
 export const RequestCardView = memo(function RequestCardView({ node }: { node: { data: RequestCard } }) {
+  useLocale()
   const { id, from, text } = node.data
   return (
     <details className="sch-request" data-scheduler-request={id}>
-      <summary><span className="sch-request-dot" />收到请求 {id}（来自 {from}）<span className="sch-request-hint">在这轮进行中送达，这轮结束时一并回答，回答交给 lead</span></summary>
+      <summary><span className="sch-request-dot" />{t('request.summary', { id, from })}<span className="sch-request-hint">{t('request.hint')}</span></summary>
       <div className="sch-request-body">{text}</div>
     </details>
   )
@@ -293,7 +295,7 @@ textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:ver
 .sch-roster-empty{margin:auto;padding:24px;max-width:220px;text-align:center;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:18px}
 `
 
-const INPUT_LABEL: Record<CardState, string> = { queued: '分身排队中', running: '分身处理中', done: '分身已交回', failed: '分身启动失败', archived: '分身已归档' }
+const inputLabel = (state: CardState): string => t(`input.label.${state}`)
 
 /**
  * What the status line under a handed-off message says: who has it and where it is, so a send
@@ -302,26 +304,15 @@ const INPUT_LABEL: Record<CardState, string> = { queued: '分身排队中', runn
  * @returns the line's parts; `name` is bold, `open` is the call to action.
  */
 export function statusLine(state: Pick<State, 'fork' | 'name' | 'detail'>): { lead: string; name: string; tail: string; open: string } {
-  const name = state.name ?? '分身'
-  switch (state.fork) {
-    case 'queued': return { lead: '已交给 ', name, tail: ' · 排队等空位', open: '查看' }
-    case 'running': return { lead: '已交给 ', name, tail: ' · 处理中', open: '查看' }
-    case 'done': return { lead: '', name, tail: ' 已交回', open: '查看' }
-    // A fork archives itself once it has handed back; to the user it is still "handed back".
-    case 'archived': return { lead: '', name, tail: ' 已交回', open: '查看' }
-    case 'failed': return { lead: '', name, tail: ` 启动失败${state.detail === undefined ? '' : `：${state.detail}`}`, open: '查看' }
-  }
+  const name = state.name ?? t('status.fork')
+  // A fork archives itself once it has handed back; to the user it is still "handed back".
+  const key = state.fork === 'queued' ? 'status.queued' : state.fork === 'running' ? 'status.running' : state.fork === 'failed' ? (state.detail === undefined ? 'status.failed' : 'status.failedDetail') : 'status.done'
+  // The name is bold, so the sentence is split around it; each language puts it where it belongs.
+  const [lead = '', tail = ''] = t(key, state.detail === undefined ? undefined : { detail: state.detail }).split('{name}')
+  return { lead, name, tail, open: t('status.open') }
 }
 
-const STATE_LABEL: Record<RowState, string> = {
-  running: '在跑',
-  waiting: '在等你',
-  idle: '空闲',
-  done: '已交回',
-  failed: '失败',
-  queued: '排队中',
-  archived: '已归档',
-}
+const stateLabel = (state: RowState): string => t(`state.${state}`)
 
 /**
  * Refine one member's lifecycle record with the live status the client hook reports.
@@ -348,7 +339,7 @@ export const seenLine = (member: string): string => `/agents seen ${member}`
 /** A member's review mark (see src/review.ts). */
 export type ReviewMark = 'approval' | 'failed' | 'reported'
 const REVIEW_RANK: Record<ReviewMark, number> = { approval: 3, failed: 2, reported: 1 }
-const REVIEW_TITLE: Record<ReviewMark, string> = { approval: '等你处理：有权限审批或提问待回应', failed: '有失败的上报还没看', reported: '有新的上报还没看' }
+const reviewTitle = (mark: ReviewMark): string => t(`review.${mark}`)
 
 /**
  * One member's review mark: yellow while a prompt waits for the user, else red or green for a
@@ -382,7 +373,7 @@ export function reviewSummary(members: readonly Member[], statuses: Statuses | u
 
 function ReviewBadge({ summary }: { summary: { n: number; tone: ReviewMark | undefined } }) {
   if (summary.n === 0 || summary.tone === undefined) return null
-  return <span className="sch-review-n" data-review={summary.tone} title={`${summary.n} 个待查看`}>{summary.n}</span>
+  return <span className="sch-review-n" data-review={summary.tone} title={tn('review.count', summary.n)}>{summary.n}</span>
 }
 
 /**
@@ -423,12 +414,13 @@ function countsOf(members: readonly Member[], statuses: Statuses | undefined) {
  */
 export function createInputCard(open: (parent: string, child: string) => void) {
   return memo(function InputCard({ node, sessionId }: { node: { data: State }; sessionId: string }) {
+    useLocale()
     const { text, fork, forkId, detail, logged } = node.data
     const line = statusLine(node.data)
     return (
       <div className="sch-input" data-scheduler-input="" data-fork-state={fork} data-logged={logged === true ? 'yes' : 'no'}>
         {logged === true ? null : <div className="sch-input-bubble">{text}</div>}
-        <button type="button" className="sch-input-fork" data-state={fork} title={`${INPUT_LABEL[fork]}${detail === undefined ? '' : `：${detail}`}。点击在右侧打开这个分身的对话`} aria-label={`${line.lead}${line.name}${line.tail}，${line.open}`} onClick={() => { open(sessionId, forkId) }}>
+        <button type="button" className="sch-input-fork" data-state={fork} title={detail === undefined ? t('input.title', { label: inputLabel(fork) }) : t('input.titleDetail', { label: inputLabel(fork), detail })} aria-label={t('input.aria', { line: `${line.lead}${line.name}${line.tail}`, open: line.open })} onClick={() => { open(sessionId, forkId) }}>
           <span className="sch-input-dot" data-state={fork} />
           <span className="sch-input-what">{line.lead}<span className="sch-input-name">{line.name}</span>{line.tail}</span>
           <span className="sch-input-open">{line.open}{ICON.chevron}</span>
@@ -547,12 +539,12 @@ const ICON = {
  */
 function summaryParts(counts: ReturnType<typeof countsOf>, total: number): string[] {
   const parts = [
-    counts.waiting === 0 ? undefined : `${counts.waiting} 等你`,
-    counts.running === 0 ? undefined : `${counts.running} 在跑`,
-    counts.queued === 0 ? undefined : `${counts.queued} 排队`,
-    counts.failed === 0 ? undefined : `${counts.failed} 失败`,
+    counts.waiting === 0 ? undefined : tn('count.waiting', counts.waiting),
+    counts.running === 0 ? undefined : tn('count.running', counts.running),
+    counts.queued === 0 ? undefined : tn('count.queued', counts.queued),
+    counts.failed === 0 ? undefined : tn('count.failed', counts.failed),
   ].filter((part): part is string => part !== undefined)
-  return parts.length > 0 || total === 0 ? parts : ['都已停下']
+  return parts.length > 0 || total === 0 ? parts : [t('count.allStopped')]
 }
 
 /**
@@ -575,10 +567,10 @@ export function narrowRoster(sidebar: SidebarFace | undefined): void {
 /** What the Agents button says: the most urgent count, or how many are still around. */
 function agentsLabel(members: readonly Member[], statuses: Statuses | undefined): { tone: RowState | 'idle'; text: string } {
   const counts = countsOf(members, statuses)
-  if (counts.waiting > 0) return { tone: 'waiting', text: `${counts.waiting} 等你` }
-  if (counts.running > 0) return { tone: 'running', text: `${counts.running} 在跑` }
-  if (counts.queued > 0) return { tone: 'queued', text: `${counts.queued} 排队` }
-  if (counts.failed > 0) return { tone: 'failed', text: `${counts.failed} 失败` }
+  if (counts.waiting > 0) return { tone: 'waiting', text: tn('count.waiting', counts.waiting) }
+  if (counts.running > 0) return { tone: 'running', text: tn('count.running', counts.running) }
+  if (counts.queued > 0) return { tone: 'queued', text: tn('count.queued', counts.queued) }
+  if (counts.failed > 0) return { tone: 'failed', text: tn('count.failed', counts.failed) }
   return { tone: 'idle', text: '' }
 }
 
@@ -591,6 +583,7 @@ function agentsLabel(members: readonly Member[], statuses: Statuses | undefined)
  */
 export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: boolean) => Promise<string | null>; openAgents: () => void; isChild: (sessionId: string) => boolean; supports: (sessionId: string) => Promise<boolean> }) {
   return memo(function ScheduleSwitch(props: { sessionId?: string; locked?: boolean; useProjection?: (key: string) => unknown; useSessionStatus?: UseSessionStatus }) {
+    useLocale()
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const [busy, setBusy] = useState(false)
@@ -611,8 +604,8 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
       return (
         <span className="sch-mode-group" data-scheduler-switch="" data-on="no" data-unsupported="">
           <span className="sch-mode" data-on="no">
-            <button type="button" disabled aria-label="调度不可用" title="这个会话在装调度插件之前就已经在运行，不支持开关。新建一个会话，或重启 DeepSeek Harness 后再打开这个会话。">
-              {ICON.fork}调度
+            <button type="button" disabled aria-label={t('switch.unsupported.aria')} title={t('switch.unsupported.title')}>
+              {ICON.fork}{t('switch.label')}
             </button>
           </span>
         </span>
@@ -638,25 +631,25 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
         <span className="sch-mode" data-on={on ? 'yes' : 'no'}>
           {on
             ? (
-              <button type="button" className="sch-mode-exit" disabled={disabled} aria-label="关闭调度" title="调度已开启：每条消息自动交给一个新分身。点击关闭（/schedule off）：之后消息直接给 lead，lead 仍可建 worker、派活；已有的分身和 worker 保留" onClick={() => { switchTo(false) }}>
-                <span className="sch-mode-glyph">{ICON.fork}</span><span className="sch-mode-x">{ICON.close}</span>调度
+              <button type="button" className="sch-mode-exit" disabled={disabled} aria-label={t('switch.off.aria')} title={t('switch.off.title')} onClick={() => { switchTo(false) }}>
+                <span className="sch-mode-glyph">{ICON.fork}</span><span className="sch-mode-x">{ICON.close}</span>{t('switch.label')}
               </button>
             )
             : (
-              <button type="button" disabled={disabled} aria-label="开启调度" title="开启调度（/schedule）：之后的每条消息自动交给一个新分身处理，lead 不被占住。关着时消息直接给 lead，lead 也能建 worker、派活" onClick={() => { switchTo(true) }}>
-                {ICON.fork}调度
+              <button type="button" disabled={disabled} aria-label={t('switch.on.aria')} title={t('switch.on.title')} onClick={() => { switchTo(true) }}>
+                {ICON.fork}{t('switch.label')}
               </button>
             )}
         </span>
         {members.length === 0 && !on && unreadReports.n === 0 ? null : (
-          <button type="button" className="sch-agents-btn" aria-label="打开 Agents" title="打开 Agents：查看、打开或归档分身和 worker，设置分身模型" onClick={deps.openAgents}>
+          <button type="button" className="sch-agents-btn" aria-label={t('agents.open.aria')} title={t('agents.open.title')} onClick={deps.openAgents}>
             {label.tone === 'idle' ? null : <span className="sch-dot" data-row={label.tone} />}
-            Agents
+            {t('agents.title')}
             {label.text === '' ? (members.length === 0 ? null : <span className="sch-agents-n">{members.length}</span>) : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
             <ReviewBadge summary={unreadReports} />
           </button>
         )}
-        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
+        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>{t('error.switch')}</span>}
       </span>
     )
   })
@@ -669,7 +662,7 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
  * @returns e.g. 「2 个请求待回答」.
  */
 export function openLabel(n: number, state: RowState): string {
-  return state === 'running' ? `${n} 个请求处理中` : `${n} 个请求待回答`
+  return tn(state === 'running' ? 'requests.running' : 'requests.open', n)
 }
 
 /** One line of readable text: runs of whitespace become one space, ends trimmed. */
@@ -695,7 +688,7 @@ export function subline(member: Member, pending: readonly { readonly id: string;
   // A worker split from an area is prefixed with the area (a short repository or module name),
   // so the halves read as one area; the directory stays in the tooltip ({@link rowTitle}).
   const area = member.kind === 'worker' && member.area !== undefined ? `${member.area.slice(0, 16)} · ` : ''
-  if (oldest !== undefined) return `${area}${oldest.id}：${flat(oldest.text)}`
+  if (oldest !== undefined) return area + t('row.request', { id: oldest.id, text: flat(oldest.text) })
   return area + flat(member.kind === 'fork' ? member.text : member.role ?? member.text)
 }
 
@@ -705,7 +698,7 @@ export function subline(member: Member, pending: readonly { readonly id: string;
  * @returns the title text.
  */
 export function rowTitle(member: Member): string {
-  return member.cwd === undefined ? member.id : `${member.id}\n目录：${member.cwd}`
+  return member.cwd === undefined ? member.id : t('row.titleCwd', { id: member.id, cwd: member.cwd })
 }
 
 /** What the roster has below its visible part: rows, and how many of them carry a mark. */
@@ -749,7 +742,7 @@ export function hiddenBelow(rows: readonly { readonly bottom: number; readonly r
  */
 export function hiddenLabel(below: HiddenBelow): string {
   if (below.n === 0) return ''
-  return [`下面还有 ${below.n} 个`, below.waiting === 0 ? undefined : `${below.waiting} 个等你`, below.unread === 0 ? undefined : `${below.unread} 个未读`]
+  return [tn('below.rows', below.n), below.waiting === 0 ? undefined : tn('below.waiting', below.waiting), below.unread === 0 ? undefined : tn('below.unread', below.unread)]
     .filter(part => part !== undefined).join(' · ')
 }
 
@@ -854,9 +847,9 @@ export function newWorkerCommand(input: { name: string; role: string; cwd?: stri
   const name = input.name.trim()
   const role = input.role.replace(/\s+/gu, ' ').trim()
   const cwd = input.cwd?.trim() ?? ''
-  if (!WORKER_NAME.test(name)) return { error: '名字只能用小写字母、数字和连字符，以字母开头，最多 40 个字符' }
-  if (role === '') return { error: '写一下这个 worker 负责什么' }
-  if (cwd.includes('"')) return { error: '目录里不能有双引号' }
+  if (!WORKER_NAME.test(name)) return { error: t('form.nameRule') }
+  if (role === '') return { error: t('form.roleMissing') }
+  if (cwd.includes('"')) return { error: t('form.cwdQuote') }
   // A role that starts like an option would be read as one.
   const safeRole = role.startsWith('--') ? `- ${role}` : role
   return { line: `/agents new ${name}${cwd === '' ? '' : ` --cwd ${word(cwd)}`} ${safeRole}` }
@@ -868,7 +861,7 @@ export function newWorkerCommand(input: { name: string; role: string; cwd?: stri
  */
 export function renameCommand(from: string, to: string): { line: string } | { error: string } {
   const next = to.trim()
-  if (!WORKER_NAME.test(next)) return { error: '名字只能用小写字母、数字和连字符，以字母开头，最多 40 个字符' }
+  if (!WORKER_NAME.test(next)) return { error: t('form.nameRule') }
   return { line: `/agents rename ${from} ${next}` }
 }
 
@@ -897,7 +890,7 @@ export function memberModelCommand(member: string, selection: ForkModel | null):
  * @returns the label: model name and effort, or 「默认模型」.
  */
 export function memberModelLabel(groups: readonly CatalogGroup[], selection: ForkModel | null | undefined): string {
-  if (selection === null || selection === undefined) return '默认模型'
+  if (selection === null || selection === undefined) return t('model.default')
   const model = groups.find(g => g.id === selection.provider)?.models.find(m => m.id === selection.model)
   const name = model?.name ?? selection.model
   const effort = selection.reasoningEffort === undefined ? undefined : model?.reasoning?.efforts.find(e => e.id === selection.reasoningEffort)?.name ?? selection.reasoningEffort
@@ -933,6 +926,7 @@ export function createMemberModelPicker(deps: {
   catalog: CatalogSource
 }) {
   return memo(function MemberModelPicker(props: { sessionId?: string }) {
+    useLocale()
     const sessionId = props.sessionId
     const parentId = sessionId === undefined ? undefined : deps.parentOf(sessionId)
     const face = parentId === undefined ? NO_FACE : deps.rosterFace(parentId)
@@ -966,18 +960,18 @@ export function createMemberModelPicker(deps: {
         <ModelMenu
           groups={groups}
           current={own}
-          label={own === null ? '默认模型' : own.model}
-          defaultLabel="默认模型（创建时的模型）"
-          defaultValue="默认模型"
+          label={own === null ? t('model.default') : own.model}
+          defaultLabel={t('model.memberDefaultRow')}
+          defaultValue={t('model.default')}
           avoid={SEL.composerCard}
           busy={busy}
-          ariaLabel={`${member.name} 的模型：${label}${isStale(catalog, own) ? '（已失效，请重选）' : ''}`}
-          title={`${member.name} 自己用的模型，下一次模型调用生效（/agent-model）。`}
+          ariaLabel={t(isStale(catalog, own) ? 'model.memberAriaStale' : 'model.memberAria', { name: member.name, label })}
+          title={t('model.memberTitle', { name: member.name })}
           stale={isStale(catalog, own)}
           onOpen={deps.catalog.load}
           onPick={choose}
         />
-        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
+        {error === null ? null : <span className="sch-mode-error" role="status" title={error}>{t('error.switch')}</span>}
       </span>
     )
   })
@@ -1008,7 +1002,7 @@ export function workerModelCommand(selection: ForkModel | null): string {
  * @returns 「默认」, the model's name, or its id when the catalog no longer lists it.
  */
 export function workerModelLabel(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): string {
-  if (current === null || current === undefined) return '默认'
+  if (current === null || current === undefined) return t('worker.model.default')
   return catalogModel(groups, current)?.name ?? current.model
 }
 
@@ -1040,24 +1034,24 @@ function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null;
   return (
     <div className="sch-forkmodel" data-scheduler-worker-model={value === '' ? 'default' : value}>
       <div className="sch-forkmodel-row">
-        <span className="sch-forkmodel-label">Worker 默认模型</span>
+        <span className="sch-forkmodel-label">{t('worker.model.label')}</span>
         <ModelMenu
           groups={groups}
           current={current}
           label={label}
           stale={stale}
           onOpen={catalog.load}
-          defaultLabel="默认（运行时默认模型）"
-          defaultValue="默认"
+          defaultLabel={t('worker.model.defaultRow')}
+          defaultValue={t('worker.model.default')}
           busy={busy}
           size="compact"
-          ariaLabel={`Worker 默认模型：${label}${stale ? '（已失效，请重选）' : level === undefined ? '' : ` · ${level}`}`}
-          title="之后新建的 worker 用哪个模型和推理等级（/worker model）。lead 创建 worker 时指定了模型就以它为准；都没指定时用运行时默认模型。已有的 worker 不受影响，可以在它自己的对话底栏单独换。分身不能单独换模型，始终和 lead 相同。"
+          ariaLabel={stale ? t('worker.model.ariaStale', { label }) : t('worker.model.aria', { label: level === undefined ? label : `${label} · ${level}` })}
+          title={t('worker.model.title')}
           onPick={change}
-          failure={loadError === null ? undefined : <div className="sch-mm-empty" role="status" title={loadError}>模型列表加载失败</div>}
+          failure={loadError === null ? undefined : <div className="sch-mm-empty" role="status" title={loadError}>{t('model.loadFailed')}</div>}
         />
       </div>
-      {error === null ? null : <div className="sch-forkmodel-error" role="status" title={error}>切换失败：{error}</div>}
+      {error === null ? null : <div className="sch-forkmodel-error" role="status" title={error}>{t('error.switchDetail', { error })}</div>}
     </div>
   )
 }
@@ -1078,6 +1072,7 @@ export function createAgentsPage(ctx: {
     useSessionStatus?: UseSessionStatus
     useTabInfo?: () => { panel?: { id?: string }; tab: { actions: { openResource: (address: string, options?: Record<string, unknown>) => void; close: () => void } } }
   }) {
+    useLocale()
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const tab = props.useTabInfo?.()
@@ -1120,7 +1115,7 @@ export function createAgentsPage(ctx: {
     const [formError, setFormError] = useState<string | null>(null)
     const [submitting, setSubmitting] = useState(false)
     const [renaming, setRenaming] = useState<{ id: string; from: string; value: string; error: string | null; busy: boolean } | undefined>(undefined)
-    const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? '插件已更新，但 DeepSeek Harness 还在用旧版本运行。按 ⌘Q 完全退出再打开即可。' : error
+    const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? t('restart.note') : error
     const create = () => {
       if (sessionId === undefined || submitting) return
       const built = newWorkerCommand(draft)
@@ -1204,7 +1199,7 @@ export function createAgentsPage(ctx: {
               <span className="sch-roster-main">
                 <input
                   className="sch-roster-input"
-                  aria-label={`${member.name} 的新名字`}
+                  aria-label={t('rename.input', { name: member.name })}
                   value={renaming.value}
                   disabled={renaming.busy}
                   autoFocus
@@ -1212,7 +1207,7 @@ export function createAgentsPage(ctx: {
                   onChange={e => { const value = e.currentTarget.value; setRenaming(r => r === undefined ? r : { ...r, value, error: null }) }}
                   onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setRenaming(undefined) } }}
                 />
-                {renaming.error === null ? <span className="sch-roster-sub">回车保存，Esc 取消；旧名字保留，不能再给别的 worker 用</span> : <span className="sch-roster-form-error" role="status">{renaming.error}</span>}
+                {renaming.error === null ? <span className="sch-roster-sub">{t('rename.hint')}</span> : <span className="sch-roster-form-error" role="status">{renaming.error}</span>}
               </span>
             </form>
           </div>
@@ -1221,19 +1216,19 @@ export function createAgentsPage(ctx: {
       return (
         <div key={member.id} className="sch-roster-item" data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
         <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={rowTitle(member)}>
-          <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: REVIEW_TITLE[review] })} />
+          <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
             {second === '' ? null : <span className="sch-roster-sub">{second}</span>}
           </span>
           <span className="sch-roster-end">
-            {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => `${r.id}：${r.text.replace(/\s+/gu, ' ').slice(0, 80)}`).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
-            <span className="sch-roster-state" data-row={state}>{STATE_LABEL[state]}</span>
+            {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => t('row.request', { id: r.id, text: r.text.replace(/\s+/gu, ' ').slice(0, 80) })).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
+            <span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span>
             <span className="sch-roster-chev">{ICON.chevron}</span>
           </span>
         </button>
-        {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={`改名 ${member.name}`} title="改名：lead 和请求里都换成新名字；旧名字保留，不能再给别的 worker 用" disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
-        {canArchive ? <button type="button" className="sch-roster-archive" aria-label={`归档 ${member.name}`} title="归档：从名单移到「已归档」，对话保留，名字不再复用" disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
+        {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
+        {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
         </div>
       )
     }
@@ -1242,7 +1237,7 @@ export function createAgentsPage(ctx: {
       const busy = members.filter(m => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' }).length
       return (
         <>
-          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses)} /></span><span>{busy === 0 ? members.length : `${busy} / ${members.length} 在忙`}</span></div>
+          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses)} /></span><span>{busy === 0 ? members.length : t('section.busy', { busy, total: members.length })}</span></div>
           {members.map(member => row(member))}
         </>
       )
@@ -1250,51 +1245,51 @@ export function createAgentsPage(ctx: {
     return (
       <div className="sch-roster" data-scheduler-roster="" ref={listRef}>
         {failure === null ? null : <div className="sch-roster-failure" role="status">{failure}</div>}
-        {canArchiveHere ? null : <div className="sch-roster-notice" role="status" data-scheduler-restart="">插件已更新，但 DeepSeek Harness 还在用旧版本运行，暂时不能归档。按 ⌘Q 完全退出再打开即可。</div>}
+        {canArchiveHere ? null : <div className="sch-roster-notice" role="status" data-scheduler-restart="">{t('restart.archive')}</div>}
         <div className="sch-roster-head">
           <div>
-            <div className="sch-roster-title">Agents</div>
-            <div className="sch-roster-summary">{live.length === 0 ? '还没有 agent' : [`${live.length} 个`, ...summaryParts(counts, live.length)].join(' · ')}</div>
+            <div className="sch-roster-title">{t('agents.title')}</div>
+            <div className="sch-roster-summary">{live.length === 0 ? t('roster.none') : [tn('roster.total', live.length), ...summaryParts(counts, live.length)].join(' · ')}</div>
           </div>
           <div className="sch-roster-head-actions">
-            {props.sessionId === undefined || reviewSummary(rows, statuses, true).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title="把所有未读上报标为已读（/agents seen all）；等你处理的黄点不受影响" onClick={() => { markSeen(props.sessionId!, 'all') }}>全部已读</button>}
-            {sessionId === undefined || !canArchiveHere ? null : <button type="button" className="sch-roster-collapse" aria-label="新建 worker" aria-expanded={creating} title="新建 worker（/agents new）：起名字、写职责，可选工作目录" onClick={() => { setCreating(v => !v); setFormError(null) }}>{ICON.plus}</button>}
-            <button type="button" className="sch-roster-collapse" aria-label="收起右栏" title="收起右栏（Agents 和已打开的对话都保留）" onClick={collapse}>{ICON.collapse}</button>
+            {props.sessionId === undefined || reviewSummary(rows, statuses, true).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title={t('seenAll.title')} onClick={() => { markSeen(props.sessionId!, 'all') }}>{t('seenAll.label')}</button>}
+            {sessionId === undefined || !canArchiveHere ? null : <button type="button" className="sch-roster-collapse" aria-label={t('new.aria')} aria-expanded={creating} title={t('new.title')} onClick={() => { setCreating(v => !v); setFormError(null) }}>{ICON.plus}</button>}
+            <button type="button" className="sch-roster-collapse" aria-label={t('collapse.aria')} title={t('collapse.title')} onClick={collapse}>{ICON.collapse}</button>
           </div>
         </div>
         {!creating ? null : (
           <form className="sch-roster-form" data-scheduler-new-worker="" onSubmit={e => { e.preventDefault(); create() }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setCreating(false) } }}>
-            <label>名字
-              <input className="sch-roster-input" value={draft.name} placeholder="如 billing" autoFocus spellCheck={false} disabled={submitting} onChange={e => { const name = e.currentTarget.value; setDraft(d => ({ ...d, name })); setFormError(null) }} />
+            <label>{t('form.name')}
+              <input className="sch-roster-input" value={draft.name} placeholder={t('form.namePlaceholder')} autoFocus spellCheck={false} disabled={submitting} onChange={e => { const name = e.currentTarget.value; setDraft(d => ({ ...d, name })); setFormError(null) }} />
             </label>
-            <label>职责
-              <textarea className="sch-roster-input" value={draft.role} placeholder="它负责什么，lead 按这个给它派活" disabled={submitting} onChange={e => { const role = e.currentTarget.value; setDraft(d => ({ ...d, role })); setFormError(null) }} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); create() } }} />
+            <label>{t('form.role')}
+              <textarea className="sch-roster-input" value={draft.role} placeholder={t('form.rolePlaceholder')} disabled={submitting} onChange={e => { const role = e.currentTarget.value; setDraft(d => ({ ...d, role })); setFormError(null) }} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); create() } }} />
             </label>
-            <label>工作目录（可选）
-              <input className="sch-roster-input" value={draft.cwd} placeholder="绝对路径，或相对主会话目录；须已存在" spellCheck={false} disabled={submitting} onChange={e => { const cwd = e.currentTarget.value; setDraft(d => ({ ...d, cwd })); setFormError(null) }} />
+            <label>{t('form.cwd')}
+              <input className="sch-roster-input" value={draft.cwd} placeholder={t('form.cwdPlaceholder')} spellCheck={false} disabled={submitting} onChange={e => { const cwd = e.currentTarget.value; setDraft(d => ({ ...d, cwd })); setFormError(null) }} />
             </label>
             {formError === null ? null : <div className="sch-roster-form-error" role="status">{formError}</div>}
             <div className="sch-roster-form-actions">
-              <button type="button" className="sch-roster-clear" disabled={submitting} onClick={() => { setCreating(false); setFormError(null) }}>取消</button>
-              <button type="submit" className="sch-roster-primary" disabled={submitting || draft.name.trim() === '' || draft.role.trim() === ''}>{submitting ? '创建中…' : '创建'}</button>
+              <button type="button" className="sch-roster-clear" disabled={submitting} onClick={() => { setCreating(false); setFormError(null) }}>{t('form.cancel')}</button>
+              <button type="submit" className="sch-roster-primary" disabled={submitting || draft.name.trim() === '' || draft.role.trim() === ''}>{submitting ? t('form.creating') : t('form.create')}</button>
             </div>
           </form>
         )}
         {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
         {rows.length === 0
-          ? <div className="sch-roster-empty">还没有分身或 worker。<br />{roster?.enabled === true ? '在主会话里说一件事，lead 会交给一个分身去做。' : '在输入框底栏打开「调度」后，每条消息会自动交给一个分身；关着时也可以让 lead 直接建 worker 派活。'}</div>
+          ? <div className="sch-roster-empty">{t('empty.none')}<br />{t(roster?.enabled === true ? 'empty.on' : 'empty.off')}</div>
           : (
             <>
-              {section('分身', forks)}
-              {section('Worker', workers)}
+              {section(t('section.forks'), forks)}
+              {section(t('section.workers'), workers)}
               {done.length === 0 ? null : (
                 <>
                   <div className="sch-roster-foldrow">
                     <button type="button" className="sch-roster-fold" aria-expanded={showDone} onClick={() => { setShowDone(v => !v) }}>
-                      {ICON.chevron}已交回 {done.length}
+                      {ICON.chevron}{t('fold.done', { count: done.length })}
                     </button>
                     {canArchiveHere
-                      ? <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title="归档所有已交回、没有待回答请求的分身（/agents archive done）" onClick={() => { archive('done') }}>全部归档</button>
+                      ? <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title={t('archiveDone.title')} onClick={() => { archive('done') }}>{t('archiveDone.label')}</button>
                       : null}
                   </div>
                   {showDone ? done.map(member => row(member)) : null}
@@ -1303,12 +1298,12 @@ export function createAgentsPage(ctx: {
               {archived.length === 0 ? null : (
                 <>
                   <button type="button" className="sch-roster-fold" aria-expanded={showArchived} onClick={() => { setShowArchived(v => !v) }}>
-                    {ICON.chevron}已归档 {archived.length}
+                    {ICON.chevron}{t('fold.archived', { count: archived.length })}
                   </button>
                   {showArchived ? (showAllArchived ? archived : archived.slice(0, ARCHIVED_ROWS)).map(member => row(member)) : null}
                   {showArchived && archived.length > ARCHIVED_ROWS ? (
                     <button type="button" className="sch-roster-more" aria-expanded={showAllArchived} onClick={() => { setShowAllArchived(v => !v) }}>
-                      {showAllArchived ? '收起' : `再显示 ${archived.length - ARCHIVED_ROWS} 个`}
+                      {showAllArchived ? t('more.collapse') : t('more.show', { count: archived.length - ARCHIVED_ROWS })}
                     </button>
                   ) : null}
                 </>
@@ -1321,7 +1316,7 @@ export function createAgentsPage(ctx: {
             className="sch-roster-below"
             data-scheduler-below={below.n}
             {...(below.waiting > 0 ? { 'data-review': 'approval' } : below.unread > 0 ? { 'data-review': 'reported' } : {})}
-            title="滚到下面还没看到的 agent"
+            title={t('below.title')}
             onClick={() => { if (list !== null) revealRow(list, below.first) }}
           >
             {ICON.chevron}{hiddenLabel(below)}
@@ -1335,6 +1330,8 @@ export function createAgentsPage(ctx: {
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
 export function apply(ctx: any): void {
   const host: ClientHost = clientHost(ctx)
+  // Every word below follows DSH's language, switching live (src/dsh/client/locale.ts).
+  followDshLocale(ctx)
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
@@ -1363,7 +1360,7 @@ export function apply(ctx: any): void {
   const openAgents = () => { openAgentsPage(sidebar()) }
   registerSlot(ctx, 'chatNode', { key: NODE_KIND }, createInputCard(open))
   registerSlot(ctx, 'chatNode', { key: REQUEST_KIND }, RequestCardView)
-  registerTabType(ctx, { id: AGENTS_ID, kind: AGENTS_KIND, title: () => 'Agents', keepMounted: true })
+  registerTabType(ctx, { id: AGENTS_ID, kind: AGENTS_KIND, title: () => t('agents.title'), keepMounted: true })
   ctx.effect(() => keepChatTabsMounted(ctx), 'agent-scheduler: keep agent chats mounted')
   ctx.effect(() => steadyTabStrips(doc), 'agent-scheduler: keep the sidebar tab strip still')
   registerSlot(ctx, 'paneTab', { key: AGENTS_ID }, createAgentsPage({ get sidebarRight() { return sidebar() }, chatAddress: host.chatAddress }, run, has, catalog))

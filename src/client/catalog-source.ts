@@ -8,6 +8,7 @@
  */
 import type { CatalogValue, ClientHost, ComposerCatalog } from '../dsh/client/index.js'
 import type { CatalogGroup } from './model-menu.js'
+import { t } from './i18n.js'
 
 /** A provider whose catalog could not be read; its models are unknown, not removed. */
 export interface CatalogFailure { readonly id: string; readonly name?: string; readonly message?: string }
@@ -28,8 +29,8 @@ export interface CatalogSource {
 
 const EMPTY: CatalogSnapshot = { groups: undefined, failures: [], error: null }
 
-/** The account provider's display name in the composer (its locale `provider.account`). */
-const ACCOUNT_NAME = 'DeepSeek 账号'
+/** The account provider's display name in the composer (its locale `provider.account`), in DSH's language. */
+const accountName = (): string => t('provider.account')
 
 /**
  * Order and name provider groups the way the composer does (`orderModelProviders`): the DeepSeek
@@ -42,7 +43,7 @@ export function orderProviders(groups: readonly CatalogGroup[]): CatalogGroup[] 
   return [...groups]
     .map((group, index) => ({ group, index }))
     .sort((a, b) => rank(a.group.id) - rank(b.group.id) || a.index - b.index)
-    .map(({ group }) => group.id === 'deepseek-account' ? { ...group, name: ACCOUNT_NAME } : group)
+    .map(({ group }) => group.id === 'deepseek-account' ? { ...group, name: accountName() } : group)
 }
 
 /**

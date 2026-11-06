@@ -9,13 +9,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
-  claimOnce, eventsOf, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  claimOnce, eventsOf, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
   registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
 } from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { parseModel, schedulerTools, sectionFor } from './tools.js'
 import { forkGuard } from './fork-guard.js'
+import { list, t } from './i18n/index.js'
 import { installMemberModels, restoreMemberModel, type Validate } from './member-model.js'
 
 export const name = 'agent-scheduler-rule'
@@ -62,8 +63,10 @@ export function parseForkCommand(raw: string): ForkModelSelection | null | undef
 
 const routeOf = (s: ForkModelSelection): string => `${s.provider}/${s.model}${s.reasoningEffort === undefined ? '' : ` (${s.reasoningEffort})`}`
 
-/** What `/fork` says now: forks have no model of their own. */
-export const FORK_MODEL_RETIRED = 'Forks always use the lead\'s model, so they reuse its prompt cache; a fork model can no longer be set. To give one task another model, ask the lead for a worker (see /worker model).'
+/** What `/fork` says now, in DSH's language: forks have no model of their own. */
+export const forkModelRetired = (): string => t('cmd.fork.retired')
+/** A command run outside the main Session. */
+const mainOnly = (command: string): CommandResult => ({ kind: 'error', text: t('cmd.mainOnly', { command }) })
 
 /**
  * Execute `/fork`. Forks always run on the lead's model; the command stays registered only so
@@ -73,10 +76,10 @@ export const FORK_MODEL_RETIRED = 'Forks always use the lead\'s model, so they r
  * @returns the command's outcome: success for a bare `/fork` or `/fork model default`, else an error.
  */
 export function runForkCommand(invocation: CommandInvocation): CommandResult {
-  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/fork only applies in the main session.' }
+  if (!isMainSession(invocation.agent)) return mainOnly('fork')
   const raw = invocation.rawInput.trim()
-  if (raw === '' || parseForkCommand(raw) === null) return { kind: 'success', text: FORK_MODEL_RETIRED }
-  return { kind: 'error', text: FORK_MODEL_RETIRED }
+  if (raw === '' || parseForkCommand(raw) === null) return { kind: 'success', text: forkModelRetired() }
+  return { kind: 'error', text: forkModelRetired() }
 }
 
 /**
@@ -86,13 +89,13 @@ export function runForkCommand(invocation: CommandInvocation): CommandResult {
  * @returns the command's outcome.
  */
 export async function runWorkerModelCommand(invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
-  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/worker only applies in the main session.' }
+  if (!isMainSession(invocation.agent)) return mainOnly('worker')
   if (invocation.rawInput.trim() === '') {
     const current = workerModelOf(eventsOf(invocation.agent.session))
-    return { kind: 'success', text: current === null ? 'Workers use the default model.' : `Workers use ${routeOf(current)}.` }
+    return { kind: 'success', text: current === null ? t('cmd.worker.currentDefault') : t('cmd.worker.current', { route: routeOf(current) }) }
   }
   let selection = parseForkCommand(invocation.rawInput)
-  if (selection === undefined) return { kind: 'error', text: 'Usage: /worker model <provider>/<model> [effort] | /worker model default' }
+  if (selection === undefined) return { kind: 'error', text: t('cmd.worker.usage') }
   if (selection !== null && validate !== undefined) {
     try {
       selection = await validate(selection)
@@ -101,7 +104,7 @@ export async function runWorkerModelCommand(invocation: CommandInvocation, valid
     }
   }
   appendWorkerModel(invocation.agent.session, selection)
-  return { kind: 'success', text: selection === null ? 'Later workers use the default model.' : `Later workers use ${routeOf(selection)}.` }
+  return { kind: 'success', text: selection === null ? t('cmd.worker.setDefault') : t('cmd.worker.set', { route: routeOf(selection) }) }
 }
 
 /**
@@ -111,16 +114,16 @@ export async function runWorkerModelCommand(invocation: CommandInvocation, valid
  * @returns the command's outcome.
  */
 export function runScheduleCommand(scheduler: Pick<Scheduler, 'setMode' | 'isOn'>, invocation: CommandInvocation): CommandResult {
-  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/schedule only applies in the main session.' }
+  if (!isMainSession(invocation.agent)) return mainOnly('schedule')
   const arg = invocation.rawInput.trim().toLowerCase()
-  if (arg !== '' && arg !== 'on' && arg !== 'off') return { kind: 'error', text: 'Usage: /schedule [on | off]' }
+  if (arg !== '' && arg !== 'on' && arg !== 'off') return { kind: 'error', text: t('cmd.schedule.usage') }
   const on = arg !== 'off'
   scheduler.setMode(invocation.agent, on)
-  return { kind: 'success', text: on ? 'Scheduling is on: each later message goes to a fork.' : 'Scheduling is off. Existing forks and workers keep running.' }
+  return { kind: 'success', text: t(on ? 'cmd.schedule.on' : 'cmd.schedule.off') }
 }
 
-/** What `/agents` accepts. */
-export const AGENTS_USAGE = 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all'
+/** What `/agents` accepts, in DSH's language. */
+export const agentsUsage = (): string => t('cmd.agents.usage')
 
 /**
  * Split a command line into words; a double-quoted word may hold spaces.
@@ -152,20 +155,20 @@ export function parseNewWorker(raw: string): { name: string; role: string; cwd?:
   }
   const peek = (): string | undefined => { const keep = at; const word = next(); at = keep; return word }
   const name = next()
-  if (name === undefined) return AGENTS_USAGE
+  if (name === undefined) return agentsUsage()
   let cwd: string | undefined
   let model: ForkModelSelection | undefined
   while (peek() === '--cwd' || peek() === '--model') {
     const flag = next()!
     const value = next()
-    if (value === undefined || value === '') return `${flag} needs a value`
+    if (value === undefined || value === '') return t('cmd.agents.needsValue', { flag })
     if (flag === '--cwd') cwd = value
     else {
       try { model = parseModel(value) } catch (error) { return error instanceof Error ? error.message : String(error) }
     }
   }
   const role = raw.slice(at).trim()
-  if (role === '') return 'Say what the worker is for: /agents new <name> <role>'
+  if (role === '') return t('cmd.agents.roleMissing')
   return { name, role, ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }) }
 }
 
@@ -180,7 +183,7 @@ export function parseNewWorker(raw: string): { name: string; role: string; cwd?:
  * @returns the command's outcome.
  */
 export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
-  if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/agents only applies in the main session.' }
+  if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
   const rest = raw.slice(verb.length).trim()
@@ -191,27 +194,27 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       let model = parsed.model
       if (model !== undefined && validate !== undefined) model = await validate(model)
       const made = await scheduler.createWorker(invocation.agent, { ...parsed, ...(model === undefined ? {} : { model }) })
-      return { kind: 'success', text: made.queued ? `Created worker ${made.name}; it starts when a slot frees.` : `Created worker ${made.name}.` }
+      return { kind: 'success', text: t(made.queued ? 'cmd.agents.createdQueued' : 'cmd.agents.created', { name: made.name }) }
     }
     if (verb === 'rename') {
       const [from, to, ...extra] = words(rest)
-      if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: 'Usage: /agents rename <name> <new-name>' }
+      if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: t('cmd.agents.renameUsage') }
       const done = await scheduler.rename(invocation.agent, from, to)
-      return { kind: 'success', text: done.from === done.to ? `${done.to} already has that name.` : `Renamed ${done.from} to ${done.to}.` }
+      return { kind: 'success', text: done.from === done.to ? t('cmd.agents.sameName', { name: done.to }) : t('cmd.agents.renamed', { from: done.from, to: done.to }) }
     }
     const [target, ...extra] = words(rest)
-    if ((verb !== 'archive' && verb !== 'seen') || target === undefined || extra.length > 0) return { kind: 'error', text: AGENTS_USAGE }
+    if ((verb !== 'archive' && verb !== 'seen') || target === undefined || extra.length > 0) return { kind: 'error', text: agentsUsage() }
     if (verb === 'seen') {
       const marked = scheduler.markSeen(invocation.agent, target)
-      if (target === 'all') return { kind: 'success', text: marked ? 'Marked every report as read.' : 'Nothing unread.' }
-      return { kind: 'success', text: marked ? `Marked ${target} as read.` : `Nothing new from ${target}.` }
+      if (target === 'all') return { kind: 'success', text: t(marked ? 'cmd.agents.seenAll' : 'cmd.agents.nothingUnread') }
+      return { kind: 'success', text: t(marked ? 'cmd.agents.seen' : 'cmd.agents.nothingNew', { name: target }) }
     }
     if (target === 'done') {
       const names = await scheduler.archiveConcluded(invocation.agent)
-      return { kind: 'success', text: names.length === 0 ? 'No concluded fork to archive.' : `Archived ${names.join(', ')}.` }
+      return { kind: 'success', text: names.length === 0 ? t('cmd.agents.noneConcluded') : t('cmd.agents.archived', { names: list(names) }) }
     }
     await scheduler.archive(invocation.agent, target)
-    return { kind: 'success', text: `Archived ${target}.` }
+    return { kind: 'success', text: t('cmd.agents.archived', { names: target }) }
   } catch (error) {
     return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
   }
@@ -219,7 +222,8 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
 
 /** What every command says when this DSH cannot run scheduling. */
 export function incompatible(missing: readonly string[], version = hostVersion()): string {
-  return `dsh-agent-scheduler cannot run on this DeepSeek Harness${version === undefined ? '' : ` (${version})`}: it lacks ${missing.join(', ')}. Scheduling is off; the plugin supports DSH ${DSH_RANGE}. Update the plugin or DeepSeek Harness.`
+  const params = { missing: missing.join(', '), range: DSH_RANGE }
+  return version === undefined ? t('cmd.incompatible', params) : t('cmd.incompatibleVersion', { ...params, version })
 }
 
 /** The plugin's slash commands, as the composer lists them. */
@@ -235,13 +239,15 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => setWarnSink(log), 'agent-scheduler: warnings')
   // A second copy (an old profile patch that still mounts the rule in a preset) stays off.
   if (!claimOnce('agent-scheduler-rule', ctx)) return
+  // Command replies follow DSH's language (src/dsh/host/locale.ts); prompts and tools stay English.
+  followHostLocale(ctx)
   // Scheduling never runs on a DSH that lacks what it needs: no guard means no forks at all.
   const missing = missingRequired(ctx)
   if (missing.length > 0) {
     const text = incompatible(missing)
     log(text)
     if (typeof ctx.commands?.register === 'function') {
-      for (const name of COMMANDS) registerCommand(ctx, { id: `dsh-agent-scheduler/${name}`, name, description: 'Unavailable: this DeepSeek Harness is not supported', run: () => ({ kind: 'error', text }) })
+      for (const name of COMMANDS) registerCommand(ctx, { id: `dsh-agent-scheduler/${name}`, name, description: 'Unavailable: this DeepSeek Harness is not supported', run: () => ({ kind: 'error', text: incompatible(missing) }) })
     }
     return
   }
@@ -321,11 +327,11 @@ export function apply(ctx: Context, config: Config): void {
     description: 'Show or set the lead\'s role',
     hint: '[<role text>]',
     run: (invocation) => {
-      if (!isMainSession(invocation.agent)) return { kind: 'error', text: '/role only applies in the main session.' }
+      if (!isMainSession(invocation.agent)) return mainOnly('role')
       const text = invocation.rawInput.trim()
-      if (text === '') return { kind: 'success', text: scheduler.roleFor(invocation.agent) ?? 'No role set.' }
+      if (text === '') return { kind: 'success', text: scheduler.roleFor(invocation.agent) ?? t('cmd.role.none') }
       scheduler.setRole(invocation.agent, text)
-      return { kind: 'success', text: 'Role updated; it applies from the next step and to later forks.' }
+      return { kind: 'success', text: t('cmd.role.updated') }
     },
   })
 }
