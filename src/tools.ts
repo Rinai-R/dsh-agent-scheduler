@@ -187,7 +187,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_recall',
-      description: 'Look a detail up in the history of an agent in this session: the lead, a worker or fork, also an archived one, or a worker merged into another (whose handoff only summarized). Give name (current, former or merged-away; an ambiguous one lists the sessions to pick from) or session (from agent_list), and query: words that must all appear in one event (literal, case-insensitive, no regex). Returns the newest matching events of that agent\'s own log (not what it inherited from a split) with seq numbers and snippets; then pass around: <seq> for that event in full and its neighbours.',
+      description: 'Look a detail up in the history of an agent in this session: the lead, a worker or fork, also an archived one, or a worker merged into another (whose handoff only summarized). Give name (current, former or merged-away; an ambiguous one lists the sessions to pick from) or session (from agent_list), and query: words that must all appear in one event (literal, case-insensitive, no regex). Returns the newest matching events of that agent\'s own log (not what it inherited from a split) with seq numbers and snippets; then pass around: <seq> for that event in full and its neighbours. It reads what the user and the other agents of this session said there, including what the user told another member directly; it never reads another session.',
       parameters: {
         name: { type: 'string', description: 'The agent: current name, a former name, or the name of a worker merged away.' },
         session: { type: 'string', description: 'Its session id, from agent_list or a handoff.' },

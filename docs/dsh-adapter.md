@@ -42,6 +42,7 @@
 | H10b | `FORK_TOOLS` 白名单里写死了其他插件的工具名（read、glob、grep、web_search、session_*、run_code…）；拒绝文案假设运行时会加 `Error: ` 前缀 | fork-guard.ts:20-31, 37 | C | 宿主改工具名：分身连读文件都被拒（偏安全，但不能路由） |
 | H11 | `ctx.systemPrompt.section({ name, order, text })` | rule-plugin.ts:277 | A | 编译失败 |
 | H12 | `ctx.commands.register`；`input.hint` 不能是空串（否则整个预设加载失败） | rule-plugin.ts:289-318, 307；member-model.ts:180 | A / B | 预设加载失败，所有会话不可用 |
+| H12b | `/` 菜单里插件命令的样子：宿主描述只有 `definitionId / name / description / input`（没有标题和图标字段）；客户端只给 DSH 自己的命令按 definitionId 配标题和图标，其余行原样显示宿主 `description`，`commands/change` 时重新拉取。插件把「标题 · 一句话」写进 description，语言切换时注销再注册（`register` 返回注销函数，同名同层重复注册会抛错） | dsh/host/services.ts `registerCommand`、menu.ts、dsh/host/locale.ts；契约 tests/contract/command-menu.spec.ts | A / B | 菜单回到注册时的语言，或重复注册抛错导致插件加载失败 |
 | H13 | `ctx.sessionQuery.observeSession(id, { projectionMode: 'none' })` + `using` + `inheritedEventCount` | rule-plugin.ts:235 | A | 读不到冷会话日志：重启恢复、结算失败 |
 | H13b | `ctx.sessionQuery.filterEvents(id, [{ kind: 'seq' }, { kind: 'text' }…])`（单个会话的字面扫描，多个条件之间为「与」，冷会话可读，被 shadow 的事件仍可匹配）与 `readEvent({ sessionId, seq, before, after })`；`searchEvents` 在宿主 provider 上仍是 `SESSION_QUERY_SEARCH_DISABLED`（不用它） | host/session-query.ts；契约 session-query.spec.ts R1–R5 | A | `agent_recall` 不可用：工具返回「此 DSH 不支持」，并 warn 一次 |
 | H14 | `ctx.inject(['sessionTitle'])`，`get/rename`（可选） | rule-plugin.ts:247-255 | A | 会话不再自动取标题（已有降级） |

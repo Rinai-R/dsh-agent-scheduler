@@ -177,7 +177,8 @@ const STYLE = `
 .sch-request-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-brand-primary-new-colorprimary-new-color,currentColor)}
 .sch-request-hint{margin-left:auto;color:var(--dsw-alias-label-tertiary)}
 .sch-request-body{padding:0 14px 10px 29px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;color:var(--dsw-alias-label-primary)}
-.sch-roster-reqs{margin-right:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
+.sch-roster-reqs{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
+.sch-roster-badge{flex:none;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary-new-colorprimary-new-color) 14%,transparent);color:var(--dsw-alias-brand-primary-new-colorprimary-new-color);font:var(--dsw-font-xxs-12);line-height:18px;white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
 .sch-input-fork{display:inline-flex;align-items:center;gap:6px;max-width:82%;border:.5px solid var(--dsw-alias-border-l1,transparent);background:var(--dsw-alias-bg-layer-1,transparent);padding:4px 6px 4px 10px;border-radius:999px;color:var(--sch-tone,var(--dsw-alias-label-secondary));font:var(--dsw-font-xxs-12);cursor:pointer;white-space:nowrap}
@@ -244,7 +245,7 @@ const STYLE = `
 .sch-roster-collapse{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;background:none;padding:0;border-radius:8px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-collapse:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .sch-roster-section{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:12px 18px 4px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);letter-spacing:.02em}
-.sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(0,1fr) auto;align-items:center;column-gap:10px;margin:1px 8px;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary);transition:background .12s}
+.sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(min(8em,100%),1fr) minmax(0,max-content);align-items:center;column-gap:10px;margin:1px 8px;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary);transition:background .12s}
 .sch-roster-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-row[data-selected=yes]{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}
 .sch-roster-row[data-row=archived] .sch-roster-name{color:var(--dsw-alias-label-tertiary)}
@@ -254,13 +255,14 @@ const STYLE = `
 .sch-roster-main{min-width:0;display:flex;flex-direction:column;gap:2px}
 .sch-roster-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:18px}
 .sch-roster-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);line-height:16px}
-.sch-roster-end{display:flex;align-items:center;gap:6px}
+.sch-roster-end{min-width:0;max-width:100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;column-gap:6px;row-gap:2px}
 .sch-roster-state{min-width:3.2em;text-align:right;color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
+.sch-roster-tail{flex:none;display:inline-flex;align-items:center;gap:6px}
 .sch-roster-chev{color:var(--dsw-alias-label-caption);opacity:0;transition:opacity .12s}
 .sch-roster-row:hover .sch-roster-chev,.sch-roster-row[data-selected=yes] .sch-roster-chev{opacity:1}
 .sch-roster-item{position:relative}
 .sch-roster-item[data-pending=yes]{opacity:.5}
-.sch-roster-item .sch-roster-row{width:calc(100% - 16px)}
+.sch-roster-item .sch-roster-row{box-sizing:border-box;width:calc(100% - 16px);max-width:calc(100% - 16px)}
 .sch-roster-archive,.sch-roster-rename{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-item:hover :is(.sch-roster-archive,.sch-roster-rename),:is(.sch-roster-archive,.sch-roster-rename):focus-visible{display:inline-flex}
 .sch-roster-item:has(.sch-roster-archive,.sch-roster-rename):hover .sch-roster-end{visibility:hidden}
@@ -725,12 +727,28 @@ export function subline(member: Member, pending: readonly { readonly id: string;
 }
 
 /**
+ * What a row says while its worker takes part in a merge: it replaces the subtitle, so the name
+ * keeps its column and the right-hand side carries only a short badge.
+ * @param member - the row.
+ * @param merge - the merge in progress it takes part in.
+ * @param nameOf - display name of a Session id.
+ * @returns e.g. 「合并到 scheduler-worker-merge · mg-1」 for the absorbed side.
+ */
+export function mergeLine(member: Pick<Member, 'id'>, merge: { readonly id: string; readonly absorbed: string; readonly survivor: string }, nameOf: (id: string) => string): string {
+  return member.id === merge.absorbed
+    ? t('merge.into', { name: nameOf(merge.survivor), id: merge.id })
+    : t('merge.from', { name: nameOf(merge.absorbed), id: merge.id })
+}
+
+/**
  * A row's tooltip: its Session id, and the worker's directory, which the subline leaves out.
  * @param member - a roster row.
  * @returns the title text.
  */
 export function rowTitle(member: Member): string {
-  return member.cwd === undefined ? member.id : t('row.titleCwd', { id: member.id, cwd: member.cwd })
+  // The name is cut with an ellipsis in a narrow column: the tooltip leads with it whole.
+  const head = member.name === undefined || member.name === member.id ? member.id : `${member.name}\n${member.id}`
+  return member.cwd === undefined ? head : t('row.titleCwd', { id: head, cwd: member.cwd })
 }
 
 /** What the roster has below its visible part: rows, and how many of them carry a mark. */
@@ -1233,9 +1251,14 @@ export function createAgentsPage(ctx: {
       const compact = member.state === 'archived' && review === undefined
       const team = member.kind === 'worker' ? roster?.teams?.[member.id] : undefined
       const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
-      const second = compact ? '' : hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
-      // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
       const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
+      const nameOf = (id: string) => rows.find(m => m.id === id)?.name ?? id
+      const usual = hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
+      const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : usual
+      // The subtitle is cut to one line: its tooltip has it whole, and during a merge also what it replaced
+      // (the absorbed side's handoff request, or the survivor's own work).
+      const secondTitle = merge !== undefined && usual !== '' ? `${second}\n${usual}` : second
+      // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
       const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived' && merge === undefined
       // Merge into another live worker: there must be one, and neither may be mid-merge.
       const partners = mergePartners(rows, member, roster?.merging ?? [])
@@ -1268,14 +1291,13 @@ export function createAgentsPage(ctx: {
           <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
-            {second === '' ? null : <span className="sch-roster-sub">{second}</span>}
+            {second === '' ? null : <span className="sch-roster-sub" title={secondTitle}>{second}</span>}
           </span>
           <span className="sch-roster-end">
             {waiting === 0 ? null : <span className="sch-roster-mail" data-scheduler-mail={waiting} title={tn('inbox.member', waiting)}>✉</span>}
-            {merge === undefined ? null : <span className="sch-roster-reqs" data-scheduler-merging={merge.id}>{t('merge.pending', { id: merge.id })}</span>}
+            {merge === undefined ? null : <span className="sch-roster-badge" data-scheduler-merging={merge.id} title={t('merge.pending', { id: merge.id })}>{merge.id}</span>}
             {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => t('row.request', { id: r.id, text: r.text.replace(/\s+/gu, ' ').slice(0, 80) })).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
-            <span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span>
-            <span className="sch-roster-chev">{ICON.chevron}</span>
+            <span className="sch-roster-tail"><span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span><span className="sch-roster-chev">{ICON.chevron}</span></span>
           </span>
         </button>
         {canMerge ? <button type="button" className="sch-roster-merge" data-slot={(canRename ? 1 : 0) + (canArchive ? 1 : 0)} aria-label={t('merge.aria', { name: member.name })} title={t('merge.action')} disabled={pending.has(member.name)} onClick={() => { setMerging(startMerge(member, partners, statuses, openTo)) }}>{ICON.merge}</button> : null}

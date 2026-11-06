@@ -23,6 +23,8 @@ export const PROBED = [
   'dsh-client-locale',
   'dsh-settings',
   'dsh-app-boot',
+  'dsh-client-ui-commands',
+  'dsh-client-ui-input-trigger',
 ]
 
 const root = resolve(import.meta.dirname, '..')

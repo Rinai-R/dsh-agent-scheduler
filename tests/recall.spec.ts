@@ -102,6 +102,35 @@ describe('agent_recall', () => {
     expect(scheduler.recallTargets(lead, 'lead')).toEqual([{ name: 'lead', session: lead.id, state: 'lead' }])
   })
 
+  it('never reads a session of another main session, by id, name or around; a worker cannot either', async () => {
+    const { ctx, lead, scheduler, imageId } = await mergedPair()
+    // A second main session with a worker of its own, in the same process and scheduler.
+    const h2 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('other-main'), agentOptions: { provider: 'mock', model: 'lead-model' } } as never)
+    await scheduler.createWorker(h2.agent, { name: 'secret', role: 'other session', task: 'remember the walrus' })
+    const foreign = scheduler.ledgerOf(h2.agent).find('secret')!.id
+    for (const args of [{ session: foreign, query: 'walrus' }, { session: foreign, around: 1 }, { name: 'secret', query: 'walrus' }, { session: h2.agent.id, query: 'walrus' }]) {
+      await expect(scheduler.recall(lead, args)).rejects.toThrow(/not in this session's roster/)
+    }
+    // From the other side: its lead cannot read this main session's merged worker either.
+    await expect(scheduler.recall(h2.agent, { session: imageId, query: 'mozjpeg' })).rejects.toThrow(/not in this session's roster/)
+    // A worker reads within its own main session's roster only.
+    const hub = ctx.agents.get(SessionId(scheduler.ledgerOf(lead).find('hub')!.id))
+    if (hub !== undefined) {
+      await expect(scheduler.recall(hub, { session: foreign, query: 'walrus' })).rejects.toThrow(/not in this session's roster/)
+      expect((await scheduler.recall(hub, { name: 'hub-image', query: 'mozjpeg' })).hits?.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('after a merge, sending to the old name reaches the survivor while recall by it reads the absorbed session', async () => {
+    const { lead, scheduler, imageId } = await mergedPair()
+    const survivor = scheduler.ledgerOf(lead).find('hub')!
+    // Routing: every old name finds the survivor (renamed back to the area's name).
+    for (const name of ['hub-image', 'hub-asr', 'hub']) expect(scheduler.ledgerOf(lead).find(name)?.id).toBe(survivor.id)
+    // Recall: the merged-away name is the absorbed worker's own history; the area name is the survivor's.
+    expect(scheduler.recallTargets(lead, 'hub-image')).toEqual([expect.objectContaining({ session: imageId, state: 'merged' })])
+    expect(scheduler.recallTargets(lead, 'hub')).toEqual([expect.objectContaining({ session: survivor.id })])
+  })
+
   it('a slow scan is cut at the time budget', async () => {
     const { ctx, lead } = await setup(() => textResponse('x'))
     const scheduler = install(ctx, {
