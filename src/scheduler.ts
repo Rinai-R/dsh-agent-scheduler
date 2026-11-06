@@ -1345,7 +1345,14 @@ export class Scheduler {
           continue
         }
         case 'handoff': {
-          const facts = await gitFacts(absorbed.cwd)
+          let facts: Awaited<ReturnType<typeof gitFacts>>
+          try {
+            facts = await gitFacts(absorbed.cwd)
+          } catch (error) {
+            if (!this.writable(main)) return
+            this.failMerge(main, merge, error instanceof Error ? error.message : String(error))
+            return
+          }
           if (!this.writable(main)) return
           const why = unsettled(facts, merge.handoff ?? '', merge.source ?? 'worker')
           if (why !== undefined) { this.failMerge(main, merge, why); return }
@@ -1386,6 +1393,9 @@ export class Scheduler {
     const role = merge.role ?? mergedRole(survivor, absorbed)
     const area = survivor.area ?? absorbed.area
     this.record(main, s => appendMerge(s, { action: 'merged', id, name, previousName: survivor.name, role, ...(area === undefined ? {} : { area }) }))
+    // Its last report went to the survivor in the handoff: nothing of it is left to review (#9).
+    const archived = ledger.members.get(absorbed.id)
+    if (archived !== undefined && unread(archived)) this.record(main, s => appendSeen(s, { agent: absorbed.id }))
     this.retitle(survivor.id, name, role)
     const renamed = name === survivor.name ? '' : ` (formerly ${survivor.name})`
     this.toLead(main, `[merged ${id}: ${absorbed.name} into ${name}${renamed}; its handoff went to ${name}]\n${name} now also answers to ${[absorbed.name, ...(absorbed.formerNames ?? [])].join(', ')}. Role: ${role}`, survivor.id)

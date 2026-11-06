@@ -65,10 +65,14 @@ export function unsettled(facts: GitFacts | undefined, handoff: string, source: 
 /**
  * What git says about a worker's directory: its branch, uncommitted changes, unpushed commits.
  * @param cwd - the directory.
- * @returns the facts, or undefined when it is not a git checkout (or git is unavailable).
+ * @returns the facts (`missing` when the directory is gone), or undefined when it is not a git
+ *   checkout or git is unavailable.
+ * @throws when `git status` fails in a checkout: an unknown state is not reported as clean.
  */
 export async function gitFacts(cwd: string | undefined): Promise<GitFacts | undefined> {
-  if (cwd === undefined || !existsSync(cwd)) return undefined
+  if (cwd === undefined) return undefined
+  // A worktree removed or moved since: say so to the survivor instead of checking nothing quietly.
+  if (!existsSync(cwd)) return { cwd, dirty: [], missing: true }
   const git = async (...args: string[]) => (await promisify(execFile)('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 30_000 })).stdout
   try {
     const inside = (await git('rev-parse', '--is-inside-work-tree')).trim()
@@ -78,7 +82,10 @@ export async function gitFacts(cwd: string | undefined): Promise<GitFacts | unde
   }
   // A branch with no commit yet has no HEAD to resolve; its name still comes from the symbolic ref.
   const branch = await git('symbolic-ref', '--short', 'HEAD').then(s => s.trim(), () => git('rev-parse', '--short', 'HEAD').then(s => `detached at ${s.trim()}`, () => undefined))
-  const dirty = await git('status', '--porcelain').then(s => s.split('\n').filter(l => l.trim() !== ''), () => [])
+  // Never read a failed status as clean: the merge then stops and says why.
+  const dirty = await git('status', '--porcelain').then(s => s.split('\n').filter(l => l.trim() !== ''), (error: unknown) => {
+    throw new Error(`could not read git status in ${cwd}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}; merge again once git answers`)
+  })
   const ahead = await git('rev-list', '--count', '@{u}..HEAD').then(s => Number.parseInt(s.trim(), 10), () => undefined)
   return { cwd, ...(branch === undefined ? {} : { branch }), dirty, ...(ahead === undefined || Number.isNaN(ahead) ? {} : { ahead }) }
 }
@@ -133,7 +140,10 @@ export function handoffMessage(args: { id: string; absorbed: string; name: strin
     `"${args.absorbed}" was archived; its work is yours now. Its handoff:`,
     '',
     args.handoff.trim(),
-    ...(facts === undefined ? [] : [
+    ...(facts?.missing === true ? [
+      '',
+      `[the scheduler found no directory at ${facts.cwd}: it was removed or moved, so nothing there could be checked; anything uncommitted in it is not in this handoff]`,
+    ] : facts === undefined ? [] : [
       '',
       `[checked by the scheduler in ${facts.cwd}]`,
       `branch: ${facts.branch ?? 'unknown'}${facts.ahead === undefined ? ' (no upstream)' : facts.ahead > 0 ? ` (${facts.ahead} commit${facts.ahead === 1 ? '' : 's'} not pushed)` : ' (pushed)'}`,

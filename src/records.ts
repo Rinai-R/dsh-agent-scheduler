@@ -110,6 +110,8 @@ export interface GitFacts {
   readonly dirty: readonly string[]
   /** Commits not on its upstream; absent when it has no upstream. */
   readonly ahead?: number
+  /** The worker's directory no longer exists (removed or moved): nothing could be checked there. */
+  readonly missing?: true
 }
 
 /** Whether this Session hands each user message to a fork, switched by `/schedule on|off`. */

@@ -1,6 +1,6 @@
 /** Merging a worker into another, the reverse of agent_split (docs/worker-merge.md). */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import { gate, setup, stored, teardown } from './support/harness.js'
 import { textResponse } from './support/mock-adapter.js'
 import { body, install, leadSaw, records, until } from './support/scheduler.js'
 import { appendMerge, MERGE_RECORD } from '../src/records.js'
+import { reviewOf } from '../src/review.js'
 import { mailKindOf, type Scheduler } from '../src/scheduler.js'
 import { defaultSurvivor, gitFacts, handoffFromLog, handoffSection, mergedRole, saysNone, unsettled } from '../src/merge.js'
 import { parseMerge, runAgentsCommand } from '../src/rule-plugin.js'
@@ -38,6 +39,15 @@ const stateOf = (scheduler: Scheduler, lead: Agent, id = 'mg-1') => scheduler.le
 const survivorLog = async (ctx: Ctx, scheduler: Scheduler, lead: Agent, name: string) =>
   (await stored(ctx, SessionId(scheduler.ledgerOf(lead).find(name)!.id))).events.filter(e => e.type === 'user/message').map(e => JSON.stringify(e.data)).join('\n')
 
+/**
+ * The survivor's log once it holds `needle`: a delivered handoff is logged when the survivor's
+ * next turn admits it, which can come a little after the merge records `delivered`.
+ */
+const survivorLogWith = async (ctx: Ctx, scheduler: Scheduler, lead: Agent, name: string, needle: string) => {
+  await vi.waitFor(async () => { expect(await survivorLog(ctx, scheduler, lead, name)).toContain(needle) }, { timeout: 15_000 })
+  return survivorLog(ctx, scheduler, lead, name)
+}
+
 describe('agent_merge', () => {
   it('asks the absorbed worker for its handoff, archives it, gives its names to the survivor, and hands the survivor the handoff', async () => {
     const { ctx, lead, scheduler } = await splitPair(o => asked(o) ? HANDOFF('none') : 'DONE')
@@ -57,6 +67,9 @@ describe('agent_merge', () => {
     await vi.waitFor(() => { expect(stateOf(scheduler, lead)).toBe('delivered') }, { timeout: 20_000 })
     const ledger = scheduler.ledgerOf(lead)
     expect(ledger.members.get(imageId)).toMatchObject({ state: 'archived', mergedInto: asrId })
+    // Its unread report went to the survivor with the handoff: no dot left on the archived row.
+    expect(reportedBefore).toBeDefined()
+    expect(reviewOf(ledger.members.get(imageId)!)).toBeUndefined()
     expect(ledger.members.get(asrId)).toMatchObject({ name: 'hub', area: 'hub', role: 'smoke-tests ASR in hub; also: fixes gpt_image in hub' })
     expect(ledger.members.get(asrId)!.formerNames).toEqual(expect.arrayContaining(['hub-asr', 'hub-image']))
     expect(ledger.members.get(asrId)!.formerNames).not.toContain('hub')
@@ -64,8 +77,7 @@ describe('agent_merge', () => {
     for (const name of ['hub', 'hub-asr', 'hub-image']) expect(ledger.find(name)?.id).toBe(asrId)
     expect(ledger.splitHint('hub')).toBeUndefined()
     // The handoff reached the survivor as a message, not a request; the lead got one merged note.
-    const log = await survivorLog(ctx, scheduler, lead, 'hub')
-    expect(log).toContain('[handoff mg-1 from hub-image, merged into you; not a request]')
+    const log = await survivorLogWith(ctx, scheduler, lead, 'hub', '[handoff mg-1 from hub-image, merged into you; not a request]')
     expect(log).toContain('kept the old API')
     await until(lead, '[merged mg-1: hub-image into hub (formerly hub-asr)')
     expect(leadSaw(lead, 'reply to r-3')).toBe(0)
@@ -121,9 +133,28 @@ describe('agent_merge', () => {
     expect(scheduler.ledgerOf(lead).find('hub-image')).toMatchObject({ name: 'hub-image', state: 'started' })
     await scheduler.merge(lead, { absorbed: 'hub-image', into: 'hub-asr' })
     await vi.waitFor(() => { expect(stateOf(scheduler, lead, 'mg-2')).toBe('delivered') }, { timeout: 20_000 })
-    const log = await survivorLog(ctx, scheduler, lead, 'hub-asr')
+    const log = await survivorLogWith(ctx, scheduler, lead, 'hub-asr', '[handoff mg-2 from')
     expect(log).toContain(`[checked by the scheduler in ${dir}]`)
     expect(log).toContain('?? image.ts')
+  })
+
+  it('never reads a failed git status as clean, and tells the survivor when the directory is gone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hub-image-'))
+    execFileSync('git', ['init', '-q', dir])
+    writeFileSync(join(dir, 'image.ts'), 'export {}\n')
+    // A corrupt index: git knows it is a work tree, but `git status` fails.
+    writeFileSync(join(dir, '.git', 'index'), 'not an index')
+    const { ctx, lead, scheduler } = await splitPair(o => asked(o) ? HANDOFF('none') : 'DONE', { imageCwd: dir })
+    await scheduler.merge(lead, { absorbed: 'hub-image', into: 'hub-asr' })
+    await vi.waitFor(() => { expect(stateOf(scheduler, lead)).toBe('failed') }, { timeout: 20_000 })
+    expect(scheduler.ledgerOf(lead).merges[0]!.detail).toMatch(/could not read git status in /)
+    expect(scheduler.ledgerOf(lead).find('hub-image')).toMatchObject({ state: 'started' })
+    // The worktree is removed: the merge goes on, and the survivor is told nothing could be checked.
+    rmSync(dir, { recursive: true, force: true })
+    await scheduler.merge(lead, { absorbed: 'hub-image', into: 'hub-asr' })
+    await vi.waitFor(() => { expect(stateOf(scheduler, lead, 'mg-2')).toBe('delivered') }, { timeout: 20_000 })
+    const log = await survivorLogWith(ctx, scheduler, lead, 'hub-asr', '[handoff mg-2 from')
+    expect(log).toContain(`found no directory at ${dir}`)
   })
 
   it('builds the handoff from the log of a worker that was archived', async () => {
@@ -133,7 +164,7 @@ describe('agent_merge', () => {
     expect(started.request).toBeUndefined()
     await vi.waitFor(() => { expect(stateOf(scheduler, lead)).toBe('delivered') }, { timeout: 20_000 })
     expect(scheduler.ledgerOf(lead).merges[0]).toMatchObject({ source: 'log' })
-    const log = await survivorLog(ctx, scheduler, lead, 'hub-asr')
+    const log = await survivorLogWith(ctx, scheduler, lead, 'hub-asr', '[handoff mg-1 from')
     expect(log).toContain('could not write its own handoff')
     expect(log).toContain('IMAGE FIXED: swapped the encoder')
   })
@@ -155,8 +186,37 @@ describe('agent_merge', () => {
     await scheduler.recover(lead)
     await new Promise(resolve => setTimeout(resolve, 200))
     expect(records(lead.session.snapshotEvents(), MERGE_RECORD).filter(r => r.action === 'merged')).toHaveLength(1)
-    expect((await survivorLog(ctx, scheduler, lead, 'hub')).split('[handoff mg-1 from').length - 1).toBe(1)
+    expect((await survivorLogWith(ctx, scheduler, lead, 'hub', '[handoff mg-1 from')).split('[handoff mg-1 from').length - 1).toBe(1)
   })
+
+  for (const [step, extra] of [['handoff', 0], ['merged', 0], ['merged', 1]] as const) {
+    it(`a merge cut off at ${step}${extra === 1 ? ' after its handoff already reached the survivor' : ''} goes on once`, async () => {
+      const { ctx, lead, scheduler } = await splitPair()
+      const ledger = scheduler.ledgerOf(lead)
+      const [image, asr] = [ledger.find('hub-image')!, ledger.find('hub-asr')!]
+      const log: Parameters<typeof appendMerge>[1][] = [
+        { action: 'requested', id: 'mg-1', absorbed: image.id, survivor: asr.id, request: '', by: lead.id, name: 'hub' },
+        { action: 'handoff', id: 'mg-1', text: HANDOFF('none'), source: 'worker' },
+      ]
+      if (step === 'merged') log.push({ action: 'settled', id: 'mg-1' }, { action: 'merged', id: 'mg-1', name: 'hub', previousName: 'hub-asr', role: 'both', area: 'hub' })
+      for (const record of log) { appendMerge(lead.session, record); ledger.apply(lead.session.snapshotEvents().at(-1)!) }
+      if (extra === 1) {
+        // DSH stopped after the handoff reached the survivor but before `delivered` was recorded.
+        await scheduler.send(lead, 'hub-asr', '[handoff mg-1 from hub-image, merged into you; not a request] (already sent)')
+        await survivorLogWith(ctx, scheduler, lead, 'hub-asr', '[handoff mg-1 from')
+      }
+      await scheduler.recover(lead)
+      await vi.waitFor(() => { expect(stateOf(scheduler, lead)).toBe('delivered') }, { timeout: 20_000 })
+      await scheduler.recover(lead)
+      await new Promise(resolve => setTimeout(resolve, 300))
+      const events = lead.session.snapshotEvents()
+      expect(records(events, MERGE_RECORD).filter(r => r.action === 'merged')).toHaveLength(1)
+      expect(records(events, MERGE_RECORD).filter(r => r.action === 'delivered')).toHaveLength(1)
+      expect(ledger.find('hub-image')?.id).toBe(asr.id)
+      const survivorText = await survivorLogWith(ctx, scheduler, lead, ledger.members.get(asr.id)!.name, '[handoff mg-1 from')
+      expect(survivorText.split('[handoff mg-1 from').length - 1).toBe(1)
+    })
+  }
 
   it('/agents merge runs the same merge, picking the survivor when none is named', async () => {
     const { lead, scheduler } = await splitPair(o => asked(o) ? HANDOFF('none') : 'DONE')
