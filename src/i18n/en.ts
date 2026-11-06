@@ -231,6 +231,8 @@ export const en: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Cancel',
   'merge.hint': 'The absorbed worker writes a handoff and settles its code, then is archived; its names reach the survivor.',
   'merge.pending': 'Merging {id}',
+  'merge.into': 'Merging into {name} · {id}',
+  'merge.from': 'Taking in {name} · {id}',
 
   // ── the composer's / menu: each command's title, one line, its argument hint ──
   'menu.schedule.title': 'Scheduling',

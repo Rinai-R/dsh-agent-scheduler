@@ -272,4 +272,6 @@ export const ru: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Отмена',
   'merge.hint': 'Поглощаемый воркер пишет передачу дел и приводит код в порядок, затем архивируется; его имена переходят к оставшемуся.',
   'merge.pending': 'Слияние {id}',
+  'merge.into': 'Сливается в {name} · {id}',
+  'merge.from': 'Принимает {name} · {id}',
 }

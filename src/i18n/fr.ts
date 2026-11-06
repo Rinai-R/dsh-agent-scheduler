@@ -268,4 +268,6 @@ export const fr: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Annuler',
   'merge.hint': 'Le worker absorbé rédige une passation et range son code, puis il est archivé ; ses noms passent à celui qui reste.',
   'merge.pending': 'Fusion {id}',
+  'merge.into': 'Fusion dans {name} · {id}',
+  'merge.from': 'Absorbe {name} · {id}',
 }
