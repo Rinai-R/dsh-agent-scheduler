@@ -53,7 +53,7 @@ lead — the only agent whose replies you read.
 
 ## Getting Started
 
-The plugin's interface and command replies follow DeepSeek Harness's language setting (Chinese or English), switching without a reload; prompts and tool descriptions for the model stay English.
+The plugin's interface and command replies follow DeepSeek Harness's language setting (all of its languages: 中文, English, 日本語, Español, Français, Deutsch, Русский, Português; see [docs/i18n.md](docs/i18n.md)), switching without a reload; prompts and tool descriptions for the model stay English.
 
 ### Prerequisites
 

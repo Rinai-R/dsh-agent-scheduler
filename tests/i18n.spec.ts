@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { DICTIONARIES, en, NAMESPACE, setLanguage, t, tn, translate, zh, type MessageKey } from '../src/i18n/index.js'
+import { DICTIONARIES, en, LANGS, langOf, NAMESPACE, pluralForm, setLanguage, t, tn, translate, zh, type Lang, type MessageKey } from '../src/i18n/index.js'
 import { features, resetWarnings, setWarnSink } from '../src/dsh/compat.js'
 import { followDshLocale } from '../src/dsh/client/locale.js'
 import { followHostLocale } from '../src/dsh/host/locale.js'
@@ -23,25 +23,64 @@ let undo: () => void = () => undefined
 afterEach(() => { undo(); undo = () => undefined; features.reset(); resetWarnings() })
 
 describe('dictionaries', () => {
-  it('zh and en have the same keys', () => {
-    expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort())
+  it('ships every language DSH offers, each with exactly the keys of zh', () => {
+    expect([...LANGS].sort()).toEqual(['de', 'en', 'es', 'fr', 'ja', 'pt', 'ru', 'zh'])
+    for (const lang of LANGS) expect(Object.keys(DICTIONARIES[lang]).sort(), lang).toEqual(Object.keys(zh).sort())
   })
 
-  it('every key has the same placeholders in both languages, and no empty text', () => {
-    for (const key of Object.keys(zh) as MessageKey[]) {
-      expect(placeholders(en[key]), key).toEqual(placeholders(zh[key]))
-      expect(zh[key].trim(), key).not.toBe('')
-      expect(en[key].trim(), key).not.toBe('')
+  it('every key has the same placeholders in every language, and no empty text', () => {
+    for (const lang of LANGS) {
+      for (const key of Object.keys(zh) as MessageKey[]) {
+        expect(placeholders(DICTIONARIES[lang][key]), `${lang} ${key}`).toEqual(placeholders(zh[key]))
+        expect(DICTIONARIES[lang][key].trim(), `${lang} ${key}`).not.toBe('')
+      }
     }
   })
 
-  it('every count has both its forms, with {count}', () => {
-    for (const key of Object.keys(zh)) {
-      const plural = /^(.*)\.(one|other)$/u.exec(key)
-      if (plural === null) continue
-      expect(Object.keys(zh), key).toContain(`${plural[1]}.${plural[2] === 'one' ? 'other' : 'one'}`)
-      expect(zh[key as MessageKey], key).toContain('{count}')
+  it('every count has both its forms, with {count}, in every language', () => {
+    for (const lang of LANGS) {
+      const dict = DICTIONARIES[lang]
+      for (const key of Object.keys(dict)) {
+        const plural = /^(.*)\.(one|other)$/u.exec(key)
+        if (plural === null) continue
+        expect(Object.keys(dict), `${lang} ${key}`).toContain(`${plural[1]}.${plural[2] === 'one' ? 'other' : 'one'}`)
+        expect(dict[key as MessageKey], `${lang} ${key}`).toContain('{count}')
+      }
     }
+  })
+
+  it('translations are translated: nothing left identical to English except proper names and codes', () => {
+    // Text that is the same in every language by design: symbols, placeholders only, names, usage lines.
+    const same = (v: string) => /^[\s{}\w.,:/·⚡…-]*$/u.test(v.replace(/\{\w+\}/gu, '')) || /^[A-Z][\w ]*$/u.test(v)
+    for (const lang of ['ja', 'es', 'fr', 'de', 'ru', 'pt'] as const) {
+      const left = (Object.keys(en) as MessageKey[]).filter(k => DICTIONARIES[lang][k] === en[k] && !same(en[k]))
+      expect(left, lang).toEqual([])
+    }
+  })
+
+  it('maps DSH locale ids to the shipped languages, English otherwise', () => {
+    expect(['zh', 'zh-TW', 'en-US', 'ja', 'ja-JP', 'pt-BR', 'pt_PT', 'ru', 'DE', 'fr-CA', 'es-419', 'ko', 'it'].map(langOf)).toEqual(['zh', 'zh', 'en', 'ja', 'ja', 'pt', 'pt', 'ru', 'de', 'fr', 'es', 'en', 'en'])
+  })
+
+  it('picks plural forms by each language\'s rules', () => {
+    const forms = (lang: string) => [0, 1, 2, 5, 21].map(n => pluralForm(lang, n))
+    expect(forms('en')).toEqual(['other', 'one', 'other', 'other', 'other'])
+    expect(forms('de')).toEqual(['other', 'one', 'other', 'other', 'other'])
+    expect(forms('fr')).toEqual(['one', 'one', 'other', 'other', 'other'])
+    expect(forms('ru')).toEqual(['other', 'one', 'other', 'other', 'one'])
+    expect(forms('ja')).toEqual(['other', 'other', 'other', 'other', 'other'])
+    expect(forms('zh')).toEqual(['other', 'other', 'other', 'other', 'other'])
+    // Japanese and Chinese pairs read the same, so their single form is always right.
+    for (const lang of ['ja', 'zh'] as const) {
+      for (const key of Object.keys(DICTIONARIES[lang]).filter(k => k.endsWith('.one'))) {
+        expect(DICTIONARIES[lang][key.replace(/\.one$/u, '.other') as MessageKey], `${lang} ${key}`).toBe(DICTIONARIES[lang][key as MessageKey])
+      }
+    }
+    // Russian: 21 takes the singular form, 2 and 5 a form that reads right for any count.
+    undo = setLanguage('ru')
+    expect(tn('roster.total', 21)).toBe('21 агент')
+    expect(tn('roster.total', 3)).toBe('Агентов: 3')
+    expect(tn('roster.total', 5)).toBe('Агентов: 5')
   })
 
   it('every key the code names exists', () => {
@@ -98,7 +137,40 @@ describe('client labels in English', () => {
   })
 })
 
+describe('client labels in the added languages', () => {
+  it('every language answers in itself', () => {
+    const expected: Record<Exclude<Lang, 'zh' | 'en'>, string> = { ja: '振り分け', es: 'Reparto', fr: 'Répartir', de: 'Verteilen', ru: 'Распределение', pt: 'Distribuir' }
+    for (const [lang, label] of Object.entries(expected)) {
+      undo = setLanguage(lang as Lang)
+      expect(t('switch.label'), lang).toBe(label)
+      undo()
+    }
+    undo = setLanguage('fr')
+    expect(tn('roster.total', 0)).toBe('0 agent')
+    expect(tn('roster.total', 2)).toBe('2 agents')
+    undo()
+    undo = setLanguage('de')
+    expect(openLabel(1, 'idle')).toBe('1 offene Anfrage')
+    expect(openLabel(3, 'running')).toBe('3 Anfragen in Arbeit')
+  })
+})
+
 describe('host replies follow the language', () => {
+  it('answer in each language DSH can ask for', () => {
+    const scheduler = { setMode: () => undefined, isOn: () => true }
+    const invocation = { agent: { session: { header: {} } }, rawInput: 'maybe' } as never
+    const usage: Record<Lang, string> = {
+      zh: '用法：/schedule [on | off]', en: 'Usage: /schedule [on | off]', ja: '使い方：/schedule [on | off]', es: 'Uso: /schedule [on | off]',
+      fr: 'Utilisation : /schedule [on | off]', de: 'Verwendung: /schedule [on | off]', ru: 'Использование: /schedule [on | off]', pt: 'Uso: /schedule [on | off]',
+    }
+    for (const lang of LANGS) {
+      undo = setLanguage(lang)
+      expect(runScheduleCommand(scheduler as never, invocation).text, lang).toBe(usage[lang])
+      undo()
+    }
+    undo = () => undefined
+  })
+
   const main = { session: { header: {} } } as never
   it('answer in Chinese by default and English when DSH asks for it', async () => {
     const scheduler = { setMode: () => undefined, isOn: () => true }
@@ -113,7 +185,7 @@ describe('host replies follow the language', () => {
 })
 
 /** A stand-in for dsh-client-locale's LocaleRuntime: the members the plugin uses. */
-function fakeLocale(active: 'zh' | 'en') {
+function fakeLocale(active: string) {
   const dicts = new Map<string, Record<string, Record<string, string>>>()
   const listeners = new Set<() => void>()
   let revision = 0
@@ -123,7 +195,7 @@ function fakeLocale(active: 'zh' | 'en') {
     state,
     dicts,
     listeners,
-    switchTo(next: 'zh' | 'en') { state.active = next; publish() },
+    switchTo(next: string) { state.active = next; publish() },
     service: {
       register(ns: string, value: Record<string, Record<string, string>>) { dicts.set(ns, value); publish(); return () => { dicts.delete(ns); publish() } },
       bind: (ns: string) => (key: string, params?: Record<string, unknown>) => {
@@ -151,6 +223,12 @@ describe('browser: DSH\'s locale service', () => {
     locale.switchTo('zh')
     expect(renders).toBe(1)
     expect(t('switch.label')).toBe('调度')
+    // Every language DSH offers is registered; plural forms follow the active one.
+    expect(Object.keys(locale.dicts.get(NAMESPACE)!).sort()).toEqual([...LANGS].sort())
+    locale.switchTo('ru')
+    expect(t('switch.label')).toBe('Распределение')
+    expect(tn('roster.total', 21)).toBe('21 агент')
+    expect(tn('roster.total', 22)).toBe('Агентов: 22')
     stop()
     await fiber.dispose()
     expect(locale.dicts.has(NAMESPACE)).toBe(false)
@@ -181,14 +259,19 @@ describe('host: the language preference in the Host settings', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(lang()).toBe('en')
     expect(t('cmd.schedule.usage')).toBe('Usage: /schedule [on | off]')
-    store.box.preference = 'zh'
+    store.box.preference = 'ja-JP'
     const emit = ctx.emit.bind(ctx) as unknown as (name: string, ns: string, revision: number) => void
     emit('settings/document-updated', 'unrelated', 1)
     await Promise.resolve()
     expect(lang()).toBe('en')
     emit('settings/document-updated', 'locale', 2)
     await Promise.resolve()
-    expect(lang()).toBe('zh')
+    expect(lang()).toBe('ja')
+    expect(t('cmd.schedule.usage')).toBe('使い方：/schedule [on | off]')
+    store.box.preference = 'ko'
+    emit('settings/document-updated', 'locale', 3)
+    await Promise.resolve()
+    expect(lang()).toBe('en')
   })
 
   it('answers in Chinese when no language was chosen, and when there is no settings service (one warning)', async () => {

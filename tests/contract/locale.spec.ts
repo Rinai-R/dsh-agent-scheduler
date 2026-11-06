@@ -36,11 +36,30 @@ describe.runIf(probesAvailable())('DSH language', () => {
     expect(settings).toContain('emit("settings/document-updated", entry.options.id, revision)')
   })
 
+  it('L5: register accepts any language id, and where DSH offers ja, es, fr, de, ru and pt they fall back to English', () => {
+    const code = fetched('dsh-client-locale')
+    // DSH 0.2.1 lets the user pick zh and en only; 0.2.2 adds six languages. The plugin registers
+    // all eight either way: an extra dictionary DSH does not offer is simply never active.
+    const offered = /locale\.addLanguage\(\{\s*id,\s*label,\s*fallback: "en"\s*\}\)/u.test(code)
+    if (offered) {
+      for (const [id, label] of [['ja', '日本語'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['ru', 'Русский'], ['pt', 'Português']]) {
+        expect(code, id).toMatch(new RegExp(`\\["${id}",\\s*"${label}"\\]`, 'u'))
+      }
+    }
+    if (process.env.CONTRACT_TAG !== undefined) expect(offered, 'the next DSH offers the six added languages').toBe(true)
+    // register(ns, dicts) takes every entry of the object, checking only that each key is a language id.
+    expect(code).toContain('const pairs = typeof localeOrDicts === "string" ? [[localeOrDicts, dict]] : Object.entries(localeOrDicts);')
+    const pattern = /LOCALE_ID_PATTERN = (\/.*\/u?);/u.exec(code)?.[1]
+    expect(pattern).toBeDefined()
+    const re = new Function(`return ${pattern}`)() as RegExp
+    for (const id of ['zh', 'en', 'ja', 'es', 'fr', 'de', 'ru', 'pt']) expect(re.test(id), id).toBe(true)
+  })
+
   it('L4: package display text is still read from locale/<lang>.json `meta`, which the plugin fills', () => {
     const boot = fetched('dsh-app-boot')
     expect(boot).toMatch(/textOf\(meta\?\.title/u)
     expect(boot).toMatch(/textOf\(meta\?\.description/u)
-    for (const lang of ['zh', 'en']) {
+    for (const lang of ['zh', 'en', 'ja', 'es', 'fr', 'de', 'ru', 'pt']) {
       const meta = (JSON.parse(ownFile(`locale/${lang}.json`)) as { meta?: { title?: string; description?: string } }).meta
       expect(meta?.title, lang).toBeTruthy()
       expect(meta?.description, lang).toBeTruthy()
