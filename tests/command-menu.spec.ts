@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { setup, teardown } from './support/harness.js'
+import { gate, setup, teardown } from './support/harness.js'
 import { textResponse } from './support/mock-adapter.js'
 import { LANGS, setLanguage, type Lang } from '../src/i18n/index.js'
 import { MENU, menuDescription, menuHint } from '../src/menu.js'
@@ -69,6 +69,30 @@ describe('registration follows the language', () => {
       const settled = changes.length
       setLanguage('de')
       expect(changes.length).toBe(settled)
+    } finally { undo() }
+  })
+
+  it('a command still running when the language changes finishes, and its reply is logged once', async () => {
+    const { ctx, lead } = await setup(() => textResponse('X'))
+    await ctx.plugin(CommandRuntime)
+    const undo = setLanguage('zh')
+    try {
+      const hold = gate()
+      let ran = 0
+      registerCommand(ctx, { id: 'dsh-agent-scheduler/agents', name: 'agents', description: () => menuDescription('agents'), hint: () => menuHint('agents'), run: async () => { ran += 1; await hold.promise; return { kind: 'success', text: 'FINISHED' } } })
+      const running = ctx.commands.execute(lead, '/agents seen all', [], new AbortController().signal)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      // The row is replaced while the handler awaits: it is neither cancelled nor run twice.
+      setLanguage('ru')
+      expect(ctx.commands.list(lead).filter(d => d.name === 'agents')).toHaveLength(1)
+      hold.open()
+      const out = await running
+      expect(out?.result).toMatchObject({ kind: 'success', text: 'FINISHED' })
+      expect(ran).toBe(1)
+      const done = lead.session.snapshotEvents().filter(e => e.type === 'command/done')
+      expect(done).toHaveLength(1)
+      // Re-registering wrote nothing to the session log: only this one run and its reply.
+      expect(lead.session.snapshotEvents().filter(e => e.type === 'command/run')).toHaveLength(1)
     } finally { undo() }
   })
 
