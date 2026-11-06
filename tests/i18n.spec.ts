@@ -51,7 +51,8 @@ describe('dictionaries', () => {
 
   it('translations are translated: nothing left identical to English except proper names and codes', () => {
     // Text that is the same in every language by design: symbols, placeholders only, names, usage lines.
-    const same = (v: string) => /^[\s{}\w.,:/·⚡…-]*$/u.test(v.replace(/\{\w+\}/gu, '')) || /^[A-Z][\w ]*$/u.test(v)
+    // Argument hints are command syntax: `[on | off]`, `model <provider>/<model> [effort]`.
+    const same = (v: string) => /^[\s{}\w.,:/·⚡…|<>[\]-]*$/u.test(v.replace(/\{\w+\}/gu, '')) || /^[A-Z][\w ]*$/u.test(v)
     for (const lang of ['ja', 'es', 'fr', 'de', 'ru', 'pt'] as const) {
       const left = (Object.keys(en) as MessageKey[]).filter(k => DICTIONARIES[lang][k] === en[k] && !same(en[k]))
       expect(left, lang).toEqual([])
