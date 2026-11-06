@@ -743,7 +743,9 @@ export function mergeLine(member: Pick<Member, 'id'>, merge: { readonly id: stri
  * @returns the title text.
  */
 export function rowTitle(member: Member): string {
-  return member.cwd === undefined ? member.id : t('row.titleCwd', { id: member.id, cwd: member.cwd })
+  // The name is cut with an ellipsis in a narrow column: the tooltip leads with it whole.
+  const head = member.name === undefined || member.name === member.id ? member.id : `${member.name}\n${member.id}`
+  return member.cwd === undefined ? head : t('row.titleCwd', { id: head, cwd: member.cwd })
 }
 
 /** What the roster has below its visible part: rows, and how many of them carry a mark. */
@@ -1248,7 +1250,11 @@ export function createAgentsPage(ctx: {
       const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
       const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
       const nameOf = (id: string) => rows.find(m => m.id === id)?.name ?? id
-      const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
+      const usual = hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
+      const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : usual
+      // The subtitle is cut to one line: its tooltip has it whole, and during a merge also what it replaced
+      // (the absorbed side's handoff request, or the survivor's own work).
+      const secondTitle = merge !== undefined && usual !== '' ? `${second}\n${usual}` : second
       // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
       const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived' && merge === undefined
       // Merge into another live worker: there must be one, and neither may be mid-merge.
@@ -1282,7 +1288,7 @@ export function createAgentsPage(ctx: {
           <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
           <span className="sch-roster-main">
             <span className="sch-roster-name">{member.name}</span>
-            {second === '' ? null : <span className="sch-roster-sub">{second}</span>}
+            {second === '' ? null : <span className="sch-roster-sub" title={secondTitle}>{second}</span>}
           </span>
           <span className="sch-roster-end">
             {waiting === 0 ? null : <span className="sch-roster-mail" data-scheduler-mail={waiting} title={tn('inbox.member', waiting)}>✉</span>}

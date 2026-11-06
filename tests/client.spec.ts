@@ -217,6 +217,8 @@ describe('roster subline', () => {
     expect(subline({ ...(worker as object), cwd: undefined, role: undefined } as never)).toBe('first task')
     expect(rowTitle(worker)).toBe('w\n目录：/x/dsh-agent-scheduler__roster-lead-workers/')
     expect(rowTitle({ ...(worker as object), cwd: undefined } as never)).toBe('w')
+    // A name cut short in a narrow column is whole in the tooltip, above the session id.
+    expect(rowTitle({ ...(worker as object), id: 'session-1', name: 'scheduler-worker-merge', cwd: undefined } as never)).toBe('scheduler-worker-merge\nsession-1')
   })
   it('says why a member failed before anything else', () => {
     expect(subline({ ...(fork as object), state: 'failed', detail: 'quota\nexhausted' } as never, [{ id: 'r-1', text: 'x' }])).toBe('quota exhausted')
