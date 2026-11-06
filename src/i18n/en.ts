@@ -231,6 +231,8 @@ export const en: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Cancel',
   'merge.hint': 'The absorbed worker writes a handoff and settles its code, then is archived; its names reach the survivor.',
   'merge.pending': 'Merging {id}',
+  'mergedFrom.label': 'merged from {name}',
+  'mergedFrom.title': 'Open {name}\'s session (merged in {id}; session {session})',
 
   'cmd.agents.usage': 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b>',
   'cmd.agents.renameUsage': 'Usage: /agents rename <name> <new-name>',

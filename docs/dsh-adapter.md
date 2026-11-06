@@ -43,6 +43,7 @@
 | H11 | `ctx.systemPrompt.section({ name, order, text })` | rule-plugin.ts:277 | A | 编译失败 |
 | H12 | `ctx.commands.register`；`input.hint` 不能是空串（否则整个预设加载失败） | rule-plugin.ts:289-318, 307；member-model.ts:180 | A / B | 预设加载失败，所有会话不可用 |
 | H13 | `ctx.sessionQuery.observeSession(id, { projectionMode: 'none' })` + `using` + `inheritedEventCount` | rule-plugin.ts:235 | A | 读不到冷会话日志：重启恢复、结算失败 |
+| H13b | `ctx.sessionQuery.filterEvents(id, [{ kind: 'seq' }, { kind: 'text' }…])`（单个会话的字面扫描，多个条件之间为「与」，冷会话可读，被 shadow 的事件仍可匹配）与 `readEvent({ sessionId, seq, before, after })`；`searchEvents` 在宿主 provider 上仍是 `SESSION_QUERY_SEARCH_DISABLED`（不用它） | host/session-query.ts；契约 session-query.spec.ts R1–R5 | A | `agent_recall` 不可用：工具返回「此 DSH 不支持」，并 warn 一次 |
 | H14 | `ctx.inject(['sessionTitle'])`，`get/rename`（可选） | rule-plugin.ts:247-255 | A | 会话不再自动取标题（已有降级） |
 | H15 | `ctx.llm.resolveCallConfig` + `ReasoningEffortId` | rule-plugin.ts:286；member-model.ts:186 | A | `/worker model`、`/agent-model` 校验失败 |
 | H16 | `ctx.sessionProjections.register({ key, stateVersion, stateSchema, init, apply, wire })`；假设注册表**只调用** `schema.parse`（我们用假 ZodType） | index.ts:44-54；projection.ts:305-330 | A / B | 注册表开始调用 `safeParse` 等其他方法：投影加载抛错，Agents 页一片空白 |

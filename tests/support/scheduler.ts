@@ -5,6 +5,7 @@ import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { pluginRecordOf, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { expect, vi } from 'vitest'
 import { preStep, Scheduler, type SchedulerDeps } from '../../src/scheduler.js'
+import { historyPort } from '../../src/dsh/host/session-query.js'
 import { schedulerTools, sectionFor } from '../../src/tools.js'
 import { forkGuard } from '../../src/fork-guard.js'
 import { inputOf } from '../../src/records.js'
@@ -18,6 +19,7 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
     agents: ctx.agents,
     readLog: async id => stored(ctx, id),
     retryMs: 50,
+    history: historyPort(ctx),
     // Existing scenarios are scheduling sessions; tests of the switch pass `defaultOn: false`.
     defaultOn: true,
     ...deps,

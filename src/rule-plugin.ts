@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
-  claimOnce, eventsOf, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  claimOnce, eventsOf, historyPort, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
   registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
 } from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
@@ -303,6 +303,7 @@ export function apply(ctx: Context, config: Config): void {
     log,
     // A worker renamed in a split gets a title to match, when it is resident and titles exist.
     team: teamPort(ctx),
+    history: historyPort(ctx),
     renameSession: (id, title) => {
       const session = ctx.agents.get(id as never)?.session
       if (session !== undefined) names.rename(session, title)

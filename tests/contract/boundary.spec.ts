@@ -26,6 +26,12 @@ describe('adapter boundary', () => {
     expect(offenders).toEqual([])
   })
 
+  it('only the session-query adapters read session history', () => {
+    const all = sources('src').filter(f => !/(session-query|services)\.ts$/u.test(f))
+    const offenders = all.filter(f => ownFile(f).split('\n').some(line => !/^\s*(\*|\/\/)/u.test(line) && /\.sessionQuery\b|\b(filterEvents|readEvent|searchEvents|observeSession)\(/u.test(line)))
+    expect(offenders).toEqual([])
+  })
+
   it('only the Agent Teams adapter touches Agent Teams', () => {
     const all = sources('src').filter(f => !/agent-team\.ts$/u.test(f))
     const offenders = all.filter(f => ownFile(f).split('\n').some(line => !/^\s*(\*|\/\/)/u.test(line) && /\.agentTeams\b|'agentTeams'|dsh-experimental-|\.roster\.tryMembership/u.test(line)))

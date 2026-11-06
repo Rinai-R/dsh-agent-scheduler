@@ -45,9 +45,9 @@ export function apply(ctx: Context, config: Config): void {
     // own model. 6: who created a worker for which input, and each member's unread report.
     // 7: a renamed worker's former names, and the area workers split from one area share.
     // 8: the lead's inbox.
-    // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges.
+    // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges. 11: where merged workers' history is.
     // Older cached state is dropped and refolded.
-    stateVersion: 10,
+    stateVersion: 11,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,

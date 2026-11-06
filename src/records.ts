@@ -96,6 +96,11 @@ export interface MergeRecord {
   /** `merged`: the survivor's name before, and the area from then on. */
   readonly previousName?: string
   readonly area?: string
+  /** `merged`: the absorbed worker's Session, and the range of its own events then (recall). */
+  readonly session?: string
+  readonly seqFrom?: number
+  readonly seqTo?: number
+  readonly rounds?: number
   /** `delivered`: inbox id of the handoff message in the survivor's session. */
   readonly messageId?: string
   /** `failed`: why. */

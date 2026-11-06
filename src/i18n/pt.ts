@@ -248,4 +248,6 @@ export const pt: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Cancelar',
   'merge.hint': 'O worker absorvido escreve uma passagem e organiza o código, depois é arquivado; seus nomes passam para quem fica.',
   'merge.pending': 'Mesclando {id}',
+  'mergedFrom.label': 'mesclado de {name}',
+  'mergedFrom.title': 'Abrir a sessão de {name} (mesclada em {id}; session {session})',
 }

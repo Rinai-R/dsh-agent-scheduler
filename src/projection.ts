@@ -55,6 +55,21 @@ export interface RosterMember {
   readonly seenAt?: number | undefined
   /** Archived by a merge: the worker it was merged into. Its names now find that worker. */
   readonly mergedInto?: string | undefined
+  /** Workers merged into this one, oldest first: where their history is (`agent_recall`). */
+  readonly mergedFrom?: readonly MergedFrom[] | undefined
+}
+
+/** One worker merged into another, and the part of its log that was its own. */
+export interface MergedFrom {
+  readonly merge: string
+  readonly name: string
+  readonly session: string
+  /** Its own events, `seqFrom` through `seqTo`; absent in merges recorded before recall existed. */
+  readonly seqFrom?: number | undefined
+  readonly seqTo?: number | undefined
+  readonly rounds?: number | undefined
+  /** Time (ms) of the merge. */
+  readonly at: number
 }
 
 /** One piece of delegated work with its latest state. */
@@ -345,7 +360,7 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   const mail = R.mail(event)
   if (mail !== undefined) return applyMail(state, mail, event.time)
   const merge = R.merge(event)
-  if (merge !== undefined) return applyMerge(state, merge)
+  if (merge !== undefined) return applyMerge(state, merge, event.time)
   const team = R.team(event)
   if (team !== undefined) {
     const next = { members: team.members, tasks: team.tasks }
@@ -388,7 +403,7 @@ function applyMail(state: Roster, mail: NonNullable<ReturnType<typeof R.mail>>, 
   return { ...state, mail: items.map(m => m === item ? (on ? { ...rest, [flag]: true as const } : rest) : m) }
 }
 
-function applyMerge(state: Roster, merge: NonNullable<ReturnType<typeof R.merge>>): Roster {
+function applyMerge(state: Roster, merge: NonNullable<ReturnType<typeof R.merge>>, time: number): Roster {
   const merges = state.merges ?? []
   if (merge.action === 'requested') {
     if (merges.some(m => m.id === merge.id)) return state
@@ -414,7 +429,8 @@ function applyMerge(state: Roster, merge: NonNullable<ReturnType<typeof R.merge>
       const formerNames = [...new Set(former)].filter(n => n !== name)
       const role = merge.role ?? survivor.role
       let members = upsert(state.members, absorbed.id, m => compact({ ...m!, state: 'archived' as const, mergedInto: survivor.id, detail: `merged into ${name}` }))
-      members = upsert(members, survivor.id, m => compact({ ...m!, name, formerNames: formerNames.length === 0 ? undefined : formerNames, role, text: role ?? m!.text, area: merge.area ?? m!.area }))
+      const from = compact<MergedFrom>({ merge: known.id, name: absorbed.name, session: merge.session ?? absorbed.id, seqFrom: merge.seqFrom, seqTo: merge.seqTo, rounds: merge.rounds, at: time })
+      members = upsert(members, survivor.id, m => compact({ ...m!, name, formerNames: formerNames.length === 0 ? undefined : formerNames, role, text: role ?? m!.text, area: merge.area ?? m!.area, mergedFrom: [...(m!.mergedFrom ?? []), from] }))
       return { ...state, members, merges: merges.map(m => m === known ? { ...m, state: 'merged' as const } : m) }
     }
     default: return state
@@ -472,6 +488,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (m.reportedAt !== undefined && typeof m.reportedAt !== 'number') fail('member reportedAt')
   if (m.reportFailed !== undefined && m.reportFailed !== true) fail('member reportFailed')
   if (m.seenAt !== undefined && typeof m.seenAt !== 'number') fail('member seenAt')
+  if (m.mergedFrom !== undefined && !(Array.isArray(m.mergedFrom) && m.mergedFrom.every(f => isRecord(f) && isString(f.name) && isString(f.session) && isString(f.merge) && typeof f.at === 'number'))) fail('member mergedFrom')
 }
 
 function checkMail(value: unknown): void {

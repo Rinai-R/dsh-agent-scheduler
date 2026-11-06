@@ -17,6 +17,7 @@ import * as SubagentSpawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import { installForkFrom } from '../../src/forks-from.js'
 import { RoutingMockAdapter } from './mock-adapter.js'
 import { TestSessionQuery } from './test-session-query.js'
+import SessionQuerySqlite from '@deepseek-ai/dsh-session-query-sqlite'
 
 export const SIGNAL = new AbortController().signal
 const roots: string[] = []
@@ -36,14 +37,16 @@ export type Respond = (options: GenerateOptions) => StreamChunk[] | Promise<Stre
  * @param respond - answers every model request.
  * @param maxActiveSubagents - SubagentService residency cap.
  */
-export async function setup(respond: Respond, maxActiveSubagents = 8) {
+export async function setup(respond: Respond, maxActiveSubagents = 8, opts: { hostQuery?: boolean } = {}) {
   const ctx = new Context()
   contexts.push(ctx)
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   const storageRoot = mkdtempSync(join(tmpdir(), 'dsh-sched-p0-'))
   roots.push(storageRoot)
   await ctx.plugin(JsonlSessionPersistence, { root: storageRoot })
-  await ctx.plugin(TestSessionQuery)
+  // The host's own provider (dsh-base: SQLite, `openAt: never`) when a test needs DSH's real reads.
+  if (opts.hostQuery === true) await ctx.plugin(SessionQuerySqlite as never, { path: ':memory:', openAt: 'never' } as never)
+  else await ctx.plugin(TestSessionQuery)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(SubagentService, { maxActiveSubagents, maxDepth: 1 })
   await ctx.plugin(SubagentSpawn, { providerName: 'spawn' })

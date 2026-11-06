@@ -1,0 +1,63 @@
+import { mkdirSync, writeFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterEach, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
+import Sqlite from '@deepseek-ai/dsh-session-query-sqlite'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+const ROOT = process.env.REPRO_ROOT!
+const ctxs: Context[] = []
+afterEach(async () => { for (const c of ctxs.splice(0)) await c.fiber.dispose() })
+async function make(label: string) {
+  const ctx = new Context(); ctxs.push(ctx)
+  await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
+  await ctx.plugin(Jsonl, { root: ROOT })
+  await ctx.plugin(Sqlite as never, { path: ':memory:', openAt: 'first-search' } as never)
+  await ctx.plugin(AgentLoop, { agents: [] })
+  return ctx
+}
+const tryS = async (ctx: any, what: string) => {
+  try { const r = await ctx.sessionQuery.searchSessions({ query: 'hello' }); console.log(what, 'OK', r.items.length) }
+  catch (e: any) { console.log(what, 'FAIL', e.code, String(e.message).slice(0, 220)) }
+}
+it('repro', async () => {
+  let ctx = await make('a')
+  const s = await ctx.agentLoop.create(SessionId('good-1'), { provider: 'x', model: 'y' })
+  s.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'hello world' }], source: { kind: 'user' } }) as never, { surfaceOp: 'append' } as never)
+  await s.dispose?.()
+  await ctxs.pop()!.fiber.dispose()
+  ctx = await make('b')
+  await tryS(ctx, '1 clean store:')
+  await ctxs.pop()!.fiber.dispose()
+  // A directory with a damaged log, as left by a crash or an old format.
+  const ws = readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)
+  console.log('layout', ws, readdirSync(join(ROOT, ws[0]!)))
+  const bad = join(ROOT, ws[0]!, 'bad-session'); mkdirSync(bad, { recursive: true })
+  const good = readdirSync(join(ROOT, ws[0]!, 'good-1'))
+  console.log('good files', good)
+  writeFileSync(join(bad, good.find(f => f.startsWith('session'))!), 'not a log')
+  ctx = await make('c')
+  await tryS(ctx, '2 one damaged session:')
+  await ctxs.pop()!.fiber.dispose()
+  mkdirSync(join(ROOT, ws[0]!, 'empty-dir'))
+  // A writer that keeps appending while the index observes.
+  // A stored session whose log replays invalid (an event an older or buggy writer accepted).
+  ctx = await make('e')
+  const old = await ctx.agentLoop.create(SessionId('old-1'), { provider: 'x', model: 'y' })
+  old.session.append('user/message', { id: 'bad', content: [{ type: 'text', text: 'hello legacy' }], source: { kind: 'user' } } as never, { surfaceOp: 'append' } as never)
+  await old.dispose?.()
+  await ctxs.pop()!.fiber.dispose()
+  ctx = await make('f')
+  await tryS(ctx, '4 one stored session that fails validation:')
+  try { const r = await (ctx as any).sessionQuery.filterEvents(SessionId('good-1'), [{ kind: 'text', text: 'hello' }]); console.log('4b exact scan of a good session still works:', r.length) } catch (e: any) { console.log('4b FAIL', e.code) }
+  await ctxs.pop()!.fiber.dispose()
+  ctx = await make('d')
+  const w = await ctx.agentLoop.create(SessionId('busy'), { provider: 'x', model: 'y' })
+  let n = 0
+  const t = setInterval(() => { w.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: `hello again ${n++}` }], source: { kind: 'user' } }) as never, { surfaceOp: 'append' } as never) }, 1)
+  await tryS(ctx, '3 damaged + live writer:')
+  clearInterval(t)
+})

@@ -250,4 +250,6 @@ export const ja: Record<keyof typeof zh, string> = {
   'merge.cancel': 'キャンセル',
   'merge.hint': '統合される側が引き継ぎを書いてコードを片付けてからアーカイブされ、その名前は残す側に引き継がれます。',
   'merge.pending': '統合中 {id}',
+  'mergedFrom.label': '{name} から統合',
+  'mergedFrom.title': '{name} のセッションを開く（{id} で統合、session {session}）',
 }

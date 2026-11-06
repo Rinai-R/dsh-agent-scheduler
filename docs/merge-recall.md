@@ -1,6 +1,6 @@
 # 合并后的历史回取（merge recall）设计稿
 
-> 状态：**设计稿，待用户 CR**。本阶段不改 `src/`。
+> 状态：**已实现**（用户采纳了第 4 节全部推荐）。实测与上游问题草稿见第 7 节。
 > 基线：`main` @ 9662d4a（含 #24 worker 合并、#26）。宿主：本机 DeepSeek Harness 0.2.2-rc.1（app.asar）；npm pinned 版本为 0.2.1-rc.5。
 > 用户诉求：合并 worker 时保留被合并方的会话历史，以后能搜，「像把工具结果卸载出去、需要时再召回」。交接（handoff）就是卸载出去的摘要；召回（recall）是按需从归档会话里把原始细节取回来。
 > 下文 `SQ/` 指 app.asar 里的 `dsh/node_modules/@deepseek-ai/`。
@@ -163,3 +163,31 @@ flowchart LR
 | 4 | `agent_recall`（解析、多词与匹配、倒序取前若干条、片段、`around`、超时、范围检查），加入 `FORK_TOOLS` | 新 `tests/recall.spec.ts`：合并后按旧名召回被合并方、冷会话、压缩后、继承种子被排除、越界会话被拒、一名对多会话 |
 | 5 | Agents 页「↶ 合并自 …」；各语种文案 | 渲染测试、`i18n.spec` |
 | 6 | 隔离 GUI 实测：split → 合并 → 保留方用 `agent_recall` 取回被合并方的原话 → 重启后再取；截图；README；`docs/dsh-adapter.md` | — |
+
+## 7. 实现与复现
+
+- **复现 `session_search` 故障**：在隔离 `DSH_HOME=/tmp/recall-repro/home`（JSONL 持久化 + `dsh-session-query-sqlite`，`openAt: first-search`）里复现。脚本是 [session-search-repro.spec.ts.txt](repro/session-search-repro.spec.ts.txt)，输出是 [session-search-repro.log](repro/session-search-repro.log)。
+  - **一个**回放校验失败的已存会话（例如 user 消息缺 `role`），就让所有搜索都失败：`SESSION_QUERY_PERSISTENCE_FAILED … stored session "old-1" failed validation`，每次搜索都复现，直到手动删掉那个目录。
+  - 同一个库、同一个 context 下，`filterEvents` 读正常会话照常可用。
+  - 一个持续写入的会话**没有**复现失败（重试一次后就稳定了）；目录里只有非日志文件时会被跳过。
+  - 所以第 0 节的推测要修正：主因是「有一个坏会话」，不是「有会话在写」。英文 issue 草稿写在 [upstream-issue-session-search.md](upstream-issue-session-search.md)，**未提交**。
+- **实现**：
+  - `src/dsh/host/session-query.ts`（`historyPort`：`find` / `window` / `ownedFrom`）；
+  - merge 记录加 `session`、`seqFrom`、`seqTo`、`rounds`，投影加 `mergedFrom`（状态版本 11）；
+  - 交接消息加指针行（`historyLine`），保留方的系统提示加身份行；
+  - `agent_list` 带 `session`、`mergedFrom`、`history`（默认 20 条）；
+  - `agent_recall`，并加入分身白名单；
+  - Agents 页「↶ 合并自 …」；
+  - 8 种语言的文案。
+- **测试**：
+  - `tests/recall.spec.ts`；
+  - 契约 `tests/contract/session-query.spec.ts`：R1–R3 是字面「与」匹配、seq 范围、冷会话；R4 是被 shadow 的事件仍能匹配；R5 是 `searchEvents` 仍报 `SEARCH_DISABLED`。这组用宿主真实的 `dsh-session-query-sqlite` 跑（开发依赖，随 `contract:next` 一起换成 next 版本）；
+  - `boundary.spec` 新增一条规则：只有适配层读会话历史。
+
+### GUI 实测（隔离 `DSH_HOME=/tmp/recall-gui/home`，mock 模型，调度关）
+
+1. hub 拆成 hub-asr 和 hub-image。hub-image 的回报里提到「换成了 mozjpeg，质量 82」，交接只写了「换了编码器，细节见我的历史」。
+2. 从 Agents 页把 hub-image 合并进 hub-asr，合并后改名 `hub`（[merged](img/merge-recall-2-merged.png)）。hub 行下出现「↶ 合并自 hub-image」。
+3. lead 让 hub 去查。hub 调 `agent_recall({ name: "hub-image", query: "mozjpeg 质量" })`，返回 `session-55dc…`、`ownedFrom: 30`，命中 seq 50，片段里有「质量 82」。hub 的答复就是这个数字。工具结果记录在 [recall-gui-tool-results.log](repro/recall-gui-tool-results.log)。
+4. 点「↶ 合并自 hub-image」，在右栏打开被合并方的会话（[link](img/merge-recall-5-merged-from-link.png)）。
+5. 重启 DSH 后再问一次，`agent_recall` 照样从冷会话里取回「82」（[restart](img/merge-recall-6-restart.png)）。
