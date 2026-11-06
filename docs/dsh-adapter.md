@@ -114,6 +114,17 @@
 | P3 | `cordis.patch.yml` **整段覆盖** `preset-standard`：rc.5 默认预设的所有行原样拷贝一份，再插入我们的 rule 行（scripts/gen-preset.mjs 生成，版本号写死） | cordis.patch.yml:1-169；scripts/gen-preset.mjs | C | **最脆弱**：新版 DSH 改了标准预设，用户却还停在 rc.5 那份行列表上，新工具悄悄缺失；拷贝里引用的插件被删掉的话，预设加载失败，所有会话不可用 |
 | P4 | `package.json` 里的 `dsh.client.inject`（9 个客户端包名）、`dsh.bundle.patch` | package.json | B | 包改名：客户端插件不 apply |
 
+### 1.6b 语言（i18n）
+
+| # | 依赖点 | 位置 | 级 | 坏掉的表现 |
+|---|---|---|---|---|
+| L1 | 客户端 `ctx.locale`（dsh-client-locale 的 `LocaleRuntime`）：`register(ns, { zh, en })` 返回 disposer、`bind(ns)` 返回 `t(key, params)`、`getSnapshot().revision`、`subscribe(fn)`（切换语言和注册词典都会通知） | dsh/client/locale.ts | B | 界面停在中文（warn once） |
+| L2 | 模板占位符 `{name}`（`/\{(\w+)\}/g`，未知名字原样保留），与 src/i18n `format` 一致；复数由调用方选 `.one` / `.other` 键 | i18n/index.ts | C | 占位符原样显示 |
+| L3 | 用户显式选择的语言是 Host 设置 `locale` 命名空间的 `preference` 字段（volatile）：`ctx.settings.describe()` 读当前值，写入后 `settings/document-updated(ns, revision)` | dsh/host/locale.ts | B | 命令回复停在中文（warn once）；未显式选择（DSH 跟随浏览器）时 host 看不到浏览器，也回中文 |
+| L4 | 插件页显示名读 `locale/<lang>.json` 的 `meta.title` / `meta.description`（dsh-app-boot `readPluginMeta`） | locale/*.json | C | 插件页标题回落到 package.json 的英文 |
+
+不翻译、保持英文的：给模型看的提示词与工具描述（FORK_NOTICE、LEAD_NOTICE、工具 schema、调度器抛出的工具错误）、命令的 description / hint（DSH 自己的命令也是英文，且注册时就被拷贝）。
+
 ### 1.7 统计
 
 共 **60 项**（H 23 含 H10b，D 8 含 D1b，C 12，U 6，T 7，P 4；同时标了两档的按较脆弱的一档计）：
@@ -366,6 +377,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
    - U6：`dist/client.js` 能被一个最小的 `__ModuleLoader__` 桩加载，`apply` 是函数。
 6. **`adapter.spec.ts`**：适配层自身的降级单测。用缺字段的假 ctx 逐项验证：optional 能力 no-op 且只 warn 一次；required 能力缺失时 `installRule` 返回 `compatible: false`；守卫缺失时 `/schedule on` 被拒；`run` 能识别两种结果形状。
 7. **`boundary.spec.ts`**：扫描 `src/**`，`src/dsh/` 之外不允许出现 `from '@deepseek-ai/dsh-*'` 的值导入（`import type` 也必须走 `src/dsh/types.ts`），也不允许出现 `data-dockkit` / `data-sidebar-right` / `--dsw-` 之外的宿主选择器字面量。
+8. **`locale.spec.ts`**（L1-L4）：dsh-client-locale、dsh-settings、dsh-app-boot 的源码探针（pinned 和 next 都跑）。
 
 `npm run contract` = `vitest run tests/contract`。
 

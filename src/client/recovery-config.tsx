@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react'
 import { configPage, type ConfigForm } from '../dsh/client/ui.js'
+import { t, useLocale } from './i18n.js'
 
 /** The host row id in cordis.patch.yml, which is also its settings namespace. */
 export const HOST_NS = 'dsh-agent-scheduler'
@@ -37,10 +38,11 @@ function useSnapshot(form: Form): Snapshot {
 }
 
 function RecoveryPage(props: { form: Form }) {
+  useLocale()
   const snapshot = useSnapshot(props.form)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
-  if (snapshot.status !== 'ready') return <div className="sch-rc"><p>正在读取配置…</p></div>
+  if (snapshot.status !== 'ready') return <div className="sch-rc"><p>{t('rc.loading')}</p></div>
   const recovery = snapshot.value?.recovery ?? {}
   const mode: Mode = recovery.onInterrupted === 'resume' ? 'resume' : 'fail'
   const max = typeof recovery.maxResumes === 'number' ? recovery.maxResumes : 2
@@ -59,15 +61,15 @@ function RecoveryPage(props: { form: Form }) {
   return (
     <div className="sch-rc" data-scheduler-recovery-config={mode}>
       <style>{CSS}</style>
-      <h3>DSH 重启后，被打断的工作</h3>
-      {option('fail', '判失败，交给 lead（默认）', '重启时还没做完的请求记为失败，lead 收到「r-N 给 X 的请求因 DSH 重启中断，未完成」，由 lead 决定是否重派。重启后不会自动调用模型。')}
-      {option('resume', '在原会话里续跑', '给 worker 原会话补一条提示：先检查 worktree 和 git 状态，不要重复已对外做过的操作，再把这个请求做完。请求保持未完成。重启后会自动唤醒 worker，消耗 token。')}
+      <h3>{t('rc.title')}</h3>
+      {option('fail', t('rc.fail.title'), t('rc.fail.text'))}
+      {option('resume', t('rc.resume.title'), t('rc.resume.text'))}
       <div className="sch-rc-row">
-        <span>每个请求最多续跑</span>
+        <span>{t('rc.max.before')}</span>
         <input type="number" min={0} max={10} value={max} disabled={disabled || mode !== 'resume'} onChange={event => { const n = Number(event.target.value); if (Number.isInteger(n) && n >= 0 && n <= 10) write('maxResumes', n) }} />
-        <span>次，超过就按「判失败」处理</span>
+        <span>{t('rc.max.after')}</span>
       </div>
-      <p className="sch-rc-note">分身被打断时总是判失败（分身只负责派活）。{snapshot.writable ? '' : '当前 profile 不可写，无法修改。'}{failed ? '保存失败，请重试。' : ''}</p>
+      <p className="sch-rc-note">{t('rc.note')}{snapshot.writable ? '' : t('rc.readonly')}{failed ? t('rc.saveFailed') : ''}</p>
     </div>
   )
 }

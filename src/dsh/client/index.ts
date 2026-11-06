@@ -4,6 +4,7 @@
  * @module dsh-agent-scheduler/dsh/client
  */
 export * from './dom.js'
+export * from './locale.js'
 export * from './services.js'
 export * from './catalog.js'
 export * from './sidebar.js'

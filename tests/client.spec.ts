@@ -1,8 +1,11 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle, hiddenBelow, hiddenLabel } from '../src/client/index.js'
 import { isStale } from '../src/client/catalog-source.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
+
+// Components are called as plain functions here, outside a React render.
+vi.mock('../src/client/i18n.js', async (original) => ({ ...await original<typeof import('../src/client/i18n.js')>(), useLocale: () => undefined }))
 
 /** A stand-in for the right column's DOM: visible docked panes, one maybe holding the roster. */
 const column = (panes: Array<{ id: string; roster?: boolean }>) => ({

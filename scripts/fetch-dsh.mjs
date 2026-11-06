@@ -20,6 +20,9 @@ export const PROBED = [
   'dsh-web-frontend',
   'dsh-client-ui-plugin-manager',
   'dsh-client-ui-model-selection',
+  'dsh-client-locale',
+  'dsh-settings',
+  'dsh-app-boot',
 ]
 
 const root = resolve(import.meta.dirname, '..')

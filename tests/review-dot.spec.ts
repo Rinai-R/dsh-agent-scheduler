@@ -8,6 +8,9 @@ import { appendAgent, appendForkState, appendInput, appendRequest, appendSeen } 
 import { reviewOf, unread } from '../src/review.js'
 import { runAgentsCommand } from '../src/rule-plugin.js'
 import { reviewMarkOf, reviewSummary, seenLine } from '../src/client/index.js'
+import { inLanguage } from './support/language.js'
+
+inLanguage('en')
 
 afterEach(teardown)
 

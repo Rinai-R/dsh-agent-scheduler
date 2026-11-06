@@ -53,6 +53,8 @@ lead — the only agent whose replies you read.
 
 ## Getting Started
 
+The plugin's interface and command replies follow DeepSeek Harness's language setting (Chinese or English), switching without a reload; prompts and tool descriptions for the model stay English.
+
 ### Prerequisites
 
 - DeepSeek Harness `>=0.2.1-rc.5 <0.3.0`, the range required by `engines.dsh`.

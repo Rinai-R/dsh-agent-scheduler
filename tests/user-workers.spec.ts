@@ -12,6 +12,9 @@ import { AGENT_RECORD } from '../src/records.js'
 import { parseNewWorker, runAgentsCommand } from '../src/rule-plugin.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema, rosterView, rosterViewSchema } from '../src/projection.js'
 import { commandFailure, needsRestartFor, newWorkerCommand, renameCommand } from '../src/client/index.js'
+import { inLanguage } from './support/language.js'
+
+inLanguage('en')
 
 afterEach(teardown)
 

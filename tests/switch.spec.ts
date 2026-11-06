@@ -13,6 +13,9 @@ import { FORK_STATE_RECORD } from '../src/records.js'
 import { preStep, Scheduler } from '../src/scheduler.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { rosterView, applyRoster, EMPTY_ROSTER } from '../src/projection.js'
+import { inLanguage } from './support/language.js'
+
+inLanguage('en')
 
 afterEach(teardown)
 

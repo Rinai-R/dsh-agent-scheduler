@@ -9,10 +9,10 @@ export type Feature =
   // host, required
   | 'subagents' | 'agents' | 'tools' | 'tools.guard' | 'systemPrompt' | 'commands' | 'sessionQuery'
   // host, optional
-  | 'sessionTitle' | 'modelSelection' | 'llm.resolve'
+  | 'sessionTitle' | 'modelSelection' | 'llm.resolve' | 'settings.locale'
   // client
   | 'conversation.events' | 'slots' | 'sidebar.tabs' | 'sidebar.layout' | 'sidebar.gestures' | 'tabs.keepMounted'
-  | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'modelDirectories.catalog' | 'dom.stripTabs'
+  | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'modelDirectories.catalog' | 'dom.stripTabs' | 'locale'
 
 /** Thrown when the host answers in a shape this plugin does not know. */
 export class DshContractError extends Error {

@@ -9,7 +9,10 @@ import { appendForkModel, FORK_STATE_RECORD, INPUT_RECORD, workerModelOf } from 
 import { admitHidden, FORK_NOTICE, HANDOFF_SOURCE, isMainSession, preStep, Scheduler } from '../src/scheduler.js'
 import * as RulePlugin from '../src/rule-plugin.js'
 import { CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { Config, FORK_MODEL_RETIRED, parseForkCommand, runForkCommand, runWorkerModelCommand } from '../src/rule-plugin.js'
+import { Config, forkModelRetired, parseForkCommand, runForkCommand, runWorkerModelCommand } from '../src/rule-plugin.js'
+import { inLanguage } from './support/language.js'
+
+inLanguage('en')
 
 afterEach(teardown)
 
@@ -231,9 +234,9 @@ describe('fork model', () => {
     const { lead } = await setup(() => textResponse('X'))
     const run = (rawInput: string) => runForkCommand({ agent: lead, rawInput, attachments: [] } as never)
     const before = lead.session.snapshotEvents().length
-    expect(run('')).toEqual({ kind: 'success', text: FORK_MODEL_RETIRED })
-    expect(run('model default')).toEqual({ kind: 'success', text: FORK_MODEL_RETIRED })
-    expect(run('model a/b high')).toEqual({ kind: 'error', text: FORK_MODEL_RETIRED })
+    expect(run('')).toEqual({ kind: 'success', text: forkModelRetired() })
+    expect(run('model default')).toEqual({ kind: 'success', text: forkModelRetired() })
+    expect(run('model a/b high')).toEqual({ kind: 'error', text: forkModelRetired() })
     expect(lead.session.snapshotEvents().length).toBe(before)
   })
 })
