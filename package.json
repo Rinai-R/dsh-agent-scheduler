@@ -27,7 +27,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "contract": "node scripts/contract.mjs",
+    "contract:next": "node scripts/contract.mjs next"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
@@ -106,7 +108,7 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/cordis": "~4.0.5 || ~4.1.0",
     "@deepseek-ai/dsh-agent": ">=0.2.1-rc.5 <0.3.0",
     "@deepseek-ai/dsh-commands": ">=0.2.1-rc.5 <0.3.0",
     "@deepseek-ai/dsh-llm": ">=0.2.1-rc.5 <0.3.0",
@@ -116,7 +118,7 @@
     "@deepseek-ai/dsh-subagent": ">=0.2.1-rc.5 <0.3.0",
     "@deepseek-ai/dsh-system-prompt": ">=0.2.1-rc.5 <0.3.0",
     "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/schemastery": "~3.18.5 || ~3.19.0"
   },
   "publishConfig": {
     "access": "public"

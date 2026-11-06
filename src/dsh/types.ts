@@ -4,7 +4,7 @@
  * or renamed declaration is fixed in this file alone.
  * @module dsh-agent-scheduler/dsh/types
  */
-export type { Agent, AgentOptions, PreStepDecision, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+export type { Agent, AgentOptions, PreStepDecision, ModelSelection } from '@deepseek-ai/dsh-agent'
 export type { ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 export type { Session, SessionEvent, SessionHeader, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 export type { SubagentRuntime, ContinuableCreateRequest, ContinuableCreateSpec, SubagentProvider } from '@deepseek-ai/dsh-subagent'

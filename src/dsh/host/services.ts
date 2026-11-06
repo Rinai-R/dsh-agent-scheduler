@@ -256,7 +256,10 @@ export function registerProjection<S, V>(ctx: Context, spec: ProjectionSpec<S, V
     apply: spec.apply,
     wire: { viewSchema: schema(spec.view), view: spec.toView },
   }
-  ctx.effect(() => ctx.sessionProjections.register(definition as never), `agent-scheduler: ${spec.key} projection`)
+  // The registry's definition type differs between DSH releases, and from 0.2.2 it returns its
+  // disposer through a Promise; an effect accepts either.
+  const register = ctx.sessionProjections.register.bind(ctx.sessionProjections) as unknown as (definition: unknown) => (() => void) | Promise<() => void>
+  ctx.effect(() => register(definition) as never, `agent-scheduler: ${spec.key} projection`)
 }
 
 /**

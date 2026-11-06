@@ -144,8 +144,11 @@ export async function setMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, age
  */
 export function restoreMemberModel(scheduler: Pick<Scheduler, 'ledgerOf'>, agent: Agent): void {
   if (isMainSession(agent)) return
-  const selection = scheduler.ledgerOf(agent).members.get(agent.id)?.pickedModel
-  if (selection !== undefined) applyMemberModel(agent, selection)
+  const member = scheduler.ledgerOf(agent).members.get(agent.id)
+  // Only a worker has a model of its own. Its state is re-asserted on every creation, including
+  // "none" (a runtime that keeps the choice in the member's own log would otherwise bring back
+  // one the user cleared while the member was released).
+  if (member?.kind === 'worker') applyMemberModel(agent, member.pickedModel ?? null)
 }
 
 /**
