@@ -1,6 +1,6 @@
 # lead 收件箱（lead inbox）设计稿
 
-> 状态：**设计稿，待用户 CR**。本阶段不改 `src/`。
+> 状态：**已定稿，实现中**。用户 CR 结论：方案 B；收件箱放在 **Agents 页顶部独立分区**（第 3.1 节）；第 5 节各点已定。
 > 基线：`main` @ e149cba（v0.1.0-rc.3）；宿主：本机 DeepSeek Harness 0.2.2-rc.1（app.asar）。
 > 用户原话：「各个 worker 的消息是阻塞在对话框的上面，和用户的排队列表放在一块了……这样用户也没办法自己调整优先级，也不好看」。
 
@@ -8,7 +8,7 @@
 
 - **为什么出现在排队列表**：插件把 worker 答复、分身结论、请求失败通知都用 `Agent.followup()` 塞进 lead 的 DSH inbox 的 `next-turn` 列表；DSH 输入框上方的 QueueDock 渲染的正是 `next-turn` 的全部行（只过滤掉还停在对话流里的用户回显），所以插件消息和用户自己排队的消息在同一个列表里。
 - **对优先级的实际影响**：DSH 每个回合只从 `next-turn` 取 **一条**，严格按到达顺序（FIFO），并且只要还有排队就一直不进入空闲。N 条 worker 回报 = lead 连跑 N 个回合；用户在它们之后排的消息要等这 N 个回合全跑完。用户在列表里只能对每行「编辑 / 删除 / 插话发送」，**不能排序**；而且编辑或删除一条 worker 回报会让 lead 读到被改过的内容或根本读不到，但插件账本里那条请求已经记成「已答复」——静默丢失。
-- **推荐**：方案 B「插件自己的收件箱」——lead 忙时，插件消息先进插件自己的、持久化在主会话日志里的收件箱，不进 DSH 队列；输入框上方用插件自己的一张收件箱卡片（与 DSH 的排队消息卡片分开）展示，可置顶、拖动排序、暂缓、立即交给 lead；lead 空闲时把就绪的回报**合并成一条**交给 lead。用户自己的排队消息天然优先。只依赖 A 级宿主 API（`followup` / `steer` / `agent/status` / `agent/pre-step` / 插件记录 / 会话投影），UI 位置依赖一个 B 级的插槽名。
+- **推荐**：方案 B「插件自己的收件箱」——lead 忙时，插件消息先进插件自己的、持久化在主会话日志里的收件箱，不进 DSH 队列；在 Agents 页顶部（头部与「Worker 默认模型」之下、Worker 列表之上）单独一栏展示，可置顶、拖动排序、暂缓、立即交给 lead；lead 空闲时把就绪的回报**合并成一条**交给 lead。用户自己的排队消息天然优先。只依赖 A 级宿主 API（`followup` / `steer` / `agent/status` / `agent/pre-step` / 插件记录 / 会话投影）；UI 放在插件自己已有的 Agents 页里，不新增宿主依赖。
 
 ## 1. 现状核实
 
@@ -86,14 +86,14 @@ lead 忙时改用 `main.steer()`（进 `next-step`），idle 时仍 `followup()`
 
 ### 方案 B：插件自己的收件箱（推荐）
 
-插件消息先进**插件自己的收件箱**（主会话日志里的插件记录 + 会话投影），由插件决定何时、按什么顺序、合并还是逐条交给 lead；输入框上方放一张**插件自己的收件箱卡片**，和 DSH 的排队消息卡片分开。
+插件消息先进**插件自己的收件箱**（主会话日志里的插件记录 + 会话投影），由插件决定何时、按什么顺序、合并还是逐条交给 lead；在 Agents 页顶部单独一栏展示（用户 CR 定的位置，见 3.1）。
 
 - 投递时机：
   - lead **idle**（`agent/status` → idle）且没有被用户暂缓的条目 → 把所有就绪条目按收件箱顺序**合并成一条**，`followup` 一次 → lead 开一个回合处理全部。lead 能变 idle 说明 DSH 自己的 `next-turn` 已空，所以**用户排队的消息天然先处理**。
   - lead **忙**：留在收件箱，不进 DSH 队列。用户点「立即交给 lead」→ 用 `steer` 进当前回合下一步（与方案 A 同语义，只是由用户决定）。
   - 新消息到达时 lead 已 idle：立即投递（行为和今天一样，用户几乎看不到收件箱卡片）。
-- 用户操作：置顶、拖动排序、暂缓（暂缓的条目在空闲投递时跳过，直到用户取消暂缓）、立即交给 lead、全部立即交给 lead。**不提供编辑和删除**（避免 P4/P5）；是否提供「不交给 lead，仅标记已读」见第 5 节待定点。
-- 宿主依赖：`followup` / `steer`（A）、`agent/status`、`agent/pre-step`（A）、`appendPluginRecord` + `sessionProjections`（A，已在用）；UI 用插槽 `conversation.input.dock`（B：宿主注册表里声明为 list 插槽，README 写了「register the queue and Todo docks」但没把插槽名列为扩展点；我们已经在用同级别的 `conversation.input.left/right`）。插槽缺失时降级为只在 Agents 页显示收件箱 + 输入框 Agents 按钮上的计数，投递逻辑不受影响。
+- 用户操作：置顶、拖动排序、暂缓（暂缓的条目在空闲投递时跳过，直到用户取消暂缓）、立即交给 lead、全部立即交给 lead。**不提供编辑和删除**（避免 P4/P5）；也不提供「不交给 lead」（第 5 节）。
+- 宿主依赖：`followup` / `steer`（A）、`agent/status`、`agent/pre-step`（A）、`appendPluginRecord` + `sessionProjections`（A，已在用）；UI 在 Agents 页（`sidebarRightTabs.register` + `sidebar.right.pane.tab`，已在用），不新增宿主依赖。
 - 提示缓存：只在尾部追加，历史不改写；合并投递使回合数从 N 降到 1，总输入 token 下降。
 - 风险：lead 若长期忙（用户持续给它排消息，调度关），回报会一直等——这正是「用户优先」的代价，卡片上明确显示「等 lead 空闲」并给「立即交给 lead」按钮。
 
@@ -119,44 +119,62 @@ lead 忙时改用 `main.steer()`（进 `next-step`），idle 时仍 `followup()`
 
 ## 3. 推荐方案 B：交互稿
 
-### 3.1 放在哪里
+### 3.1 放在哪里（用户已定：Agents 页顶部独立分区）
 
-输入框上方的 dock 区，**DSH 排队消息卡片的上方**（插槽 `conversation.input.dock`，`order: 10`，介于 Todo 的 0 和排队消息的 20 之间）。只在主会话（lead）出现，且收件箱非空时才出现；Agents 按钮旁的计数增加一个「待 lead」徽标。Agents 页顶部同时放一个「lead 收件箱」区块（插槽缺失时的降级入口，也方便在大屏上管理）。
+位置：Agents 页头部（「Agents / N 个 · M 在跑」）和「Worker 默认模型」之下、Worker / 分身分组之上，单独一栏。只在主会话（lead）的 Agents 页出现；会话里还没有任何成员时不出现。
 
-### 3.2 线框
+依赖：Agents 页本身（右栏 tab 类型 `sidebarRightTabs.register` + 插槽 `sidebar.right.pane.tab`，A 级，已在用）、会话投影 `agentScheduler`（A，已在用）、`/agents inbox …` 命令经 `remote.commands.execute`（已在用，见适配层 `dsh/client/services.ts`）。**不新增任何宿主依赖**，也不再碰输入框上方的 `conversation.input.dock`。
 
-收起（默认，一行）：
+![收件箱线框：有条目 / 无条目 / 窄右栏 / 条目很多](img/lead-inbox-placement.png)
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ ✉ 待 lead 处理 3 条 · lead 忙，空闲后合并交给它   [立即交给 lead] ⌃ │
-└──────────────────────────────────────────────────────────────────┘
-┌──────────────────────────────────────────────────────────────────┐
-│ ☰ 1 条排队消息                                       （DSH 原生） ⌃ │
-│ 用户自己排队的一条消息：顺便看看 README             ✎  🗑  ↑     │
-└──────────────────────────────────────────────────────────────────┘
-┌──────────────────────────────────────────────────────────────────┐
-│ 输入框                                                            │
-└──────────────────────────────────────────────────────────────────┘
-```
+线框源文件：[lead-inbox-placement.html](img/lead-inbox-placement.html)。
 
-展开：
+### 3.2 交互
+
+**有条目（①）**
 
 ```
-┌─ ✉ 待 lead 处理 3 条 ─────────────── 合并投递 ▾ ─ [全部立即交给 lead] ⌄ ┐
-│ ⠿ 📌 回复 r-3 · ibx-c   IBX-c 回报：任务 c 已完成……   13:42   ⏸  ⚡ │
-│ ⠿    回复 r-2 · ibx-b   IBX-b 回报：任务 b 已完成……   13:41   ⏸  ⚡ │
-│ ⠿ ⏸  失败 r-5 · docs    归档时还没答完                  13:43   ▶  ⚡ │
-│       （已暂缓：空闲投递会跳过它）                                    │
-└───────────────────────────────────────────────────────────────────────┘
- ⠿ 拖动排序   📌 置顶/取消置顶（点行首）   ⏸ 暂缓 / ▶ 取消暂缓   ⚡ 立即交给 lead
- 点行文字：在右侧打开该成员的对话（与请求卡片一致）；悬停显示全文。
+Agents                                   ✓ ＋ ⇥
+5 个 · 1 在跑 · 2 待看
+[Worker 默认模型                DeepSeek-V4.1 ▾]
+┌ ✉ 待 lead 处理 3     lead 忙，空闲后合并交给它 [全部交给 lead] ┐
+│ ⠿ 📌 ibx-b · 回复 r-3 · 13:42                      📌 ⏸ ⚡ │
+│      IBX-b 回报：任务 b 已完成，结论若干行……                  │
+│ ⠿    ibx-c · 回复 r-4 · 13:43                      📌 ⏸ ⚡ │
+│ ⠿ ⏸  docs · 失败 r-5 · 13:44 · 已暂缓              📌 ▶ ⚡ │
+└──────────────────────────────────────────────────────────────┘
+Worker                                         4 · 1 在跑
+● ibx-b ✉                                       已答复 ›
 ```
 
-- 行首色点沿用成员状态色（失败为红），种类标签：回复 / 报告 / 分身结论 / 失败。
-- 「立即交给 lead」：lead 忙 → 插进它当前回合的下一步；lead 空闲 → 立即开一回合。
-- 「合并投递 ▾」切换「合并成一条 / 逐条（每条一个回合，按收件箱顺序）」——见待定点。
-- 已交给 lead 的条目从卡片消失（lead 对话流里照常出现一行「x 答复了 …」）。
+- 标题行：琥珀色「✉ 待 lead 处理 N」；状态说明随 lead 状态变：「lead 忙，空闲后合并交给它」/「lead 空闲，马上交给它」/「全部已暂缓」。
+- 每条两行：发件人 · 种类（回复 / 报告 / 分身结论 / 失败）+ 请求号 · 时间；第二行正文单行压平省略，悬停 title 显示全文前 600 字。
+- 顺序 = 交给 lead 的顺序：置顶的在前，其余按用户排的顺序（默认按到达）。
+- ⠿ 拖动排序（HTML5 拖放）；键盘：条目聚焦后 Alt+↑ / Alt+↓。
+- 📌 置顶 / 取消置顶。
+- ⏸ 暂缓：空闲投递跳过它，直到 ▶ 取消暂缓；暂缓的条目变淡。全部暂缓时 lead 空闲也不会被叫醒。
+- ⚡ 立即交给 lead：lead 忙 → 插进它当前回合的下一步（`steer`）；lead 空闲 → 立即开一回合。「全部交给 lead」= 对所有未暂缓条目做同样的事。
+- 点条目正文：在右侧打开该成员的对话，并像点成员行一样清掉它的黄点（`/agents seen`）。
+- 已交给 lead 的条目从这栏消失；lead 对话流里照常出现一行（例如「ibx-b、ibx-c 答复了 2 个请求」）。
+
+**无条目（②）**：收成一行「✉ 收件箱空」，右侧说明 lead 在干什么：
+
+- lead 正在跑、且刚交给它一批 → 「lead 正在处理刚交给它的 N 条」；
+- 还有请求没答 → 第二行「还有 N 个请求在 worker 那里（r-5 ibx-a、…）；回报到了先放这里」；
+- 两样都没有 → 只有一行「✉ 收件箱空」，不占高度。
+
+**窄右栏（③，宽度 < 280px）**：时间和状态说明隐藏；三个按钮收成一个 ⋯，点开在条目下展开一行操作（置顶 / 上移 / 下移 / 暂缓 / 立即交给 lead），不拖动。
+
+**条目很多（④）**：默认最多显示 4 条，其余折成「⌄ 还有 N 条」，点开全部显示（随 Agents 页一起滚动）。底部已有的「下面还有 N 个」只数成员行，不数收件箱条目——收件箱在页顶，计数在它自己的标题里。
+
+**与圆点、请求卡片的联动**
+
+- 圆点（#9 的 seen 记录）语义不变：成员回答了请求就变黄（待看），与回报是否已交给 lead 无关；点收件箱条目与点成员行一样会清黄点。
+- 成员行尾多一个 ✉：它有回报还在收件箱里没交给 lead（悬停：「N 条回报在收件箱等 lead」）。
+- 请求卡片（插话进成员回合的请求）不变。
+- 输入框左侧调度开关旁的「Agents N」按钮：收件箱非空时多一个琥珀色「✉N」，点它打开 Agents 页。
+
+**lead 的 `agent_list`**（用户定：给摘要）：多一个 `inbox` 数组，每条 `{ id, from, kind, request?, at, preview, pinned?, held? }`，`preview` 是正文前 120 字、单行压平；全文只在交付给 lead 时给。
 
 ### 3.3 数据流
 
@@ -212,27 +230,27 @@ IBX-b 回报：……
 |---|---|---|---|
 | 1 | 记录与投影：`mail` 记录类型、Ledger/投影折叠出有序收件箱（置顶优先，其余按 moved/入箱顺序） | `records.ts`、`projection.ts`、`ledger.ts` | `projection.spec.ts` 新增排序、暂缓、投递折叠 |
 | 2 | 投递器：`toLead` 改为入箱；`onStatus(main, idle)`、入箱时、`recover` 后投递；`admit` 中 settled 通知改为入箱；适配层新增 `steerLead` | `scheduler.ts`、`dsh/host/agent.ts` | 新 `tests/lead-inbox.spec.ts`：忙时不进 DSH inbox、idle 合并投递一次、用户排队消息先于收件箱、立即=steer、重启补投、崩溃窗口回滚；改现有依赖 `followup` 次数的断言（`scheduling-off`、`recovery`、`delegation`、`failed-worker`） |
-| 3 | 命令：`/agents mail pin|unpin|move|hold|release|now|now-all`（隐藏在 `/agents` 下，不占新的斜杠命令） | `rule-plugin.ts`、`tools.ts`（agent_list 是否展示收件箱见待定） | 命令解析与权限（只允许主会话） |
-| 4 | 客户端卡片：注册 `conversation.input.dock`（order 10），拖动排序与按钮；Agents 页收件箱区块与计数徽标；en/zh 文案 | `client/index.tsx`（或拆 `client/inbox.tsx`）、`dsh/client/ui.ts` 加 `SLOT.inputDock`、`i18n/en.ts`、`i18n/zh.ts` | `client.spec.ts` 渲染；`i18n.spec.ts` 键齐全 |
-| 5 | 契约测试与文档 | `tests/contract/host-api.spec.ts`（`Agent.steer`/`followup` 存在且分别进 next-step/next-turn）、`client-probe.spec.ts`（宿主仍声明 list 型 `conversation.input.dock`）、`boundary.spec.ts`（新文件不越界）、`docs/dsh-adapter.md` 依赖表加一行、README | 契约 |
+| 3 | 命令：`/agents inbox pin|unpin|hold|release|move|now <m-N>`、`/agents inbox now all`（隐藏在 `/agents` 下，不占新的斜杠命令）；`agent_list` 加 `inbox` 摘要 | `rule-plugin.ts`、`tools.ts` | 命令解析与权限（只允许主会话）；agent_list 摘要 |
+| 4 | 客户端：Agents 页顶部收件箱分区（拖动、按钮、窄栏 ⋯、折叠），成员行 ✉，调度开关旁 ✉N；en/zh 文案 | `client/inbox.tsx`（新）、`client/index.tsx`、`i18n/en.ts`、`i18n/zh.ts` | `client.spec.ts` 渲染；`i18n.spec.ts` 键齐全 |
+| 5 | 契约测试与文档 | `tests/contract/host-api.spec.ts`（`Agent.steer`/`followup` 存在且分别进 next-step/next-turn）、`boundary.spec.ts`（新文件不越界）、`docs/dsh-adapter.md` 依赖表加一行、README | 契约 |
 | 6 | GUI 冒烟（隔离 DSH_HOME）：复现本稿截图的场景，确认 QueueDock 只剩用户消息、卡片排序生效、lead 一回合处理全部 | `/tmp` 脚本 | 截图附 PR |
 
 提交、推送、开 PR，交给 scheduler-integrator 审查合并；不打 tag、不装本机。
 
-## 5. 风险与需要用户拍板的点
+## 5. 已定的点与风险
 
-需要定的：
+用户已定（r-57 / r-58）：
 
-1. **默认合并还是逐条**：推荐默认「合并成一条」（省回合、省 token，lead 一次看全）；逐条作为设置项。
-2. **「立即交给 lead」用 steer 打断当前回合**是否可以接受（DSH 原生子代理通知就是这么做的）；不接受则改成「排到下一回合最前」。
-3. **要不要「不交给 lead」**（标记已读后丢弃）：会造成 lead 不知道的已答请求。推荐**不提供**；若要，lead 至少会收到一行「用户已处理 r-N，未转交」。
-4. **调度关时，用户自己排队的消息是否永远优先**：推荐是（就是「lead 空闲才投」的自然结果）；若希望某条回报插到用户消息前面，用「立即」。
-5. **卡片位置**：输入框上方、DSH 排队卡片之上（推荐），还是只放 Agents 页 + 徽标（零 B 级依赖，但不够显眼）。
-6. **lead 的 `agent_list` 是否显示收件箱里还没交给它的条目**（推荐显示条数与发件人，不显示正文，避免 lead 去「偷看」被暂缓的回报）。
+1. 默认**合并成一条**交给 lead。
+2. 「立即交给 lead」用插话（`steer`）打断当前回合——只在用户手动点时。
+3. **不提供**「不交给 lead」。
+4. 调度关时，用户自己排队的消息**永远优先**（lead 空闲才投，自然成立）。
+5. 位置：**Agents 页顶部独立分区**（3.1）。
+6. lead 的 `agent_list` 给**摘要**：发件人、请求号、时间、正文前 120 字（单行压平）；全文只在交付时给。
 
 风险：
 
-- `conversation.input.dock` 插槽名属 B 级依赖：宿主改名时卡片不出现（契约测试会报），投递逻辑与 Agents 页入口不受影响。
-- 调度关且用户不停给 lead 排消息时，回报会一直等；卡片显示「等 lead 空闲」并提供「立即」。
-- 与正在进行的其它分支（worker-split 等）在 `scheduler.ts` 的 `toLead` / `admit` 附近可能冲突，实现前先 rebase 到最新 `main`。
-- 现有用户的老会话：升级后，DSH inbox 里已经排着的旧 relay 消息照旧由 DSH 处理，不迁移。
+- 调度关且用户不停给 lead 排消息时，回报会一直等；分区标题写明「lead 忙，空闲后合并交给它」，并提供「全部交给 lead」。
+- Agents 页没打开时，用户只能从调度开关旁的「✉N」知道有回报在等。
+- 与其它分支（worker-split 等）在 `scheduler.ts` 的 `toLead` / `admit` 附近可能冲突，合并前 rebase。
+- 老会话：升级前已经排在 DSH 队列里的 relay 消息照旧由 DSH 处理，不迁移。
