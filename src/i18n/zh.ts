@@ -243,6 +243,8 @@ export const zh = {
   'merge.cancel': '取消',
   'merge.hint': '被合并方先写交接、提交代码，然后归档；它的名字以后都指向保留方。',
   'merge.pending': '合并中 {id}',
+  'merge.into': '合并到 {name} · {id}',
+  'merge.from': '合并 {name} 进来 · {id}',
 
   'cmd.agents.usage': '用法：/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b>',
   'cmd.agents.renameUsage': '用法：/agents rename <name> <new-name>',
