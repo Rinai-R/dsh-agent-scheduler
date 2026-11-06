@@ -8,6 +8,7 @@
 import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
+import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE } from './layout.js'
 import { reviewOf } from '../review.js'
 import {
@@ -928,7 +929,8 @@ export function createMemberModelPicker(deps: {
   rosterFace: (parent: string) => Face
   run: (sessionId: string, line: string) => Promise<string | null>
   has: (sessionId: string, name: string) => Promise<boolean>
-  catalog: () => Promise<readonly CatalogGroup[]>
+  /** The composer's model catalog (see catalog-source.ts), shared by every menu of this plugin. */
+  catalog: CatalogSource
 }) {
   return memo(function MemberModelPicker(props: { sessionId?: string }) {
     const sessionId = props.sessionId
@@ -938,7 +940,9 @@ export function createMemberModelPicker(deps: {
     const row = sessionId === undefined ? undefined : memberOf(roster, sessionId)
     const member = parentId === undefined || row === undefined ? undefined : { parent: parentId, name: row.name }
     const own = row?.pickedModel ?? null
-    const [groups, setGroups] = useState<readonly CatalogGroup[]>([])
+    // Live: follows every change the Host makes to the model list, like the composer's menu.
+    const catalog = useSyncExternalStore(deps.catalog.subscribe, deps.catalog.getSnapshot)
+    const groups = catalog.groups ?? []
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [supported, setSupported] = useState(false)
@@ -947,7 +951,7 @@ export function createMemberModelPicker(deps: {
       if (parent === undefined) return undefined
       let alive = true
       deps.has(parent, 'agent-model').then(ok => { if (alive) setSupported(ok) }, () => undefined)
-      deps.catalog().then(g => { if (alive) setGroups(g) }, () => undefined)
+      deps.catalog.load()
       return () => { alive = false }
     }, [parent])
     if (member === undefined || !supported) return null
@@ -967,8 +971,10 @@ export function createMemberModelPicker(deps: {
           defaultValue="默认模型"
           avoid={SEL.composerCard}
           busy={busy}
-          ariaLabel={`${member.name} 的模型：${label}`}
+          ariaLabel={`${member.name} 的模型：${label}${isStale(catalog, own) ? '（已失效，请重选）' : ''}`}
           title={`${member.name} 自己用的模型，下一次模型调用生效（/agent-model）。`}
+          stale={isStale(catalog, own)}
+          onOpen={deps.catalog.load}
           onPick={choose}
         />
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>切换失败</span>}
@@ -996,23 +1002,10 @@ export function workerModelCommand(selection: ForkModel | null): string {
 }
 
 /**
- * The menu's groups: the catalog, plus the current default when the catalog lacks it
- * (signed out, provider removed), so the control never silently shows another value.
- * @param groups - catalog groups, in catalog order.
- * @param current - the current default.
- * @returns groups to render.
- */
-export function workerModelGroups(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): readonly CatalogGroup[] {
-  if (current === null || current === undefined) return groups
-  if (groups.some(g => g.id === current.provider && g.models.some(m => m.id === current.model))) return groups
-  return [...groups, { id: current.provider, name: `${current.provider}（不在当前模型列表）`, models: [{ id: current.model, name: current.model }]}]
-}
-
-/**
  * What the 「Worker 默认模型」 trigger says for its model part.
- * @param groups - catalog groups (with any missing current default added).
+ * @param groups - catalog groups.
  * @param current - the default, or null.
- * @returns 「默认」 or the model's name.
+ * @returns 「默认」, the model's name, or its id when the catalog no longer lists it.
  */
 export function workerModelLabel(groups: readonly CatalogGroup[], current: ForkModel | null | undefined): string {
   if (current === null || current === undefined) return '默认'
@@ -1025,39 +1018,40 @@ export function workerModelLabel(groups: readonly CatalogGroup[], current: ForkM
  * @param deps - session, current value, command runner, and catalog loader.
  * @returns the control.
  */
-function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: () => Promise<readonly CatalogGroup[]> }) {
+function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: CatalogSource }) {
   const { sessionId, current, run, catalog } = deps
-  const [groups, setGroups] = useState<readonly CatalogGroup[] | undefined>(undefined)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  // Live: follows every change the Host makes to the model list, like the composer's menu.
+  const snapshot = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot)
+  const groups = snapshot.groups
+  const loadError = groups === undefined ? snapshot.error : null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let alive = true
-    catalog().then(g => { if (alive) setGroups(g) }, (reason: unknown) => { if (alive) setLoadError(reason instanceof Error ? reason.message : String(reason)) })
-    return () => { alive = false }
-  }, [sessionId])
+  useEffect(() => { catalog.load() }, [catalog])
   const change = (next: ForkModel | null) => {
     setBusy(true)
     setError(null)
     run(sessionId, workerModelCommand(next)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
   }
-  const shown = workerModelGroups(groups ?? [], current)
+  const shown = groups ?? []
+  const stale = isStale(snapshot, current)
   const label = workerModelLabel(shown, current)
-  const level = effortLabel(shown, current)
+  const level = stale ? undefined : effortLabel(shown, current)
   const value = workerModelValue(current)
   return (
     <div className="sch-forkmodel" data-scheduler-worker-model={value === '' ? 'default' : value}>
       <div className="sch-forkmodel-row">
         <span className="sch-forkmodel-label">Worker 默认模型</span>
         <ModelMenu
-          groups={groups === undefined ? undefined : shown}
+          groups={groups}
           current={current}
           label={label}
+          stale={stale}
+          onOpen={catalog.load}
           defaultLabel="默认（运行时默认模型）"
           defaultValue="默认"
           busy={busy}
           size="compact"
-          ariaLabel={`Worker 默认模型：${label}${level === undefined ? '' : ` · ${level}`}`}
+          ariaLabel={`Worker 默认模型：${label}${stale ? '（已失效，请重选）' : level === undefined ? '' : ` · ${level}`}`}
           title="之后新建的 worker 用哪个模型和推理等级（/worker model）。lead 创建 worker 时指定了模型就以它为准；都没指定时用运行时默认模型。已有的 worker 不受影响，可以在它自己的对话底栏单独换。分身不能单独换模型，始终和 lead 相同。"
           onPick={change}
           failure={loadError === null ? undefined : <div className="sch-mm-empty" role="status" title={loadError}>模型列表加载失败</div>}
@@ -1077,7 +1071,7 @@ export function createAgentsPage(ctx: {
   sidebarRight?: SidebarFace | undefined
   /** The sidebar resource address of a member's native chat. */
   chatAddress: (parent: string, child: string) => string
-}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: () => Promise<readonly CatalogGroup[]>) {
+}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: CatalogSource) {
   return memo(function AgentsPage(props: {
     sessionId?: string
     useProjection?: (key: string) => unknown
@@ -1348,7 +1342,12 @@ export function apply(ctx: any): void {
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)
-  const catalog = () => host.catalog<CatalogGroup>()
+  /**
+   * The composer's own model catalog (its live store, via the adapter), so these menus change
+   * with the composer's when the model list changes; see catalog-source.ts.
+   */
+  const catalog = catalogSource(host)
+  ctx.effect(() => () => { catalog.dispose() }, 'agent-scheduler: model catalog')
   /** The parent's roster projection; the parent is the open main Session, so its binding is retained. */
   const rosterFace = (parent: string): Face => host.projection(parent, ROSTER)
   const open = (parent: string, child: string) => {

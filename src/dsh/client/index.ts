@@ -5,6 +5,7 @@
  */
 export * from './dom.js'
 export * from './services.js'
+export * from './catalog.js'
 export * from './sidebar.js'
 export * from './ui.js'
 export { features, warnOnce, type Feature } from '../compat.js'

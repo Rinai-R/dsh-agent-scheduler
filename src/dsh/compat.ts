@@ -12,7 +12,7 @@ export type Feature =
   | 'sessionTitle' | 'modelSelection' | 'llm.resolve'
   // client
   | 'conversation.events' | 'slots' | 'sidebar.tabs' | 'sidebar.layout' | 'sidebar.gestures' | 'tabs.keepMounted'
-  | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'dom.stripTabs'
+  | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'modelDirectories.catalog' | 'dom.stripTabs'
 
 /** Thrown when the host answers in a shape this plugin does not know. */
 export class DshContractError extends Error {

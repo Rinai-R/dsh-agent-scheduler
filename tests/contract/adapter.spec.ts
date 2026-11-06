@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { features, resetWarnings, setWarnSink, warnOnce } from '../../src/dsh/compat.js'
 import { claimOnce, installGuard, missingRequired, turnEndOf } from '../../src/dsh/host/index.js'
-import { clientHost, commandFailure, gesturesOf, keepChatTabsMounted, layoutOf, registerSlot } from '../../src/dsh/client/index.js'
+import { CATALOG_EVENTS, clientHost, commandFailure, gesturesOf, keepChatTabsMounted, layoutOf, registerSlot } from '../../src/dsh/client/index.js'
 import * as RulePlugin from '../../src/rule-plugin.js'
 
 afterEach(() => { features.reset(); resetWarnings() })
@@ -83,12 +83,43 @@ describe('client degradation', () => {
     expect(await host.run('s', '/schedule on')).toMatch(/no command service/u)
     expect(await host.has('s', 'schedule')).toBe(false)
     expect(await host.catalog()).toEqual([])
+    expect(host.composerCatalog()).toBeUndefined()
+    expect(() => host.onCatalogChange(() => undefined)()).not.toThrow()
     expect(host.isChild('s')).toBe(false)
     expect(host.parentOf('s')).toBeUndefined()
     expect(host.projection('s', 'agentScheduler').getSnapshot()).toBeUndefined()
     expect(host.chatAddress('p', 'c')).toBe('dsh-resource://subagentchat/session/c?parent=p&mode=continuable')
     expect(registerSlot({}, 'chatNode', {}, () => null)).toBe(false)
     expect(() => keepChatTabsMounted({})()).not.toThrow()
+    undo()
+  })
+
+  it('reads the composer\'s live model catalog and its change events (C13)', async () => {
+    const store = { getSnapshot: () => ({ value: { groups: [] }, status: 'ready', error: null }), subscribe: () => () => undefined }
+    const catalog = { store, load: async () => undefined }
+    const handlers = new Map<string, () => void>()
+    const off = vi.fn()
+    const ctx = {
+      get: (name: string) => name === 'modelDirectories' ? { catalog } : undefined,
+      remote: {
+        $on: (event: string, listener: () => void) => { handlers.set(event, listener); return off },
+        session: { modelCatalog: async () => ({ ok: true, value: { groups: [{ id: 'p' }], failures: [{ id: 'q', message: 'down' }] } }) },
+      },
+    }
+    const host = clientHost(ctx)
+    expect(host.composerCatalog()).toBe(catalog)
+    expect(await host.modelCatalog()).toEqual({ groups: [{ id: 'p' }], failures: [{ id: 'q', message: 'down' }] })
+    const seen = vi.fn()
+    const dispose = host.onCatalogChange(seen)
+    expect([...handlers.keys()]).toEqual([...CATALOG_EVENTS])
+    handlers.get('settings/document-updated')!()
+    expect(seen).toHaveBeenCalledTimes(1)
+    dispose()
+    expect(off).toHaveBeenCalledTimes(CATALOG_EVENTS.length)
+    // A service in another shape is not used: the menus fall back to their own copy.
+    const { undo } = warnings()
+    expect(clientHost({ get: () => ({ catalog: { store: {} } }) }).composerCatalog()).toBeUndefined()
+    expect(features.has('modelDirectories.catalog')).toBe(false)
     undo()
   })
 

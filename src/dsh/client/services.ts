@@ -7,6 +7,7 @@
  */
 import { features, hasFunction, warnOnce } from '../compat.js'
 import { SUBAGENT_CHAT_KIND } from './sidebar.js'
+import { composerCatalog, onCatalogChange, type CatalogValue, type ComposerCatalog } from './catalog.js'
 
 /** One Session's live status as the client root hook `useSessionStatus` reports it. */
 export interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
@@ -48,6 +49,12 @@ export interface ClientHost {
   has(sessionId: string, name: string): Promise<boolean>
   /** The Host's provider-grouped model catalog, the one the composer's model menu lists. */
   catalog<G>(): Promise<readonly G[]>
+  /** The same catalog with the providers that failed to load, read once. */
+  modelCatalog<G>(): Promise<CatalogValue<G>>
+  /** The composer's own live catalog store (C13), or undefined when this DSH has none. */
+  composerCatalog<G>(): ComposerCatalog<G> | undefined
+  /** Run `listener` after each Host event on which the composer reloads its catalog. */
+  onCatalogChange(listener: () => void): () => void
   /** The parent of an addressed fork or worker chat; undefined for a main Session. */
   parentOf(sessionId: string): string | undefined
   /** Whether a Session is an addressed subagent (fork, worker, ordinary subagent). */
@@ -88,12 +95,21 @@ export function clientHost(ctx: any): ClientHost {
       return (result.value as readonly { name?: string }[]).some(command => command.name === name)
     },
     async catalog<G>() {
-      if (!features.record('remote.modelCatalog', hasFunction(ctx, 'remote.session.modelCatalog'), 'remote.session.modelCatalog')) return []
+      return (await this.modelCatalog<G>()).groups
+    },
+    async modelCatalog<G>() {
+      if (!features.record('remote.modelCatalog', hasFunction(ctx, 'remote.session.modelCatalog'), 'remote.session.modelCatalog')) return { groups: [] }
       const result = await ctx.remote.session.modelCatalog() as Result
       if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-      const groups = (result.value as Partial<CatalogShape> | undefined)?.groups
-      if (!Array.isArray(groups)) throw new Error('the model catalog came in a shape this plugin does not know')
-      return groups as readonly G[]
+      const value = result.value as Partial<CatalogShape> & { failures?: unknown } | undefined
+      if (!Array.isArray(value?.groups)) throw new Error('the model catalog came in a shape this plugin does not know')
+      return { groups: value.groups as readonly G[], ...(Array.isArray(value.failures) ? { failures: value.failures as CatalogValue['failures'] & object } : {}) }
+    },
+    composerCatalog<G>() {
+      return composerCatalog<G>(ctx)
+    },
+    onCatalogChange(listener) {
+      return onCatalogChange(ctx, listener)
     },
     parentOf(sessionId) {
       if (!address()) return undefined

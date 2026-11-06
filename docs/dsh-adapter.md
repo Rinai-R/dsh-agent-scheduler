@@ -80,6 +80,7 @@
 | C10 | `ctx.uiWorkspace.openSession(address)`（侧栏不可用时的兜底） | client/index.tsx:1352 | B | 兜底失效 |
 | C11 | `configForms.get(ns)` → `{ getSnapshot, subscribe, mutate }`；`whileServed` | recovery-config.tsx:85-92 | B | 插件页的「重启恢复」设置消失 |
 | C12 | 会话状态行字段 `running / pendingInteraction / completionUnread` | client/index.tsx:45, 324, 348, 1185 | B | 「在跑 / 在等你」状态和黄点全错 |
+| C13 | `modelDirectories.catalog`（dsh-client-ui-model-selection）：`store` 为 `{ value, status, error }` 快照 store，`value` 即 `remote.session.modelCatalog()` 的答复；`load()`；宿主在 `llm/adapters-updated`、`settings/document-updated`、`credentials/record-updated`、`credentials/reference-updated` 上刷新；composer 模型位就渲染这份 store | client/catalog-source.ts、dsh/client/catalog.ts | B | Worker 默认模型和 worker 底栏的模型菜单不再随模型列表实时更新（退回自取一份、按同样事件和每次打开菜单刷新） |
 
 ### 1.4 前端对宿主 DOM / CSS 的依赖
 
@@ -120,7 +121,7 @@
 | 级别 | 数量 | 项 |
 |---|---|---|
 | A 公开 | 17 | H1, H2, H3, H7, H9, H10, H11, H13, H14, H15, H19, H20, H22, D7, C3, C5, P2 |
-| B 导出未文档化 / 行为约定 | 24 | H5, H6, H8, H12, H16, H17, H18, H21, D1, D1b, D3, D5, D6, C1, C2, C7-C12, U6, T7, P4 |
+| B 导出未文档化 / 行为约定 | 25 | H5, H6, H8, H12, H16, H17, H18, H21, D1, D1b, D3, D5, D6, C1, C2, C7-C13, U6, T7, P4 |
 | C 纯内部 | 19 | H4, H10b, D2, D4, C4, C6, U1-U5, T1-T6, P1, P3 |
 
 已核对：rc.5 → 0.2.2-rc.1 期间，上述 B/C 级的锚点（sidebar 的 `mountedSurface / actionsFor / dropTab / placeTab / resizeSplit / keepMounted`、`subagentchat` 地址、`subagentAddress`、`data-dockkit-strip-tabs`、`turn-process / turn-tail`、T1/T3 文案、`ACTIVATION_LIMIT_REACHED`）在 @next 中都还在；D5 已经在这个区间内变过一次。
@@ -325,6 +326,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 | C5, C6 | `client/sidebar.ts` `sidebarPort`；`client/layout.ts` 的纯计算（`nextRosterStep` 等）留在业务，只吃归一化后的 `DockLayout` |
 | C7, C8, C10 | `client/services.ts` |
 | C12 | `client/services.ts` `statusOf(row)` 归一为 `{ running, waiting }` |
+| C13 | `client/catalog.ts` `composerCatalog / onCatalogChange`，经 `client/services.ts` 的 `composerCatalog / modelCatalog / onCatalogChange` 暴露 |
 | U1-U4 | `client/dom.ts` `SEL / steadyTabStrips / domPlacement / HOST_CSS` |
 | U5 | `client/dom.ts` 导出 `TOKENS` 清单，契约测试逐个检查；业务 CSS 照写，但只能用清单里的 token |
 | U6 | scripts/build-client.mjs（不进 src，契约测试覆盖） |
