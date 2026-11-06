@@ -8,7 +8,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import AgentTeam from '@deepseek-ai/dsh-experimental-agent-team'
 import * as ToolAgentTeam from '@deepseek-ai/dsh-experimental-tool-agent-team'
-import { setup, stored, teardown } from './support/harness.js'
+import { gate, setup, stored, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
 import { body, install, until, user } from './support/scheduler.js'
 import { installWorkerTeams, isMainSession, teamPort } from '../src/dsh/host/index.js'
@@ -95,6 +95,31 @@ describe('a worker leads its own Agent Team', () => {
     expect(scheduler.ledgerOf(lead).requests.get('r-1')).toMatchObject({ state: 'answered', answer: 'FINAL SUMMARY with SLOW ANSWER' })
     expect(adapter.requests.some(r => body(r).includes('PARTIAL'))).toBe(true)
     void ctx
+  })
+
+  it('a worker whose teammates still work is not merged away', async () => {
+    const hold = gate()
+    let partialEnded = () => false
+    const { ctx, lead, scheduler } = await teamSetup(async o => {
+      if (isWorker('tw')(o)) {
+        if (called(o, 'spawn_teammate') === 0) return toolCallResponse('s1', 'spawn_teammate', { name: 'slow', description: 'slow', prompt: 'SLOW: hold on' })
+        if (body(o).includes('SLOW DONE')) return textResponse('FINAL')
+        return textResponse('PARTIAL')
+      }
+      if (body(o).includes('SLOW: hold on')) { await hold.promise; return textResponse('SLOW DONE') }
+      return textResponse('OK')
+    })
+    await scheduler.createWorker(lead, { name: 'other', role: 'other' })
+    await scheduler.createWorker(lead, { name: 'tw', role: 'leads', task: 'get it done' })
+    partialEnded = () => {
+      const w = scheduler.ledgerOf(lead).find('tw')
+      const agent = w === undefined ? undefined : ctx.agents.get(w.id as never) as Agent | undefined
+      return agent !== undefined && agent.status === 'idle' && JSON.stringify(agent.session.snapshotEvents()).includes('PARTIAL')
+    }
+    await vi.waitFor(() => { expect(partialEnded()).toBe(true) }, { timeout: 15_000 })
+    await expect(scheduler.merge(lead, { absorbed: 'tw', into: 'other' })).rejects.toThrow(/leads a team whose teammates are still working/)
+    hold.open()
+    await until(lead, '[reply to r-1 from tw]')
   })
 
   it('who may form a team: lead only while scheduling is off; forks never; teammates never', async () => {

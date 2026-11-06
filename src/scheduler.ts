@@ -734,6 +734,12 @@ export class Scheduler {
     queueMicrotask(() => { this.syncTeamOf(agent) })
   }
 
+  /** Whether a teammate of the Team this worker leads is running or still being created. */
+  private teamRunning(memberId: string): boolean {
+    const agent = this.live(memberId)
+    return agent !== undefined && this.deps.team?.busy(agent) === true
+  }
+
   /** Whether a worker's teammates are still at work: its round's answer would be partial. */
   private teamBusy(memberId: string): boolean {
     const agent = this.live(memberId)
@@ -1256,6 +1262,8 @@ export class Scheduler {
     const writes = absorbed.state === 'started'
     if (writes) {
       if (statusOf(this.deps.agents, absorbed.id) === 'running') throw new Error(`"${absorbed.name}" is running; wait until its round ends (or agent_interrupt it), then merge`)
+      // Its teammates are its own children: archiving it would stop them with their work unfinished.
+      if (this.teamRunning(absorbed.id)) throw new Error(`"${absorbed.name}" leads a team whose teammates are still working; wait until they have answered (or interrupt them), then merge`)
       const open = ledger.openTo(absorbed.id).map(r => r.id)
       if (open.length > 0) throw new Error(`"${absorbed.name}" still owes ${open.join(', ')}; wait for those answers (or interrupt or archive it), then merge`)
       if (this.queue.some(p => p.memberId === absorbed.id)) throw new Error(`"${absorbed.name}" has a delivery waiting for a slot; merge once it ran`)
