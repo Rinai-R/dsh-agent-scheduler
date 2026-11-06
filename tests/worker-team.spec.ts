@@ -72,15 +72,23 @@ describe('a worker leads its own Agent Team', () => {
   })
 
   it('a worker that ends its turn before its teammate answers answers the lead only with its summary', async () => {
+    let partialEnded = () => false
     const { ctx, lead, scheduler, adapter } = await teamSetup(async o => {
       if (isWorker('tw')(o)) {
         if (called(o, 'spawn_teammate') === 0) return toolCallResponse('s1', 'spawn_teammate', { name: 'slow', description: 'slow', prompt: 'SLOW: take your time' })
         if (body(o).includes('SLOW ANSWER')) return textResponse('FINAL SUMMARY with SLOW ANSWER')
         return textResponse('PARTIAL: waiting for slow')
       }
-      if (body(o).includes('SLOW: take your time')) { await new Promise(r => setTimeout(r, 400)); return textResponse('SLOW ANSWER') }
+      // The teammate answers only after the worker's first round ended with PARTIAL, so that round
+      // is a real partial one however the host schedules the two.
+      if (body(o).includes('SLOW: take your time')) { await vi.waitFor(() => { expect(partialEnded()).toBe(true) }, { timeout: 15_000 }); return textResponse('SLOW ANSWER') }
       return textResponse('LEAD')
     })
+    partialEnded = () => {
+      const w = scheduler.ledgerOf(lead).find('tw')
+      const agent = w === undefined ? undefined : ctx.agents.get(w.id as never) as Agent | undefined
+      return agent !== undefined && agent.status === 'idle' && JSON.stringify(agent.session.snapshotEvents()).includes('PARTIAL: waiting for slow')
+    }
     await scheduler.createWorker(lead, { name: 'tw', role: 'leads', task: 'get it done' })
     await until(lead, 'FINAL SUMMARY with SLOW ANSWER')
     expect(JSON.stringify(lead.session.snapshotEvents())).not.toContain('[reply to r-1 from tw]\\nPARTIAL')

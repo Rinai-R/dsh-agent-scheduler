@@ -708,7 +708,12 @@ export class Scheduler {
   /** Whether a worker's teammates are still at work: its round's answer would be partial. */
   private teamBusy(memberId: string): boolean {
     const agent = this.live(memberId)
-    return agent !== undefined && this.deps.team?.busy(agent) === true
+    if (agent === undefined || this.deps.team === undefined) return false
+    if (this.deps.team.busy(agent)) return true
+    // A teammate that already finished has its answer waiting in the worker's inbox: the worker
+    // takes it in another round, and that round's summary is the answer, not this one's.
+    const team = this.deps.team.snapshot(agent)
+    return team !== undefined && team.members.length > 0 && pendingOf(agent).length > 0
   }
 
   /** Settle a member outside a lead step; what is for the lead is queued as its own message. */
@@ -1596,10 +1601,22 @@ async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMes
  */
 function cutByHost(main: Agent): boolean {
   const events = eventsOf(main.session)
-  for (let i = events.length - 1; i >= Math.max(0, events.length - 50); i -= 1) {
-    if (events[i]!.type !== 'turn/end') continue
+  // A turn that never ran a step (a late runtime notice woke the lead and the scheduler emptied
+  // it) says nothing about the lead being back: look past it to the last turn that did work.
+  for (let i = events.length - 1; i >= Math.max(0, events.length - 200); i -= 1) {
+    if (events[i]!.type !== 'turn/end' || !turnHasStep(events, i)) continue
     const end = turnEndOf(events[i]!)
     return end.kind === 'interrupted' || (end.kind === 'aborted' && (end.cause === 'disposed' || end.cause === 'parent'))
+  }
+  return false
+}
+
+/** Whether the turn that ends at `end` ran at least one step. */
+function turnHasStep(events: readonly SessionEvent[], end: number): boolean {
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const type = events[i]!.type
+    if (type === 'step/start') return true
+    if (type === 'turn/start' || type === 'turn/end') return false
   }
   return false
 }
