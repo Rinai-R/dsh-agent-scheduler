@@ -55,7 +55,7 @@ worker 负责干活，每条请求、答复和结论都回到 lead——你只�
 ```bash
 dsh plugin add dsh-agent-scheduler                   # npm 上的最新正式版
 dsh plugin add dsh-agent-scheduler@next              # 最新预发布版
-dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.2.tgz  # Release 附带的 tgz
+dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.3.tgz  # Release 附带的 tgz
 dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 ```
 
