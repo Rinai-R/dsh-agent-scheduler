@@ -184,14 +184,14 @@ flowchart LR
   S -->|新：appendMail queued| L[(主会话日志<br/>plugin:…/mail 记录)]
   L --> P[agentScheduler 投影<br/>mail 列表]
   P --> UI[收件箱卡片 / Agents 页]
-  UI -->|/agents mail pin/move/hold/now| C[命令] --> L
+  UI -->|/agents inbox pin/move/hold/now| C[命令] --> L
   L --> D{投递器}
   E[agent/status idle<br/>主会话打开/恢复] --> D
   D -->|lead idle：就绪条目合并<br/>appendMail delivered + followup| Lead[lead]
   C -->|now 且 lead 忙：appendMail delivered + steer| Lead
 ```
 
-- **谁写**：只有 host 侧 Scheduler 写 `mail` 记录（结算、投递、用户命令三处）；客户端只发 `/agents mail …` 命令（沿用现在 Agents 页走 `remote.commands.execute` 的模式），不直接改状态。
+- **谁写**：只有 host 侧 Scheduler 写 `mail` 记录（结算、投递、用户命令三处）；客户端只发 `/agents inbox …` 命令（沿用现在 Agents 页走 `remote.commands.execute` 的模式），不直接改状态。
 - **谁读**：host 的 Ledger 与客户端的 `agentScheduler` 投影是同一个折叠（[projection.ts](../src/projection.ts) 现有约定），卡片和投递器看到的顺序一致。
 - **何时投递**：
   1. 主会话 `agent/status → idle`；
@@ -254,3 +254,25 @@ IBX-b 回报：……
 - Agents 页没打开时，用户只能从调度开关旁的「✉N」知道有回报在等。
 - 与其它分支（worker-split 等）在 `scheduler.ts` 的 `toLead` / `admit` 附近可能冲突，合并前 rebase。
 - 老会话：升级前已经排在 DSH 队列里的 relay 消息照旧由 DSH 处理，不迁移。
+
+## 6. 实现与实测
+
+实现与设计的差异：
+
+- DSH 关停时会先取消 lead 正在跑的回合，lead 因此变成空闲。如果这时把收件箱交出去，消息会落进一个没人唤醒的队列。所以**被 DSH 切断的回合（`aborted` + `disposed`/`parent`，或 `interrupted`）结束后不投递**，收件箱原样保留，DSH 回来后由 `recover` 交给 lead。用户按 Stop 停下的回合照常投递。
+- 输入框旁的 Agents 按钮加了琥珀色 `✉N`；成员行尾加了 ✉。
+- 已知限制：收件箱的每个操作都是一条 `/agents inbox …` 命令，lead 的对话流里会出现一行「agents · Arranged m-N」，和现在 `/agents seen` 一样，宿主没有静默执行命令的接口。
+
+隔离环境实测（`DSH_HOME=/tmp/inbox-gui/home`，mock 模型，调度关）：
+
+| 场景 | 截图 | 结果 |
+|---|---|---|
+| lead 忙，3 条回报进收件箱 | [1-busy](img/lead-inbox-1-busy.png) | 输入框上方的排队消息卡片里没有任何 worker 回报 |
+| 用户在 lead 忙时排了一条消息 | [2-user-queue](img/lead-inbox-2-user-queue.png) | 排队卡片里只有用户自己的那条 |
+| 置顶 m-3、暂缓 m-1 | [3-arranged](img/lead-inbox-3-arranged.png) | 顺序变为 m-3📌、m-1⏸、m-2 |
+| 对 m-2 点 ⚡ | [4-now](img/lead-inbox-4-now.png) | m-2 插进 lead 正在跑的回合 |
+| lead 跑完 | [5-after](img/lead-inbox-5-after.png) | 先处理插话的 r-2，再处理用户排队的消息，然后是收件箱里的 r-3；暂缓的 m-1 留在收件箱 |
+| 收件箱空 | [empty-state](img/lead-inbox-empty-state.png) | 显示「lead 正在处理刚交给它的 1 条」 |
+| lead 忙时重启 DSH（m-1 暂缓） | [6-restart](img/lead-inbox-6-restart.png) | 被切断的回合显示 Stopped；重启后暂缓的 m-1 还在，未暂缓的 r-2、r-3 合并成一条交给 lead |
+
+![重启后](img/lead-inbox-6-restart.png)

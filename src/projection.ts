@@ -6,9 +6,11 @@
  */
 import type { SessionEvent, SessionHeader, SessionLogOffset } from './dsh/types.js'
 import type { Parser } from './dsh/host/services.js'
-import { inputOf, recordReaders as R, type ForkModelSelection } from './records.js'
+import { inputOf, recordReaders as R, type ForkModelSelection, type MailKind } from './records.js'
 import { memberModelRecordOf } from './member-model.js'
 import { unread } from './review.js'
+
+export { mailPreview } from './mail.js'
 
 /** Projection key registered with the session-projection registry. */
 export const SCHEDULER_PROJECTION = 'agentScheduler'
@@ -67,6 +69,33 @@ export interface RosterRequest {
   readonly deliveredTo?: string | undefined
 }
 
+/** One message waiting in the lead's inbox. */
+export interface MailItem {
+  /** `m-N`. */
+  readonly id: string
+  /** The member's Session id. */
+  readonly from: string
+  readonly kind: MailKind
+  /** The request it answers or fails. */
+  readonly request?: string | undefined
+  /** What the lead reads (the view carries at most {@link VIEW_TEXT} characters). */
+  readonly text: string
+  /** Time (ms) it arrived. */
+  readonly at: number
+  readonly pinned?: true | undefined
+  /** Held by the user: skipped when the lead is handed its inbox, until released. */
+  readonly held?: true | undefined
+}
+
+/** The latest batch handed to the lead. */
+export interface MailDelivery {
+  readonly count: number
+  /** Time (ms) it was handed over. */
+  readonly at: number
+  /** Requests it answered or failed. */
+  readonly requests: readonly string[]
+}
+
 /** Whole fold state of one main Session; plain JSON. */
 export interface Roster {
   /** Scheduling switch as last recorded; null before any `/schedule`. */
@@ -78,6 +107,11 @@ export interface Roster {
   readonly workerModel?: ForkModelSelection | null
   readonly members: readonly RosterMember[]
   readonly requests: readonly RosterRequest[]
+  /** The lead's inbox, in the user's order (see {@link mailOrder}); absent in states saved before it existed. */
+  readonly mail?: readonly MailItem[]
+  /** Messages ever queued: the sequence of `m-N`. */
+  readonly mailCount?: number
+  readonly delivered?: MailDelivery
 }
 
 /** What the client receives: members and the requests still open. */
@@ -91,7 +125,21 @@ export interface RosterView {
   readonly workerModel: ForkModelSelection | null
   readonly members: readonly Omit<RosterMember, 'settledThrough'>[]
   readonly openRequests: readonly Pick<RosterRequest, 'id' | 'from' | 'to' | 'text'>[]
+  /** The lead's inbox in delivery order; absent from hosts before it existed. */
+  readonly inbox?: readonly MailItem[]
+  readonly delivered?: MailDelivery
 }
+
+/** Characters of a message the client view carries (its tooltip). */
+export const VIEW_TEXT = 600
+
+/**
+ * The order the lead gets its inbox in: pinned messages first, then the rest, each in the
+ * user's order.
+ * @param mail - the inbox as folded.
+ * @returns the same messages, ordered.
+ */
+export const mailOrder = (mail: readonly MailItem[]): MailItem[] => [...mail.filter(m => m.pinned === true), ...mail.filter(m => m.pinned !== true)]
 
 export const EMPTY_ROSTER: Roster = { enabled: null, role: null, forkModel: null, members: [], requests: [] }
 
@@ -254,12 +302,42 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
     if (member === undefined || !unread(member)) return state
     return { ...state, members: upsert(state.members, seen.agent, m => ({ ...m!, seenAt: event.time })) }
   }
+  const mail = R.mail(event)
+  if (mail !== undefined) return applyMail(state, mail, event.time)
   const settled = R.settled(event)
   if (settled !== undefined) {
     if (!state.members.some(m => m.id === settled.agent)) return state
     return { ...state, members: upsert(state.members, settled.agent, m => ({ ...m!, settledThrough: settled.through })) }
   }
   return state
+}
+
+function applyMail(state: Roster, mail: NonNullable<ReturnType<typeof R.mail>>, time: number): Roster {
+  const items = state.mail ?? []
+  if (mail.action === 'queued') {
+    if (items.some(m => m.id === mail.id)) return state
+    const item = compact<MailItem>({ id: mail.id!, from: mail.from!, kind: mail.kind!, request: mail.request, text: mail.text!, at: time })
+    return { ...state, mail: [...items, item], mailCount: (state.mailCount ?? 0) + 1 }
+  }
+  if (mail.action === 'delivered') {
+    const gone = items.filter(m => mail.ids!.includes(m.id))
+    if (gone.length === 0) return state
+    const requests = gone.flatMap(m => m.request === undefined ? [] : [m.request])
+    return { ...state, mail: items.filter(m => !mail.ids!.includes(m.id)), delivered: { count: gone.length, at: time, requests } }
+  }
+  const item = items.find(m => m.id === mail.id)
+  if (item === undefined) return state
+  if (mail.action === 'moved') {
+    const rest = items.filter(m => m.id !== item.id)
+    const at = mail.before === null || mail.before === undefined ? -1 : rest.findIndex(m => m.id === mail.before)
+    const next = at < 0 ? [...rest, item] : [...rest.slice(0, at), item, ...rest.slice(at)]
+    return next.every((m, i) => m === items[i]) ? state : { ...state, mail: next }
+  }
+  const flag = mail.action === 'pinned' || mail.action === 'unpinned' ? 'pinned' : 'held'
+  const on = mail.action === 'pinned' || mail.action === 'held'
+  if ((item[flag] === true) === on) return state
+  const { [flag]: _, ...rest } = item
+  return { ...state, mail: items.map(m => m === item ? (on ? { ...rest, [flag]: true as const } : rest) : m) }
 }
 
 const views = new WeakMap<Roster, RosterView>()
@@ -279,6 +357,8 @@ export function rosterView(state: Roster): RosterView {
       workerModel: state.workerModel ?? null,
       members: state.members.map(({ settledThrough: _, ...member }) => member),
       openRequests: state.requests.filter(r => r.state === 'sent').map(({ id, from, to, text }) => ({ id, from, to, text })),
+      inbox: mailOrder(state.mail ?? []).map(m => m.text.length > VIEW_TEXT ? { ...m, text: `${m.text.slice(0, VIEW_TEXT)}…` } : m),
+      ...(state.delivered === undefined ? {} : { delivered: state.delivered }),
     }
     views.set(state, view)
   }
@@ -311,6 +391,21 @@ function checkMember(m: unknown, view: boolean): void {
   if (m.seenAt !== undefined && typeof m.seenAt !== 'number') fail('member seenAt')
 }
 
+function checkMail(value: unknown): void {
+  if (value === undefined) return
+  if (!Array.isArray(value)) fail('mail')
+  for (const m of value) {
+    if (!isRecord(m) || !isString(m.id) || !isString(m.from) || !isString(m.text) || typeof m.at !== 'number') fail('mail item')
+    if (!['reply', 'report', 'conclusion', 'failure'].includes(m.kind as string)) fail('mail kind')
+    if (!optionalString(m.request) || (m.pinned !== undefined && m.pinned !== true) || (m.held !== undefined && m.held !== true)) fail('mail item')
+  }
+}
+
+function checkDelivered(value: unknown): void {
+  if (value === undefined) return
+  if (!isRecord(value) || typeof value.count !== 'number' || typeof value.at !== 'number' || !Array.isArray(value.requests) || !value.requests.every(isString)) fail('delivered')
+}
+
 /**
  * Validators for persisted state and the wire copy. They check the shape for real without adding
  * zod to the published dependencies; registerProjection (src/dsh/host/services.ts) adapts them.
@@ -327,6 +422,9 @@ export const rosterSchema = {
       if (r.state !== 'sent' && r.state !== 'answered' && r.state !== 'failed') fail('request state')
       for (const key of ['messageId', 'answer', 'deliveredTo']) if (!optionalString(r[key])) fail(`request ${key}`)
     }
+    checkMail(value.mail)
+    if (value.mailCount !== undefined && typeof value.mailCount !== 'number') fail('mailCount')
+    checkDelivered(value.delivered)
     return value as unknown as Roster
   },
 } satisfies Parser<Roster>
@@ -338,6 +436,8 @@ export const rosterViewSchema = {
     checkForkModel(value.forkModel)
     if (value.workerModel !== undefined) checkForkModel(value.workerModel)
     for (const m of value.members) checkMember(m, true)
+    checkMail(value.inbox)
+    checkDelivered(value.delivered)
     return value as unknown as RosterView
   },
 } satisfies Parser<RosterView>

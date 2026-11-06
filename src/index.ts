@@ -44,8 +44,8 @@ export function apply(ctx: Context, config: Config): void {
     // 3: the fold carries the scheduling switch. 4: the `/fork model` override. 5: each member's
     // own model. 6: who created a worker for which input, and each member's unread report.
     // 7: a renamed worker's former names, and the area workers split from one area share.
-    // Older cached state is dropped and refolded.
-    stateVersion: 7,
+    // 8: the lead's inbox. Older cached state is dropped and refolded.
+    stateVersion: 8,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,

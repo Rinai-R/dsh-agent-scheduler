@@ -11,6 +11,8 @@ import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGro
 import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE } from './layout.js'
 import { reviewOf } from '../review.js'
+import type { MailDelivery, MailItem } from '../projection.js'
+import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { list, t, tn, useLocale } from './i18n.js'
 import {
   chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
@@ -49,7 +51,12 @@ interface Ctx { key: string; id: string; state?: State; start?: { location: unkn
 interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
-interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
+interface Roster {
+  readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[]
+  /** The lead's inbox in delivery order; absent from a host not restarted since it existed. */
+  readonly inbox?: readonly MailItem[]
+  readonly delivered?: MailDelivery
+}
 /** One Session's live status as the client root hook reports it. */
 
 /** What the roster draws for one member: lifecycle record, refined by live status. */
@@ -647,6 +654,7 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
             {t('agents.title')}
             {label.text === '' ? (members.length === 0 ? null : <span className="sch-agents-n">{members.length}</span>) : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
             <ReviewBadge summary={unreadReports} />
+            {(roster?.inbox?.length ?? 0) === 0 ? null : <span className="sch-agents-mail" data-scheduler-mail={roster!.inbox!.length} title={tn('inbox.member', roster!.inbox!.length)}>✉{roster!.inbox!.length}</span>}
           </button>
         )}
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>{t('error.switch')}</span>}
@@ -1183,6 +1191,7 @@ export function createAgentsPage(ctx: {
     const row = (member: Member) => {
       const state = rowStateOf(member, statuses)
       const pendingRequests = openTo(member.id)
+      const waiting = (roster?.inbox ?? []).filter(m => m.from === member.id).length
       const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
       const review = reviewMarkOf(member, statuses)
       // An archived member is history: one line, no subtitle. A dozen of them must not push the
@@ -1222,6 +1231,7 @@ export function createAgentsPage(ctx: {
             {second === '' ? null : <span className="sch-roster-sub">{second}</span>}
           </span>
           <span className="sch-roster-end">
+            {waiting === 0 ? null : <span className="sch-roster-mail" data-scheduler-mail={waiting} title={tn('inbox.member', waiting)}>✉</span>}
             {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => t('row.request', { id: r.id, text: r.text.replace(/\s+/gu, ' ').slice(0, 80) })).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
             <span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span>
             <span className="sch-roster-chev">{ICON.chevron}</span>
@@ -1276,6 +1286,17 @@ export function createAgentsPage(ctx: {
           </form>
         )}
         {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
+        {sessionId === undefined || rows.length === 0 || roster?.inbox === undefined ? null : (
+          <InboxSection
+            items={roster.inbox}
+            delivered={roster.delivered}
+            leadRunning={statuses?.get(sessionId)?.running === true}
+            owed={(roster.openRequests ?? []).map(r => `${r.id} ${rows.find(m => m.id === r.to)?.name ?? r.to}`)}
+            nameOf={id => rows.find(m => m.id === id)?.name ?? id}
+            run={line => run(sessionId, line)}
+            open={id => { const member = rows.find(m => m.id === id); if (member !== undefined) open(member) }}
+          />
+        )}
         {rows.length === 0
           ? <div className="sch-roster-empty">{t('empty.none')}<br />{t(roster?.enabled === true ? 'empty.on' : 'empty.off')}</div>
           : (
@@ -1335,7 +1356,7 @@ export function apply(ctx: any): void {
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
-  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE), 'agent-scheduler: styles')
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)

@@ -6,6 +6,7 @@ import type { Agent, ToolDefinition } from './dsh/types.js'
 import { defineTool, statusOf, type AgentLookup } from './dsh/host/index.js'
 import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, LEAD_OFF_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
+import { mailPreview } from './projection.js'
 
 type Live = AgentLookup
 
@@ -134,7 +135,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_list',
-      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, and the rosterVersion that agent_create, agent_split and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
+      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, the lead\'s inbox (answers waiting for the lead, each summarized; the whole text reaches the lead when it is free), and the rosterVersion that agent_create, agent_split and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
       parameters: {
         forks: { type: 'boolean', description: 'Also list forks, archived ones included: a debugging view, not part of routing.' },
       },
@@ -156,6 +157,12 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
           })),
           openRequests: [...ledger.requests.values()].filter(r => r.state === 'sent').map(r => ({ id: r.id, from: ledger.nameOf(r.from), to: ledger.nameOf(r.to), text: r.text.slice(0, 120) })),
           queued: scheduler.queued(ledger.mainId),
+          // Only the lead's own: what waits for it, summarized; the whole text comes when it is free.
+          ...(isMainSession(caller(exec)) ? { inbox: ledger.mail.map(m => ({
+            id: m.id, from: ledger.nameOf(m.from), kind: m.kind, ...(m.request === undefined ? {} : { request: m.request }),
+            at: new Date(m.at).toISOString(), preview: mailPreview(m.text),
+            ...(m.pinned === true ? { pinned: true } : {}), ...(m.held === true ? { held: true } : {}),
+          })) } : {}),
           rosterVersion: scheduler.rosterVersion(ledger),
         }
       },

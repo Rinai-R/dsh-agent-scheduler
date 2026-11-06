@@ -31,8 +31,13 @@ describe('input rule', () => {
     await vi.waitFor(() => { expect(adapter.requests.filter(r => r.sessionId !== 'lead').length).toBe(2) }, { timeout: 10_000 })
     expect(lead.status).toBe('running')
     hold.open()
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its conclusion')
     const log = lead.session.snapshotEvents()
+    // Both conclusions came while the lead was busy: they waited in its inbox and reach it together.
+    const merged = log.filter(e => e.type === 'user/message' && text(e).includes('Its conclusion'))
+    expect(merged).toHaveLength(1)
+    expect(text(merged[0]!)).toContain('The user said: input one')
+    expect(text(merged[0]!)).toContain('The user said: input two')
     // The input is logged (the composer's receipt) but shadowed: the lead reads it only inside a
     // fork's conclusion ("The user said: …"), never as a message of its own.
     const asOwn = (t: string) => JSON.stringify([{ type: 'text', text: t }])

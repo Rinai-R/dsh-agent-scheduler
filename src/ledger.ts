@@ -3,7 +3,7 @@
  * uses ({@link applyRoster}); this class only caches lookups for the current state.
  */
 import type { SessionEvent } from './dsh/types.js'
-import { applyRoster, EMPTY_ROSTER, type Roster, type RosterMember, type RosterRequest } from './projection.js'
+import { applyRoster, EMPTY_ROSTER, mailOrder, type MailItem, type Roster, type RosterMember, type RosterRequest } from './projection.js'
 
 export type { MemberState, RosterMember as Member, RosterRequest as Request } from './projection.js'
 
@@ -54,6 +54,12 @@ export class Ledger {
     this.requestIndex ??= new Map(this.current.requests.map(r => [r.id, r]))
     return this.requestIndex
   }
+
+  /** @returns the lead's inbox in delivery order. */
+  get mail(): MailItem[] { return mailOrder(this.current.mail ?? []) }
+
+  /** @returns the next inbox message id, `m-N`. */
+  nextMailId(): string { return `m-${(this.current.mailCount ?? 0) + 1}` }
 
   /** @returns the next fork display name. */
   nextForkName(): string { return `fork-${this.current.members.filter(m => m.kind === 'fork').length + 1}` }

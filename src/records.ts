@@ -15,12 +15,39 @@ export const ROLE_RECORD = 'plugin:dsh-agent-scheduler/role'
 export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
 export const SEEN_RECORD = 'plugin:dsh-agent-scheduler/seen'
+export const MAIL_RECORD = 'plugin:dsh-agent-scheduler/mail'
 
 /** The user opened a member's chat: its latest report is read (`/agents seen`). */
 export interface SeenRecord {
   readonly version: 1
   /** The member's Session id. */
   readonly agent: string
+}
+
+/** What a message for the lead is: a reply, a report, a fork's conclusion, or a failure. */
+export type MailKind = 'reply' | 'report' | 'conclusion' | 'failure'
+
+/**
+ * The lead's inbox: messages for the lead wait here, not in the runtime's queue, until the lead
+ * is idle (or the user hands them over now). The user orders, pins and holds them.
+ * - `queued`: a new message (`id`, `from`, `kind`, `text`, and `request` when it answers one);
+ * - `pinned` / `unpinned` / `held` / `released`: one message (`id`);
+ * - `moved`: `id` now stands before `before` (`null`: last);
+ * - `delivered`: `ids` were handed to the lead in one message (`via` followup or steer).
+ */
+export interface MailRecord {
+  readonly version: 1
+  readonly action: 'queued' | 'pinned' | 'unpinned' | 'held' | 'released' | 'moved' | 'delivered'
+  readonly id?: string
+  readonly ids?: readonly string[]
+  /** `queued`: the member's Session id. */
+  readonly from?: string
+  readonly kind?: MailKind
+  readonly request?: string
+  readonly text?: string
+  /** `moved`: the message it now stands before; null puts it last. */
+  readonly before?: string | null
+  readonly via?: 'followup' | 'steer'
 }
 
 /** Whether this Session hands each user message to a fork, switched by `/schedule on|off`. */
@@ -147,6 +174,8 @@ export const appendMode = (session: Session, on: boolean): SessionSeq =>
   appendPluginRecord(session, MODE_RECORD, { version: 1, on })
 export const appendSeen = (session: Session, record: Fields<SeenRecord>): SessionSeq =>
   appendPluginRecord(session, SEEN_RECORD, { version: 1, ...record })
+export const appendMail = (session: Session, record: Fields<MailRecord>): SessionSeq =>
+  appendPluginRecord(session, MAIL_RECORD, { version: 1, ...record })
 export const appendSettled = (session: Session, record: Fields<SettledRecord>): SessionSeq =>
   appendPluginRecord(session, SETTLED_RECORD, { version: 1, ...record })
 
@@ -216,4 +245,19 @@ export const recordReaders = {
   forkModel: (e: SessionEvent) => modelRecord(e, FORK_MODEL_RECORD),
   workerModel: (e: SessionEvent) => modelRecord(e, WORKER_MODEL_RECORD),
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
+  mail: (e: SessionEvent) => mailOf(e),
+}
+
+const MAIL_ACTIONS = new Set(['queued', 'pinned', 'unpinned', 'held', 'released', 'moved', 'delivered'])
+const MAIL_KINDS = new Set(['reply', 'report', 'conclusion', 'failure'])
+
+/** A well-formed mail record, or undefined. */
+function mailOf(e: SessionEvent): MailRecord | undefined {
+  const d = dataOf<Partial<MailRecord>>(e, MAIL_RECORD)
+  if (d === undefined || !MAIL_ACTIONS.has(d.action as string)) return undefined
+  if (d.action === 'delivered') return Array.isArray(d.ids) && d.ids.every(i => typeof i === 'string') ? d as MailRecord : undefined
+  if (typeof d.id !== 'string') return undefined
+  if (d.action === 'queued' && (typeof d.from !== 'string' || typeof d.text !== 'string' || !MAIL_KINDS.has(d.kind as string))) return undefined
+  if (d.action === 'moved' && d.before !== null && typeof d.before !== 'string') return undefined
+  return d as MailRecord
 }
