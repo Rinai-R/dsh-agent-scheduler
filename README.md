@@ -133,6 +133,15 @@ or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not 
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 
+**The lead's inbox.** Answers, reports, fork conclusions and failures that arrive while the lead is
+busy wait in the 「待 lead 处理」 section at the top of the Agents page, not in the composer's list
+of queued messages (that list stays yours). When the lead is free it gets them all in one message,
+after anything you queued for it. Drag to reorder (or Alt+↑/↓), 📌 pin, ⏸ hold (skipped until
+released), ⚡ hand one to the lead now (into its running turn), or 「全部交给 lead」. Click a message
+to open its sender's chat. A member with something waiting shows ✉ on its row, and the composer's
+Agents button shows ✉N. The inbox is a plugin record, so a restart keeps it; the lead's
+`agent_list` lists a summary of each (sender, request, time, the first 120 characters).
+
 ### Models
 
 **Forks always use the lead's model.** A fork replays the lead's history, so sharing the model also
@@ -160,6 +169,7 @@ All of these run in the main session.
 | `/agents archive <name>` | Archive a fork or worker; requests it still owes fail and the lead is told. |
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
+| `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`, `/agents inbox now all`, `/agents inbox move <m-N> [<m-N>\|end]` | Arrange the lead's inbox (the Agents page sends these). |
 | `/agents seen all` | Mark every unread report read (the Agents page's 「全部已读」). A session from before review marks shows its past reports unread once. |
 | `/worker` | Show the model later workers start with. |
 | `/worker model <provider>/<model> [effort]` | Set the default model for later workers. |

@@ -19,14 +19,14 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserMessage } from './dsh/types.js'
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
-  isLive, pendingOf, removePending, replacePending, rewriteSettled, SessionId, settledSender, statusOf, subagentPort, textOf, toLead, withoutReturnGuidance,
+  isLive, pendingOf, relayMessage, turnEndOf, removePending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
   type AgentLookup, type SessionLog, type SubagentPort, type SubagentService,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
-  type ForkModelSelection,
+  appendAgent, appendForkState, appendInput, appendMail, appendMode, appendRequest, appendRole, appendSeen, appendSettled, workerModelOf,
+  type ForkModelSelection, type MailKind,
 } from './records.js'
 import { schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
@@ -51,12 +51,16 @@ export const FORK_NOTICE = [
   'End your turn with a short conclusion of what was asked and what you handed to whom (or call report first): it goes to the lead automatically, and you are then archived.',
 ].join(' ')
 
+/** How answers reach the lead: through its inbox, together, when it is free. */
+export const INBOX_NOTICE = 'Answers that arrive while you are busy wait in your inbox (agent_list shows a summary of each) and reach you together in one message when you are free; the user may reorder or hold them, or hand one to you at once.'
+
 /** What the lead is for: the user reads only the lead's own replies. */
 export const LEAD_NOTICE = [
   'Otherwise you are the lead. The user\'s words never reach you directly; you receive forks\' conclusions as "The user said: ... Its conclusion: ...", workers\' answers as "[reply to r-N from name, asked by ...]", and failures as "[request r-N to name failed: ...]".',
   'When you create a worker yourself, pass for: the fork-N whose conclusion or the r-N whose reply you act on; each of those gets at most one worker, so a fork that already created one is not duplicated (the refusal names that worker: agent_send it instead).',
   'The user does not read those messages or the forks\' work: only your replies. Tell the user the result in your own words, briefly, with anything they must decide. Never say you already answered them unless you did in a reply of your own.',
   'The user\'s 调度 switch decides only whether their messages go to forks: when they turn it off they talk to you directly, you answer yourself, and you keep agent_list, agent_create, agent_send and the other worker tools.',
+  INBOX_NOTICE,
 ].join(' ')
 
 /**
@@ -67,6 +71,7 @@ export const LEAD_OFF_NOTICE = [
   'Scheduling (handing each user message to a fork) is off: the user talks to you, the lead, directly, and you answer them yourself.',
   'You can still use workers, long-lived agents with their own sessions, for work that should run in parallel or in its own repository or worktree: agent_list shows them with the rosterVersion that agent_create, agent_split and agent_send require, and dispatches run one at a time per session; start coarse (one worker per repository or module) and agent_split a busy worker\'s area for a new task. While scheduling is off, for is optional on agent_create and agent_split (pass the r-N whose reply you act on when there is one; each fork-N or r-N still gets at most one worker).',
   'Answers come to you as messages of their own: "[reply to r-N from name, asked by ...]", "[report from name, not a request]", "[request r-N to name failed: ...]", and a fork created while scheduling was on still concludes as "The user said: ... Its conclusion: ...". Do not wait for them. The user reads only your replies: tell them results in your own words. Do not use send_message or the subagent tools for this.',
+  INBOX_NOTICE,
 ].join(' ')
 
 // Moved to the DSH adapter; re-exported for callers of this module.
@@ -630,7 +635,11 @@ export class Scheduler {
   onStatus(agent: Agent, status: 'idle' | 'running'): void {
     if (status !== 'idle') return
     if (this.queue.length > 0) void this.drain()
-    if (isMainSession(agent)) return
+    // A lead that finished its turn takes what waited in its inbox, all in one message.
+    // Only a Session this scheduler already folded can have an inbox (a restart refolds it in `recover`).
+    // Not when DSH itself cut the turn (shutting down): the message would sit unread in a queue
+    // nobody wakes; `recover` hands the inbox over when the Session is back.
+    if (isMainSession(agent)) { if (this.ledgers.has(agent.id) && !cutByHost(agent)) this.deliverMail(agent); return }
     const main = this.live(mainIdOf(agent))
     if (main === undefined || !this.ledgerOf(main).members.has(agent.id)) return
     this.settleInBackground(main, agent.id)
@@ -1130,6 +1139,8 @@ export class Scheduler {
       const after = ledger.members.get(member.id)
       if (after !== undefined && after.state !== 'failed' && (ledger.openTo(member.id).length > 0 || (after.kind === 'fork' && after.state === 'started'))) this.settleInBackground(main, member.id)
     }
+    // What waited in the inbox when DSH stopped is still there: a free lead takes it now.
+    this.deliverMail(main)
   }
 
   private async recoverMember(main: Agent, memberId: string, policy: ReturnType<typeof recoveryPolicy>, openAtResume: ReadonlySet<string>): Promise<void> {
@@ -1246,15 +1257,9 @@ export class Scheduler {
         continue
       }
       changed = true
-      const forLead = await this.settleOnce(main, member.id)
-      if (forLead.length === 0) continue
-      // The runtime's row label says the child "will do no further work"; ours names what arrived.
-      const concluded = forLead.some(text => text.startsWith('The user said: '))
-      const replies = forLead.filter(text => !text.startsWith('[report from ')).length
-      const summary = concluded ? `${member.name} concluded`
-        : replies === 0 ? `${member.name} reported`
-        : `${member.name} answered ${replies === 1 ? 'a request' : `${replies} requests`}`
-      kept.push(rewriteSettled(message, summary, forLead.join('\n\n')))
+      // What the settlement has for the lead waits in its inbox like any other answer: the lead
+      // takes it when this turn is over, after anything the user queued, or when the user says so.
+      for (const text of await this.settleOnce(main, member.id)) this.toLead(main, text, member.id)
     }
     return changed ? kept : undefined
   }
@@ -1369,11 +1374,97 @@ export class Scheduler {
     forLead.push(this.headerOf(ledger, request, `request ${request.id} to ${by.name} failed: ${detail}`))
   }
 
-  /** Give the lead a message outside a step it is admitting: queued for its next turn. */
+  /**
+   * Give the lead a message: it waits in the lead's inbox (a plugin record), never in the
+   * runtime's queue, and reaches the lead when it is free ({@link deliverMail}).
+   */
   private toLead(main: Agent, text: string, sender: string): void {
-    // Queuing a message appends to the log too; a released lead gets it from `recover` instead.
+    // A released lead gets it from `recover` instead.
     if (!this.writable(main)) return
-    toLead(main, text, sender)
+    const ledger = this.ledgerOf(main)
+    const id = ledger.nextMailId()
+    const { kind, request } = mailKindOf(text)
+    this.record(main, s => appendMail(s, { action: 'queued', id, from: sender, kind, ...(request === undefined ? {} : { request }), text }))
+    this.scheduleDelivery(main)
+  }
+
+  private readonly deliveryDue = new WeakSet<Agent>()
+
+  /** Deliver once after the current burst of messages (one settlement can bring several). */
+  private scheduleDelivery(main: Agent): void {
+    if (this.deliveryDue.has(main)) return
+    this.deliveryDue.add(main)
+    queueMicrotask(() => { this.deliveryDue.delete(main); this.deliverMail(main) })
+  }
+
+  /** Whether the lead is working, or about to: running, or something already waits in its runtime queue. */
+  private leadBusy(main: Agent): boolean {
+    return statusOf(this.deps.agents, main.id) === 'running' || pendingOf(main).length > 0
+  }
+
+  /**
+   * Hand the lead its inbox in one message. Without `now`, only when the lead is free (so what
+   * the user queued for it goes first) and only what is not held. With `now` (the user's 「交给
+   * lead」), at once: into the running turn's next step, or a new turn when it is idle.
+   * @param main - the main agent.
+   * @param now - `all` (everything not held) or the ids to hand over now.
+   * @returns the ids handed over.
+   */
+  deliverMail(main: Agent, now?: 'all' | readonly string[]): string[] {
+    if (!isMainSession(main) || !this.writable(main)) return []
+    const busy = this.leadBusy(main)
+    if (now === undefined && busy) return []
+    const mail = this.ledgerOf(main).mail
+    const items = now === undefined || now === 'all' ? mail.filter(m => m.held !== true) : mail.filter(m => now.includes(m.id))
+    if (items.length === 0) return []
+    const ids = items.map(m => m.id)
+    const via = busy ? 'steer' : 'followup'
+    this.record(main, s => appendMail(s, { action: 'delivered', ids, via }))
+    const deliver = via === 'steer' ? steerLead : toLead
+    deliver(main, items.map(m => m.text).join('\n\n'), items[0]!.from)
+    return ids
+  }
+
+  /**
+   * Put what waits in the lead's inbox into a step that would otherwise hold nothing to answer
+   * (the lead was woken by a runtime notice the scheduler emptied). Nothing the user queued may
+   * be waiting: that goes first.
+   * @returns whether a message was added.
+   */
+  takeMail(main: Agent, messages: UserMessage[]): boolean {
+    if (!isMainSession(main) || !this.writable(main) || pendingOf(main).some(isUserInput)) return false
+    const items = this.ledgerOf(main).mail.filter(m => m.held !== true)
+    if (items.length === 0) return false
+    this.record(main, s => appendMail(s, { action: 'delivered', ids: items.map(m => m.id), via: 'followup' }))
+    messages.push(relayMessage(items.map(m => m.text).join('\n\n'), items[0]!.from))
+    return true
+  }
+
+  /**
+   * The user arranges the lead's inbox (`/agents inbox`).
+   * @param caller - the main agent (the user's command).
+   * @param action - pin, unpin, hold, release, move (before another message, or last), or now.
+   * @param id - an `m-N`, or `all` with `now`.
+   * @param before - `move`: the message it goes before; undefined puts it last.
+   * @returns the ids handed to the lead (`now`), else the id arranged.
+   */
+  arrangeMail(caller: Agent, action: 'pin' | 'unpin' | 'hold' | 'release' | 'move' | 'now', id: string, before?: string): string[] {
+    const main = this.mainOf(caller)
+    if (!isMainSession(caller)) throw new Error('the inbox belongs to the main session')
+    const mail = this.ledgerOf(main).mail
+    if (action === 'now' && id === 'all') return this.deliverMail(main, 'all')
+    if (!mail.some(m => m.id === id)) throw new Error(`no message ${id} in the lead's inbox (it may have been handed over already)`)
+    if (action === 'now') return this.deliverMail(main, [id])
+    if (action === 'move') {
+      if (before !== undefined && (before === id || !mail.some(m => m.id === before))) throw new Error(`no message ${before} in the lead's inbox`)
+      this.record(main, s => appendMail(s, { action: 'moved', id, before: before ?? null }))
+      return [id]
+    }
+    const record = ({ pin: 'pinned', unpin: 'unpinned', hold: 'held', release: 'released' } as const)[action]
+    this.record(main, s => appendMail(s, { action: record, id }))
+    // A release can leave a free lead something to take.
+    if (action === 'release') this.deliverMail(main)
+    return [id]
   }
 }
 
@@ -1396,6 +1487,8 @@ export async function preStep(
   const admitted = await scheduler.admit(agent, messages)
   if (admitted !== undefined) messages.splice(0, messages.length, ...admitted)
   const main = isMainSession(agent)
+  // A turn opened only by a runtime notice the scheduler emptied takes the lead's inbox instead.
+  if (step === 1 && main && admitted !== undefined && messages.every(isContextOnly)) scheduler.takeMail(agent, messages)
   // Checked on both sides of next(): listener order decides where the runtime's context appears.
   if (step === 1 && main && scheduler.isOn(agent) && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
   const decision = await next()
@@ -1414,4 +1507,32 @@ async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMes
   if (pending.length === 0) return false
   messages.push(...(await scheduler.admit(agent, pending) ?? pending))
   return !messages.every(isContextOnly)
+}
+
+/**
+ * Whether the main Session's latest turn was cut by DSH going away (not by the user's Stop).
+ * @param main - the main agent, just idle.
+ */
+function cutByHost(main: Agent): boolean {
+  const events = eventsOf(main.session)
+  for (let i = events.length - 1; i >= Math.max(0, events.length - 50); i -= 1) {
+    if (events[i]!.type !== 'turn/end') continue
+    const end = turnEndOf(events[i]!)
+    return end.kind === 'interrupted' || (end.kind === 'aborted' && (end.cause === 'disposed' || end.cause === 'parent'))
+  }
+  return false
+}
+
+/**
+ * What a message for the lead is, from the header the scheduler wrote on it.
+ * @param text - the message.
+ * @returns its kind, and the request it answers or fails.
+ */
+export function mailKindOf(text: string): { kind: MailKind; request?: string } {
+  const reply = /^\[reply to (r-\d+)\b/u.exec(text)
+  if (reply !== null) return { kind: 'reply', request: reply[1]! }
+  const failed = /^\[request (r-\d+) to .*? failed\b/u.exec(text)
+  if (failed !== null) return { kind: 'failure', request: failed[1]! }
+  if (text.startsWith('The user said: ')) return { kind: 'conclusion' }
+  return { kind: 'report' }
 }

@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+body{margin:0;background:#141416;color:#ddd;font:13px/1.45 -apple-system,"PingFang SC",sans-serif;padding:18px;width:1560px}
+h2{font-size:14px;margin:0 0 8px;color:#fff}
+.row{display:flex;gap:16px}
+.cand{border:1px solid #333;border-radius:10px;padding:12px;background:#1b1b1e}
+.pane{background:#1e1e21;border:1px solid #2c2c30;border-radius:8px;padding:10px;overflow:hidden}
+.head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+.title{font-size:14px;color:#fff;font-weight:600}.sum{font-size:11px;color:#999}
+.icons{color:#888;font-size:12px;letter-spacing:6px}
+.wm{font-size:11px;color:#aaa;border:1px solid #333;border-radius:6px;padding:4px 8px;margin-bottom:8px;display:flex;justify-content:space-between}
+.inbox{border:1px solid #6b5420;background:#221d12;border-radius:8px;padding:6px;margin-bottom:10px}
+.ih{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:#f0b44c;margin-bottom:5px}
+.ih .st{color:#b9a27a;font-size:11px}
+.btn{display:inline-block;border:1px solid #c9922e;color:#f0b44c;border-radius:6px;padding:0 6px;font-size:10.5px;margin-left:6px}
+.item{border:1px solid #3a3326;background:#1d1a14;border-radius:6px;padding:4px 6px;margin-bottom:4px;font-size:11.5px;display:flex;gap:5px;align-items:flex-start}
+.grip{color:#665b45}.body{flex:1;min-width:0}
+.who{color:#eee}.who small{color:#998}
+.txt{color:#a99f8b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acts{color:#c9a96a;white-space:nowrap;letter-spacing:3px}
+.pin{color:#f0b44c}.held{opacity:.55}
+.more{font-size:11px;color:#c9a96a;padding:2px 4px}
+.sect{display:flex;justify-content:space-between;font-size:11px;color:#999;margin:6px 0 4px}
+.m{font-size:12px;margin:4px 0;display:flex;justify-content:space-between}
+.m .r{color:#888;font-size:11px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+.g{background:#3fb96f}.y{background:#e0a93a}.gray{background:#777}
+.env{color:#f0b44c;font-size:11px;margin-left:4px}
+.empty{color:#8f8a80;font-size:11px;padding:2px 4px}
+.ann{color:#7fb2ff;font-size:11px;margin-top:8px;line-height:1.5}
+.below{font-size:11px;color:#bbb;border-top:1px solid #333;margin-top:6px;padding-top:4px}
+</style>
+<div class="row">
+
+<div class="cand" style="width:400px">
+<h2>① 有条目 · lead 忙（默认最多显示 4 条）</h2>
+<div class="pane">
+ <div class="head"><div><div class="title">Agents</div><div class="sum">5 个 · 1 在跑 · 2 待看</div></div><div class="icons">✓ ＋ ⇥</div></div>
+ <div class="wm"><span>Worker 默认模型</span><span>DeepSeek-V4.1 ▾</span></div>
+ <div class="inbox" data-scheduler-inbox>
+  <div class="ih"><span>✉ 待 lead 处理 3</span><span class="st">lead 忙，空闲后合并交给它<span class="btn">全部交给 lead</span></span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who"><span class="pin">📌</span> ibx-b <small>· 回复 r-3 · 13:42</small></div><div class="txt">IBX-b 回报：任务 b 已完成，结论若干行……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who">ibx-c <small>· 回复 r-4 · 13:43</small></div><div class="txt">IBX-c 回报：任务 c 已完成……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="item held"><span class="grip">⠿</span><div class="body"><div class="who">⏸ docs <small>· 失败 r-5 · 13:44 · 已暂缓</small></div><div class="txt">docs 归档时还没答完</div></div><span class="acts">📌▶⚡</span></div>
+ </div>
+ <div class="sect"><span>Worker</span><span>4 · 1 在跑</span></div>
+ <div class="m"><span><span class="dot y"></span>ibx-b<span class="env">✉</span></span><span class="r">已答复 ›</span></div>
+ <div class="m"><span><span class="dot y"></span>ibx-c<span class="env">✉</span></span><span class="r">已答复 ›</span></div>
+ <div class="m"><span><span class="dot g"></span>ibx-a</span><span class="r">在跑 ›</span></div>
+ <div class="m"><span><span class="dot gray"></span>docs</span><span class="r">空闲 ›</span></div>
+</div>
+<div class="ann">⠿ 拖动排序（键盘：聚焦后 Alt+↑/↓）· 📌 置顶/取消 · ⏸ 暂缓 / ▶ 取消暂缓 · ⚡ 立即交给 lead（lead 忙 = 插进它当前回合）<br>点条目 = 打开该成员对话并清它的黄点（同点成员行）。成员行尾 ✉ = 它有回报在收件箱。</div>
+</div>
+
+<div class="cand" style="width:330px">
+<h2>② 无条目时</h2>
+<div class="pane">
+ <div class="head"><div><div class="title">Agents</div><div class="sum">5 个 · 2 在跑</div></div><div class="icons">＋ ⇥</div></div>
+ <div class="wm"><span>Worker 默认模型</span><span>默认 ▾</span></div>
+ <div class="inbox" style="border-color:#333;background:#1b1b1d">
+  <div class="ih" style="color:#aaa;margin:0"><span>✉ 收件箱空</span><span class="st" style="color:#888">lead 正在处理刚交给它的 2 条</span></div>
+  <div class="empty">还有 3 个请求在 worker 那里（r-5 ibx-a、r-6 ibx-c、r-7 docs）；回报到了先放这里。</div>
+ </div>
+ <div class="sect"><span>Worker</span><span>4 · 2 在跑</span></div>
+ <div class="m"><span><span class="dot g"></span>ibx-a</span><span class="r">1 未答 · 在跑 ›</span></div>
+</div>
+<div class="ann">没人欠回报、也没刚交出去的：整栏收成一行「✉ 收件箱空」，不占高度。<br>一个 Worker 都没有时整栏不出现。</div>
+<div style="height:14px"></div>
+<h2>③ 窄右栏（&lt; 280px）</h2>
+<div class="pane" style="width:230px">
+ <div class="inbox">
+  <div class="ih"><span>✉ 待 lead 2</span><span class="btn" style="margin:0">全部 ⚡</span></div>
+  <div class="item"><div class="body"><div class="who"><span class="pin">📌</span> ibx-b <small>· r-3</small></div><div class="txt">IBX-b 回报：任务…</div></div><span class="acts">⋯</span></div>
+  <div class="item held"><div class="body"><div class="who">⏸ docs <small>· r-5</small></div><div class="txt">归档时还没答…</div></div><span class="acts">⋯</span></div>
+ </div>
+</div>
+<div class="ann">窄时：时间与状态说明藏起来，三个按钮收进 ⋯ 菜单（置顶 / 上移 / 下移 / 暂缓 / 立即交给 lead），不拖动。</div>
+</div>
+
+<div class="cand" style="width:330px">
+<h2>④ 条目很多（&gt; 4 条）</h2>
+<div class="pane">
+ <div class="head"><div><div class="title">Agents</div><div class="sum">9 个 · 3 在跑</div></div><div class="icons">＋ ⇥</div></div>
+ <div class="inbox">
+  <div class="ih"><span>✉ 待 lead 处理 7</span><span class="btn">全部交给 lead</span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who"><span class="pin">📌</span> a <small>· r-3</small></div><div class="txt">……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who">b <small>· r-4</small></div><div class="txt">……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who">c <small>· r-6</small></div><div class="txt">……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="item"><span class="grip">⠿</span><div class="body"><div class="who">d <small>· r-7</small></div><div class="txt">……</div></div><span class="acts">📌⏸⚡</span></div>
+  <div class="more">⌄ 还有 3 条（展开）</div>
+ </div>
+ <div class="sect"><span>Worker</span><span>8 · 3 在跑</span></div>
+ <div class="m"><span><span class="dot y"></span>a<span class="env">✉</span></span><span class="r">已答复 ›</span></div>
+ <div class="m"><span><span class="dot g"></span>e</span><span class="r">在跑 ›</span></div>
+ <div class="below">⌄ 下面还有 6 个 · 2 待看</div>
+</div>
+<div class="ann">收件箱自己折叠：超过 4 条显示「还有 N 条」，展开后整栏随 Agents 页滚动。<br>底部「下面还有 N 个」只数成员行，不数收件箱条目（收件箱在顶上，计数在它自己的标题里）。</div>
+</div>
+
+</div>

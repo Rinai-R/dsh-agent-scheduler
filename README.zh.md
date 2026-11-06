@@ -103,6 +103,8 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 一直黄。点开会发 `/agents seen`，记一条 `seen` 记录，重启后已读的不会再亮；顶部「全部已读」（`/agents seen all`）一次读完。没读的成员即使已归档也留在
 「分身」「Worker」里，折叠组只收已读的；分组标题和输入框的 Agents 按钮带未读数。
 
+**lead 收件箱。** lead 忙的时候到的答复、报告、分身结论和失败通知，放在 Agents 页顶部的「待 lead 处理」一栏，不再挤进输入框上方的排队消息（那里只留你自己排的）。lead 空闲时一次合并交给它，排在你给它排的消息之后。可以拖动排序（或 Alt+↑/↓）、📌 置顶、⏸ 暂缓（取消前一直跳过）、⚡ 立即交给 lead（插进它当前回合），或「全部交给 lead」；点条目打开发件人的对话。有回报在等的成员行尾有 ✉，输入框旁的 Agents 按钮显示 ✉N。收件箱是插件记录，重启后还在；lead 的 `agent_list` 里有每条的摘要（发件人、请求号、时间、正文前 120 字）。
+
 ### 模型
 
 **分身始终用 lead 的模型。** 分身重放 lead 的历史，用同一个模型，也就共享它的提示缓存。分身没有单独的模型：
@@ -128,6 +130,7 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 | `/agents archive <name>` | 归档一个分身或 worker；它还欠着的请求判失败并告诉 lead。 |
 | `/agents archive done` | 归档所有已交回、没有欠回答的分身。 |
 | `/agents seen <name>` | 把成员最近一次上报标为已读（在 Agents 页点开成员时自动发送）。 |
+| `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`、`/agents inbox now all`、`/agents inbox move <m-N> [<m-N>\|end]` | 调整 lead 的收件箱（Agents 页会发这些）。 |
 | `/agents seen all` | 把所有未读上报标为已读（Agents 页顶部的「全部已读」）。有圆点之前的旧会话，过去的上报会先显示为未读一次。 |
 | `/worker` | 查看之后新建 worker 的默认模型。 |
 | `/worker model <provider>/<model> [effort]` | 设置之后新建 worker 的默认模型。 |

@@ -12,7 +12,7 @@ import * as Tools from '@deepseek-ai/dsh-tools'
 import * as Commands from '@deepseek-ai/dsh-commands'
 import { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { features, resetWarnings } from '../../src/dsh/compat.js'
-import { isCapacity, missingRequired, subagentPort, turnEndOf, settledSender } from '../../src/dsh/host/index.js'
+import { isCapacity, isUserInput, missingRequired, relayMessage, settledSender, steerLead, subagentPort, toLead, turnEndOf } from '../../src/dsh/host/index.js'
 import * as RulePlugin from '../../src/rule-plugin.js'
 import { gate, setup, teardown } from '../support/harness.js'
 import { textResponse } from '../support/mock-adapter.js'
@@ -95,5 +95,27 @@ describe('subagents (H1, H2, H6, D1b, D2)', () => {
     await expect.poll(() => child.session.snapshotEvents().some(e => e.type === 'turn/end')).toBe(true)
     const end = child.session.snapshotEvents().find(e => e.type === 'turn/end')!
     expect(turnEndOf(end)).toEqual({ kind: 'aborted', cause: 'parent' })
+  })
+})
+
+describe('the lead inbox hand-over (H7b)', () => {
+  it('followup queues a relay for the next turn and steer for the next step, and neither is a user message', async () => {
+    const hold = gate()
+    let held = false
+    const { lead } = await setup(async () => { if (!held) { held = true; await hold.promise } return textResponse('X') })
+    lead.followup(relayMessage('opening', 'w'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(lead.status).toBe('running')
+    toLead(lead, 'NEXT TURN', 'w')
+    steerLead(lead, 'NEXT STEP', 'w')
+    expect(lead.inbox.nextTurn.map(m => m.source.kind)).toEqual(['agent-message'])
+    expect(lead.inbox.nextStep.map(m => m.source.kind)).toEqual(['agent-message'])
+    // The scheduler hands its inbox over only as relays: never input a fork would take.
+    expect([...lead.inbox.nextTurn, ...lead.inbox.nextStep].some(m => isUserInput(m))).toBe(false)
+    hold.open()
+    await lead.whenIdle()
+    const said = lead.session.snapshotEvents().filter(e => e.type === 'user/message').map(e => JSON.stringify(e.data))
+    expect(said.some(t => t.includes('NEXT TURN'))).toBe(true)
+    expect(said.some(t => t.includes('NEXT STEP'))).toBe(true)
   })
 })

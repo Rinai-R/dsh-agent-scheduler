@@ -92,3 +92,13 @@ export const statusOf = (agents: AgentLookup, id: string): 'running' | 'idle' | 
 export function toLead(main: Agent, text: string, sender: string): void {
   main.followup(relayMessage(text, sender))
 }
+
+/**
+ * Give the lead a message from a member inside the turn it is running: taken at its next step.
+ * @param main - the main agent.
+ * @param text - what the lead reads.
+ * @param sender - the member's Session id.
+ */
+export function steerLead(main: Agent, text: string, sender: string): void {
+  main.steer(relayMessage(text, sender))
+}

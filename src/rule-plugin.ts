@@ -182,7 +182,7 @@ export function parseNewWorker(raw: string): { name: string; role: string; cwd?:
  * @param validate - checks a `--model` selection is routable.
  * @returns the command's outcome.
  */
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -201,6 +201,15 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: t('cmd.agents.renameUsage') }
       const done = await scheduler.rename(invocation.agent, from, to)
       return { kind: 'success', text: done.from === done.to ? t('cmd.agents.sameName', { name: done.to }) : t('cmd.agents.renamed', { from: done.from, to: done.to }) }
+    }
+    if (verb === 'inbox') {
+      const [action, id, before, ...extra] = words(rest)
+      const actions = ['pin', 'unpin', 'hold', 'release', 'move', 'now'] as const
+      const known = actions.find(a => a === action)
+      if (known === undefined || id === undefined || extra.length > 0 || (known !== 'move' && before !== undefined) || (id === 'all' && known !== 'now')) return { kind: 'error', text: t('cmd.agents.inboxUsage') }
+      const done = scheduler.arrangeMail(invocation.agent, known, id, before === 'end' ? undefined : before)
+      if (known !== 'now') return { kind: 'success', text: t('cmd.agents.inboxDone', { id }) }
+      return { kind: 'success', text: done.length === 0 ? t('cmd.agents.inboxNothing') : t('cmd.agents.inboxHanded', { ids: list(done) }) }
     }
     const [target, ...extra] = words(rest)
     if ((verb !== 'archive' && verb !== 'seen') || target === undefined || extra.length > 0) return { kind: 'error', text: agentsUsage() }
@@ -303,8 +312,8 @@ export function apply(ctx: Context, config: Config): void {
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/agents',
     name: 'agents',
-    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read',
-    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all',
+    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read; arrange the lead\'s inbox',
+    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all | inbox pin|unpin|hold|release|now|move <m-N>',
     run: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
   registerCommand(ctx, {
