@@ -18,6 +18,7 @@ import { parseModel, schedulerTools, sectionFor } from './tools.js'
 import { forkGuard } from './fork-guard.js'
 import { teamGuard } from './team-guard.js'
 import { list, t } from './i18n/index.js'
+import { MENU, menuDescription, menuHint } from './menu.js'
 import { installMemberModels, restoreMemberModel, type Validate } from './member-model.js'
 
 export const name = 'agent-scheduler-rule'
@@ -270,6 +271,8 @@ export function incompatible(missing: readonly string[], version = hostVersion()
 
 /** The plugin's slash commands, as the composer lists them. */
 const COMMANDS = ['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model'] as const
+export { menuDescription, menuHint } from './menu.js'
+
 
 /**
  * Install the input rule.
@@ -289,7 +292,7 @@ export function apply(ctx: Context, config: Config): void {
     const text = incompatible(missing)
     log(text)
     if (typeof ctx.commands?.register === 'function') {
-      for (const name of COMMANDS) registerCommand(ctx, { id: `dsh-agent-scheduler/${name}`, name, description: 'Unavailable: this DeepSeek Harness is not supported', run: () => ({ kind: 'error', text: incompatible(missing) }) })
+      for (const name of COMMANDS) registerCommand(ctx, { id: `dsh-agent-scheduler/${name}`, name, description: () => `${t(`menu.${MENU[name]}.title`)} · ${t('menu.unavailable')}`, run: () => ({ kind: 'error', text: incompatible(missing) }) })
     }
     return
   }
@@ -343,36 +346,37 @@ export function apply(ctx: Context, config: Config): void {
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/schedule',
     name: 'schedule',
-    description: 'Hand each later message to a fork of this session (on), or stop (off)',
-    hint: '[on | off]',
+    description: () => menuDescription('schedule'),
+    hint: () => menuHint('schedule'),
     run: (invocation) => runScheduleCommand(scheduler, invocation),
   })
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/agents',
     name: 'agents',
-    description: 'Create or rename a worker, archive a fork or worker, or archive every fork that has concluded; mark one\'s report read; arrange the lead\'s inbox; merge one worker into another',
-    hint: 'new <name> [--cwd <dir>] <role> | rename <name> <new-name> | archive <name> | archive done | seen <name> | seen all | inbox pin|unpin|hold|release|now|move <m-N> | merge <name> into <name> [--name <new>] [--role <text>]',
+    description: () => menuDescription('agents'),
+    hint: () => menuHint('agents'),
     run: (invocation) => runAgentsCommand(scheduler, invocation, validate),
   })
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/fork',
     name: 'fork',
-    description: 'Forks always use the lead\'s model; says so (a fork model can no longer be set)',
+    // Kept for anyone who types it; DSH cannot hide a host command from the menu.
+    description: () => menuDescription('fork'),
     // No hint: it takes no arguments (registerCommand omits an empty one, see tests/input.spec.ts).
     run: runForkCommand,
   })
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/worker',
     name: 'worker',
-    description: 'Show or set the model new workers use when the lead names none',
-    hint: 'model <provider>/<model> [effort] | model default',
+    description: () => menuDescription('worker'),
+    hint: () => menuHint('worker'),
     run: (invocation) => runWorkerModelCommand(invocation, validate),
   })
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/role',
     name: 'role',
-    description: 'Show or set the lead\'s role',
-    hint: '[<role text>]',
+    description: () => menuDescription('role'),
+    hint: () => menuHint('role'),
     run: (invocation) => {
       if (!isMainSession(invocation.agent)) return mainOnly('role')
       const text = invocation.rawInput.trim()

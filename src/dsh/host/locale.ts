@@ -11,7 +11,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { features, warnOnce } from '../compat.js'
-import { fixedSource, langOf, setSource, type Lang } from '../../i18n/index.js'
+import { langOf, setSource, translate, type Lang } from '../../i18n/index.js'
 
 /** The Host settings namespace and field DSH's locale plugin keeps the choice in. */
 export const LOCALE_SETTINGS = { namespace: 'locale', field: 'preference' } as const
@@ -40,11 +40,21 @@ export function preferredLang(settings: SettingsFace): Lang | undefined {
  */
 export function followHostLocale(ctx: Context): () => Lang {
   let lang: Lang = 'zh'
+  let revision = 0
   let service: SettingsFace | undefined
+  const listeners = new Set<() => void>()
+  // A change of language is announced, so what was registered in one (the composer's command
+  // rows) can be registered again in the other.
+  const set = (next: Lang) => {
+    if (next === lang) return
+    lang = next
+    revision += 1
+    for (const listener of [...listeners]) listener()
+  }
   const read = () => {
     if (service === undefined) return
     try {
-      lang = preferredLang(service) ?? 'zh'
+      set(preferredLang(service) ?? 'zh')
     } catch (error) {
       warnOnce('settings.locale.read', 'reading DSH\'s language from the Host settings failed; command replies are in Chinese', error)
     }
@@ -59,13 +69,18 @@ export function followHostLocale(ctx: Context): () => Lang {
       read()
       // describe() emits this event itself: read after it returns, never inside it.
       scoped.on('settings/document-updated', (ns) => { if (ns === LOCALE_SETTINGS.namespace) queueMicrotask(read) })
-      scoped.effect(() => () => { service = undefined; lang = 'zh' }, 'agent-scheduler: settings language')
+      scoped.effect(() => () => { service = undefined; set('zh') }, 'agent-scheduler: settings language')
     })
   }
   const current = () => {
     if (service === undefined) warnOnce('feature:settings.locale', 'this DSH has no settings service; command replies are in Chinese')
     return lang
   }
-  ctx.effect(() => setSource(fixedSource(current)), 'agent-scheduler: host language')
+  ctx.effect(() => setSource({
+    t: (key, params) => translate(current(), key, params),
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    revision: () => revision,
+    lang: current,
+  }), 'agent-scheduler: host language')
   return current
 }

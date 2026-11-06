@@ -18,6 +18,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Agent, CommandInvocation, CommandResult, PreStepDecision, Session, SessionEvent, SessionHeader, SessionLogOffset, ToolDefinition, UserMessage } from '../types.js'
 import { features, hasFunction, warnOnce, type Feature } from '../compat.js'
 import type { ModelChoice } from './runtime.js'
+import { subscribe } from '../../i18n/index.js'
 import { SessionId, type SessionLog } from './session.js'
 
 export { defineTool }
@@ -127,28 +128,64 @@ export function promptSection(ctx: Context, name: string, order: number, text: (
   ctx.effect(() => ctx.systemPrompt.section({ name, order, text: (context) => context.agent === undefined ? '' : text(context.agent) }), `agent-scheduler: ${name} section`)
 }
 
+/** Text read when the command is registered: a function is read again on every change of language. */
+export type CommandText = string | (() => string)
+
 /** A slash command, independent of the runtime's registration shape. */
 export interface CommandSpec {
   readonly id: string
   readonly name: string
-  readonly description: string
+  /**
+   * The composer's `/` menu row. DSH's command descriptor has no title or icon field (both
+   * pinned 0.2.1-rc.5 and 0.2.2-rc.1 copy only `definitionId`, `name`, `description` and
+   * `input`; the client gives titles and icons to DSH's own commands only, by their
+   * definition id), so the title leads the description: `{title} · {line}`.
+   */
+  readonly description: CommandText
   /** Argument hint; omitted when empty (the runtime refuses an empty hint, and the composition then fails to load). */
-  readonly hint?: string | undefined
+  readonly hint?: CommandText | undefined
   readonly run: (invocation: CommandInvocation) => CommandResult | Promise<CommandResult>
 }
 
+const read = (text: CommandText | undefined): string | undefined => typeof text === 'function' ? text() : text
+
 /**
+ * The descriptor the runtime gets for a command, as of now.
+ * @param spec - the command.
+ * @returns the registration fields besides the handler.
+ */
+export function commandDescriptor(spec: CommandSpec): { definitionId: ReturnType<typeof CommandDefinitionId>; name: string; description: string; input?: { hint: string } } {
+  const hint = read(spec.hint)
+  return {
+    definitionId: CommandDefinitionId(spec.id),
+    name: spec.name,
+    description: read(spec.description)!,
+    ...(hint === undefined || hint.trim() === '' ? {} : { input: { hint } }),
+  }
+}
+
+/**
+ * Register a slash command. The runtime copies its description and hint at registration and
+ * re-reads its catalog on `commands/change` (which both a registration and a removal emit), so
+ * a command whose text follows DSH's language is registered again, under the same name and
+ * definition id, whenever the language changes: removed and added in one synchronous step,
+ * so no invocation can find it missing.
  * @param ctx - the rule's context.
  * @param spec - the command.
  */
 export function registerCommand(ctx: Context, spec: CommandSpec): void {
-  ctx.commands.register({
-    definitionId: CommandDefinitionId(spec.id),
-    name: spec.name,
-    description: spec.description,
-    ...(spec.hint === undefined || spec.hint.trim() === '' ? {} : { input: { hint: spec.hint } }),
-    handler: spec.run,
-  })
+  const add = () => ctx.commands.register({ ...commandDescriptor(spec), handler: spec.run }) as unknown as (() => void) | undefined
+  let current = commandDescriptor(spec)
+  let dispose = add()
+  if (typeof spec.description !== 'function' && typeof spec.hint !== 'function') return
+  ctx.effect(() => subscribe(() => {
+    const next = commandDescriptor(spec)
+    if (next.description === current.description && next.input?.hint === current.input?.hint) return
+    if (typeof dispose !== 'function') return
+    dispose()
+    current = next
+    dispose = add()
+  }), `agent-scheduler: /${spec.name} follows the language`)
 }
 
 /**

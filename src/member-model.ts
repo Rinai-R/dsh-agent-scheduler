@@ -17,6 +17,7 @@ import {
 } from './dsh/host/index.js'
 import type { Scheduler } from './scheduler.js'
 import { t } from './i18n/index.js'
+import { menuDescription, menuHint } from './menu.js'
 
 /** Command name; run in the main Session, naming the member. */
 export const MEMBER_MODEL_COMMAND = 'agent-model'
@@ -165,8 +166,8 @@ export function installMemberModels(ctx: Context, scheduler: Pick<Scheduler, 'le
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/agent-model',
     name: MEMBER_MODEL_COMMAND,
-    description: 'Set the model one fork or worker uses from its next step',
-    hint: '<name> <provider>/<model> [effort] | <name> default',
+    description: () => menuDescription('agent-model'),
+    hint: () => menuHint('agent-model'),
     run: (invocation) => runMemberModelCommand(scheduler, agents, invocation, validate),
   })
 }
