@@ -1511,7 +1511,9 @@ export class Scheduler {
    * @returns whether a message was added.
    */
   takeMail(main: Agent, messages: UserMessage[]): boolean {
-    if (!isMainSession(main) || !this.writable(main) || pendingOf(main).some(isUserInput)) return false
+    // Right after DSH cut the lead's turn (shutting down), a late runtime notice can still wake it:
+    // that turn is being torn down too, so the inbox waits for `recover` (or the next free lead).
+    if (!isMainSession(main) || !this.writable(main) || pendingOf(main).some(isUserInput) || cutByHost(main)) return false
     const items = this.ledgerOf(main).mail.filter(m => m.held !== true)
     if (items.length === 0) return false
     this.record(main, s => appendMail(s, { action: 'delivered', ids: items.map(m => m.id), via: 'followup' }))
