@@ -270,7 +270,10 @@ ignored: forks always use the lead's model.
 ## Known limitations
 
 - The scheduler's tools, commands and switch are present in sessions of every preset, not only
-  `standard` (they do nothing until scheduling is on or workers exist).
+  `standard`. With scheduling off and no workers the system prompt has no scheduler section and
+  no message is forked, but the eight tools (`agent_*`, `role_set`, `report`) are still in every
+  request's tool list (about 8.6 KB of definitions, e.g. 3 → 11 tools in the minimal preset), and
+  since the switch only decides who takes user messages, the lead there can use them.
 - Sessions created with the retired `调度（旧会话）` preset (plugin versions before 0.1.0-rc.3) no
   longer open: that preset was removed with the `standard` override.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next

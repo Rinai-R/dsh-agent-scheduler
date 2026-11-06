@@ -497,7 +497,7 @@ export function configForm(ctx: any, ns: string, mount: (form: Form) => unknown)
 
 需要处理的副作用：
 
-1. **对所有预设生效**：ptc、minimal、cordis 和用户自定义的预设都会多出 `agent_*` 工具、`/schedule` 和调度开关。行为上无害（开关默认关；关着的时候 system prompt 段为空、工具会拒绝），但 minimal 预设的工具列表会变长。可选的收紧办法：在 `agent/created` 时用 `ctx.agentPresets.composedPreset(agent.ctx)`（公开 API）判断，不是 standard 的 agent 用 `tools.restrict(agent.ctx, …)` 去掉这些工具。这个办法需要原型验证。
+1. **对所有预设生效**：ptc、minimal、cordis 和用户自定义的预设都会多出 `agent_*` 工具、`/schedule` 和调度开关。开关默认关，关着且无成员时 system prompt 段为空、不分身；但自 talk-to-lead（#15）起关着时 lead 的工具也能用，所以这些预设里 lead 可以建 worker，且每次请求多 8 个工具定义（实测约 8.6 KB，minimal 预设 3 → 11 个工具）。可选的收紧办法：在 `agent/created` 时用 `ctx.agentPresets.composedPreset(agent.ctx)`（公开 API）判断，不是 standard 的 agent 用 `tools.restrict(agent.ctx, …)` 去掉这些工具。这个办法需要原型验证。
 2. **旧会话预设**：已定**删掉**。`cordis.patch.yml` 不再带 `preset-scheduler`（「调度（旧会话）」）。用它创建的会话（本机 7 个，1 主 6 子，均为 11 月 3–4 日）从此打不开，因为注册表找不到预设定义就拒绝恢复；新会话不受影响。随之可删：rule 的 `defaultOn` 配置项（rule-plugin.ts:32、49、240，只为这个预设存在）；`SchedulerDeps.defaultOn`（scheduler.ts:82、326）测试还在用（tests/support/scheduler.ts 默认开），保留为内部参数。`schedulingOn` 对「开关出现之前的老日志」的推断保留，它不依赖这个预设。
 3. **防止重复挂载**：rule 加一个进程级单例保护。用户自己的 profile 补丁里如果还留着旧的 standard 覆盖，第二个实例自动 no-op 并 warn。
 4. **prompt cache 不受影响**：lead 和分身看到的是同一套全局注册，工具列表和 system prompt 段依旧一致。
