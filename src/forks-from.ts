@@ -1,8 +1,6 @@
 /**
- * The `fork-from` subagent provider: a worker created with `from: <worker>` starts from that
- * worker's conversation instead of from the lead. The manager reserves the child id before
- * preparation, so the scheduler registers the seed for that id first and preparation returns it.
- * Cold resume never consults a provider, so a seed is only kept until its child starts.
+ * Where a worker created with `from: <worker>` starts: a prefix of that worker's conversation,
+ * handed to the `fork-from` subagent provider (src/dsh/host/runtime.ts).
  *
  * The cut rule is the one `dsh-agent-team-member-fork` shipped and validated: the latest
  * `turn/end` at which the source's durable inbox is empty. The `inbox` projection folds every
@@ -10,12 +8,11 @@
  * claimed would hand the source's pending work to the new worker as its own first turn.
  * @module dsh-agent-scheduler/forks-from
  */
-import type { Context } from '@deepseek-ai/cordis'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { ContinuableCreateRequest, ContinuableCreateSpec, SubagentProvider } from '@deepseek-ai/dsh-subagent'
+import type { SessionEvent } from './dsh/types.js'
+import { inboxSpliceOf, isTurnEnd } from './dsh/host/index.js'
 
-/** Provider name used by `agent_create({ from })`. */
-export const FORK_FROM_PROVIDER = 'fork-from'
+// The provider itself and its seed registry belong to the adapter (src/dsh/host/runtime.ts).
+export { FORK_FROM_PROVIDER, forgetForkSeed, installForkFrom, registerForkSeed } from './dsh/host/index.js'
 
 /** Why a source log cannot seed a new worker. */
 export class ForkSeedError extends Error {
@@ -32,9 +29,9 @@ export class ForkSeedError extends Error {
 interface InboxFold { 'next-turn': unknown[]; 'next-step': unknown[] }
 
 function applyInbox(fold: InboxFold, event: SessionEvent): void {
-  if (event.type !== 'agent/inbox/spliced') return
-  const { target, start, removedCount, inserted } = event.data
-  fold[target].splice(start, removedCount ?? 0, ...inserted)
+  const splice = inboxSpliceOf(event)
+  if (splice === undefined) return
+  fold[splice.target].splice(splice.start, splice.removed, ...splice.inserted)
 }
 
 /**
@@ -50,7 +47,7 @@ export function forkSeed(events: readonly SessionEvent[], source: string): Sessi
   let turnEnds = 0
   for (const [index, event] of events.entries()) {
     applyInbox(fold, event)
-    if (event.type !== 'turn/end') continue
+    if (!isTurnEnd(event)) continue
     turnEnds += 1
     if (fold['next-turn'].length + fold['next-step'].length === 0) clean = index
   }
@@ -63,46 +60,4 @@ export function forkSeed(events: readonly SessionEvent[], source: string): Sessi
     if (event.seq !== index) throw new ForkSeedError(`the log of "${source}" is not contiguous from seq 0 (index ${index} has seq ${event.seq})`, 'NON_CONTIGUOUS_LOG')
   }
   return seed
-}
-
-/** Seeds waiting for the manager to prepare a child; keyed by the reserved child id. */
-const seeds = new Map<string, readonly SessionEvent[]>()
-
-/**
- * Register the conversation a new child starts from, just before starting it.
- * @param childId - the reserved durable child id.
- * @param seed - from {@link forkSeed}.
- */
-export function registerForkSeed(childId: string, seed: readonly SessionEvent[]): void { seeds.set(childId, seed) }
-
-/**
- * Drop a seed after its start attempt, whatever the outcome; a retry registers it again.
- * @param childId - the reserved durable child id.
- */
-export function forgetForkSeed(childId: string): void { seeds.delete(childId) }
-
-/** Seeding provider. It inherits the parent's preset composition, so no preset can be chosen. */
-class ForkFromProvider implements SubagentProvider {
-  readonly name = FORK_FROM_PROVIDER
-  readonly capabilities = { agentOptions: true, agentPreset: false, outputSchema: true, depthLimit: true }
-  readonly inheritsParentContext = true
-
-  /**
-   * @param request - the reserved child id and its parent.
-   * @returns the registered seed.
-   * @throws when no seed was registered: starting an unrelated fresh child here would be silent.
-   */
-  prepareContinuable(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec> {
-    const seed = seeds.get(String(request.sessionId))
-    if (seed === undefined) return Promise.reject(new Error(`fork-from: no seed registered for ${String(request.sessionId)}`))
-    return Promise.resolve({ seed })
-  }
-}
-
-/**
- * Register the provider on the host composition, once per process.
- * @param ctx - host context with the subagent service.
- */
-export function installForkFrom(ctx: Context): void {
-  ctx.effect(() => ctx.subagents.registerProvider(new ForkFromProvider()), 'agent-scheduler: fork-from provider')
 }

@@ -6,16 +6,9 @@
  * pane's left edge, move a tab into a pane, resize the divider.
  */
 
-/** The parts of a sidebar layout this module reads. */
-export interface DockLayout {
-  readonly rootId: string
-  readonly nodes: Readonly<Record<string, DockNode>>
-  readonly tabs: Readonly<Record<string, { readonly id: string; readonly kind: string; readonly contentId: string }>>
-  readonly expanded?: boolean
-}
-export type DockNode =
-  | { readonly kind: 'pane'; readonly id: string; readonly host: 'dock' | 'float'; readonly tabs: readonly string[]; readonly activeTabId?: string }
-  | { readonly kind: 'split'; readonly id: string; readonly axis: 'row' | 'column'; readonly children: readonly string[]; readonly sizes: readonly number[] }
+import type { DockLayout, DockNode } from '../dsh/client/sidebar.js'
+
+export type { DockLayout, DockNode } from '../dsh/client/sidebar.js'
 
 /** One gesture toward "roster alone in the left pane". */
 export type RosterStep =

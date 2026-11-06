@@ -2,8 +2,8 @@
  * Plugin records in the main Session log. They are the only durable state: the ledger is a fold
  * over them, so a restarted host recovers forks, workers, requests and roles by reading the log.
  */
-import { appendPluginRecord, pluginRecordOf } from '@deepseek-ai/dsh-session'
-import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import { appendRecord as appendPluginRecord, recordOf as pluginRecordOf } from './dsh/host/session.js'
+import type { Session, SessionEvent, SessionSeq } from './dsh/types.js'
 
 export const INPUT_RECORD = 'plugin:dsh-agent-scheduler/input'
 export const FORK_STATE_RECORD = 'plugin:dsh-agent-scheduler/fork-state'
@@ -124,20 +124,7 @@ export interface RoleRecord {
   readonly text: string
 }
 
-declare module '@deepseek-ai/dsh-session/types' {
-  interface PluginRecordMap {
-    'plugin:dsh-agent-scheduler/input': InputRecord
-    'plugin:dsh-agent-scheduler/fork-state': ForkStateRecord
-    'plugin:dsh-agent-scheduler/fork-model': ForkModelRecord
-    'plugin:dsh-agent-scheduler/worker-model': ForkModelRecord
-    'plugin:dsh-agent-scheduler/agent': AgentRecord
-    'plugin:dsh-agent-scheduler/request': RequestRecord
-    'plugin:dsh-agent-scheduler/role': RoleRecord
-    'plugin:dsh-agent-scheduler/settled': SettledRecord
-    'plugin:dsh-agent-scheduler/mode': ModeRecord
-    'plugin:dsh-agent-scheduler/seen': SeenRecord
-  }
-}
+// Their entries in DSH's PluginRecordMap are declared in src/dsh/host/augment.ts.
 
 type Fields<T> = Omit<T, 'version'>
 

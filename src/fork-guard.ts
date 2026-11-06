@@ -8,7 +8,7 @@
  * the same guard, so they cannot reach a refused tool either.
  * @module dsh-agent-scheduler/fork-guard
  */
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent } from './dsh/types.js'
 
 /**
  * What a fork may call: the scheduler's routing tools, and tools that only read (files, the web,

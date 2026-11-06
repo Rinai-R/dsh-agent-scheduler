@@ -4,6 +4,8 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  schedule:
+    - cron: '0 2 * * 1'
 
 permissions:
   contents: read
@@ -22,6 +24,29 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm pack --dry-run
+
+  # Contract tests (tests/contract) against the pinned DSH and against npm's `next`, so a DSH
+  # release that breaks a dependency point shows up before users install it. `next` is advisory:
+  # it marks the run but does not block a merge. Weekly as well, when nothing else runs.
+  contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: [pinned, next]
+    continue-on-error: ${{ matrix.dsh == 'next' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run contract
+        if: matrix.dsh == 'pinned'
+      - run: npm run contract:next
+        if: matrix.dsh == 'next'
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
