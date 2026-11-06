@@ -80,7 +80,7 @@ terminal:
 ```bash
 dsh plugin add dsh-agent-scheduler                   # latest release from npm
 dsh plugin add dsh-agent-scheduler@next              # latest prerelease
-dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.3.tgz  # the tarball attached to a release
+dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.4.tgz  # the tarball attached to a release
 dsh plugin --profile web add dsh-agent-scheduler     # into a specific profile
 ```
 
