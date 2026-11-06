@@ -135,17 +135,23 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
     }),
     defineTool({
       name: 'agent_list',
-      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, the lead\'s inbox (answers waiting for the lead, each summarized; the whole text reaches the lead when it is free), and the rosterVersion that agent_create, agent_split and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
+      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, the lead\'s inbox (answers waiting for the lead, each summarized; the whole text reaches the lead when it is free), "history": archived and merged members with their session ids (agent_recall reads them), and the rosterVersion that agent_create, agent_split and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
       parameters: {
         forks: { type: 'boolean', description: 'Also list forks, archived ones included: a debugging view, not part of routing.' },
+        history: { type: 'boolean', description: 'List every archived and merged member under history, not only the latest 20.' },
       },
       output: { schema: OK, render: json },
       execute: async (args, exec) => {
         const withForks = (args as { forks?: boolean }).forks === true
+        const allHistory = (args as { history?: boolean }).history === true
         const ledger = scheduler.ledgerOf(caller(exec))
+        // Archived and merged workers move to history: their sessions stay readable (agent_recall).
+        const past = [...ledger.members.values()].filter(m => m.kind === 'worker' && (m.state === 'archived' || m.mergedInto !== undefined))
+        const shown = allHistory ? past : past.slice(-20)
         return {
-          agents: [...ledger.members.values()].filter(m => withForks || m.kind === 'worker').map(m => ({
-            name: m.name, kind: m.kind, state: m.state === 'started' ? status(m.id) : m.state,
+          agents: [...ledger.members.values()].filter(m => (withForks || m.kind === 'worker') && !(m.kind === 'worker' && past.includes(m))).map(m => ({
+            name: m.name, kind: m.kind, state: m.state === 'started' ? status(m.id) : m.state, session: m.id,
+            ...(m.mergedFrom === undefined ? {} : { mergedFrom: m.mergedFrom.map(f => ({ name: f.name, session: f.session })) }),
             ...(m.kind === 'fork' ? { input: m.text.slice(0, 120) } : { role: m.role ?? '' }),
             ...(m.area === undefined ? {} : { area: m.area }),
             ...(m.formerNames === undefined ? {} : { formerNames: [...m.formerNames] }),
@@ -167,9 +173,31 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
             at: new Date(m.at).toISOString(), preview: mailPreview(m.text),
             ...(m.pinned === true ? { pinned: true } : {}), ...(m.held === true ? { held: true } : {}),
           })) } : {}),
+          ...(past.length === 0 ? {} : {
+            history: shown.map(m => ({
+              name: m.name, session: m.id, state: m.mergedInto === undefined ? 'archived' : 'merged',
+              ...(m.mergedInto === undefined ? {} : { mergedInto: ledger.nameOf(m.mergedInto) }),
+              ...(m.formerNames === undefined ? {} : { formerNames: [...m.formerNames] }),
+            })),
+            ...(shown.length < past.length ? { historyMore: past.length - shown.length } : {}),
+          }),
           rosterVersion: scheduler.rosterVersion(ledger),
         }
       },
+    }),
+    defineTool({
+      name: 'agent_recall',
+      description: 'Look a detail up in the history of an agent in this session: the lead, a worker or fork, also an archived one, or a worker merged into another (whose handoff only summarized). Give name (current, former or merged-away; an ambiguous one lists the sessions to pick from) or session (from agent_list), and query: words that must all appear in one event (literal, case-insensitive, no regex). Returns the newest matching events of that agent\'s own log (not what it inherited from a split) with seq numbers and snippets; then pass around: <seq> for that event in full and its neighbours. It reads what the user and the other agents of this session said there, including what the user told another member directly; it never reads another session.',
+      parameters: {
+        name: { type: 'string', description: 'The agent: current name, a former name, or the name of a worker merged away.' },
+        session: { type: 'string', description: 'Its session id, from agent_list or a handoff.' },
+        query: { type: 'string', description: 'Words that must all appear in one event.' },
+        limit: { type: 'number', description: 'At most this many events, newest first; default 10, at most 50.' },
+        around: { type: 'number', description: 'A seq from an earlier result: that event in full and three events either side.' },
+        includeInherited: { type: 'boolean', description: 'Also search what it inherited when it was split off another worker.' },
+      },
+      output: { schema: OK, render: json },
+      execute: async (args, exec) => JSON.parse(JSON.stringify(await scheduler.recall(caller(exec), args as { name?: string; session?: string; query?: string; limit?: number; around?: number; includeInherited?: boolean }))) as Record<string, never>,
     }),
     defineTool({
       name: 'agent_merge',
@@ -282,6 +310,8 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
       ]
   // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
   const self = isWorker ? scheduler.ledgerOf(agent).members.get(agent.id) : undefined
+  // A worker that absorbed others: where their history is, so it can recall what the handoff left out.
+  for (const from of self?.mergedFrom ?? []) lines.push(`You absorbed ${from.name} (merge ${from.merge}); its history is session ${from.session}: use agent_recall({ name: "${from.name}", query }) to look details up.`)
   if (self?.area !== undefined && self.formerNames !== undefined && self.formerNames.length > 0) lines.push(`You are now worker "${self.name}" (formerly ${self.formerNames.map(n => `"${n}"`).join(', ')}) in area "${self.area}"; workers split from the same area share it, each with its own work.`)
   if (role !== undefined && role !== '') lines.push(`Role:\n${role}`)
   return lines.join('\n')

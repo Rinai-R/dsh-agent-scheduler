@@ -20,7 +20,7 @@ import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserM
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
   isLive, pendingOf, relayMessage, turnEndOf, removePending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
-  type AgentLookup, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
+  type AgentLookup, type HistoryPort, type RecallWindow, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
@@ -105,6 +105,23 @@ export interface SchedulerDeps {
   readonly renameSession?: ((id: string, title: string) => void) | undefined
   /** Agent Teams, through its adapter (src/dsh/host/agent-team.ts); absent: no Teams here. */
   readonly team?: TeamPort | undefined
+  /** Reads of one Session's history for `agent_recall`; absent: recall is unavailable. */
+  readonly history?: HistoryPort | undefined
+  /** Time budget of one recall scan; tests shorten it. */
+  readonly recallTimeoutMs?: number
+}
+
+/** What `agent_recall` returns. */
+export type RecallResult = {
+  readonly name: string
+  readonly session: string
+  /** First seq of the Session's own events (earlier ones were inherited from a split). */
+  readonly ownedFrom: number
+  readonly hits?: ReadonlyArray<{ seq: number; type: string; time: string; snippet: string }>
+  readonly total?: number
+  readonly truncated?: boolean
+  readonly window?: RecallWindow
+  readonly next: string
 }
 
 type Outcome = 'done' | 'queued' | 'failed'
@@ -1206,6 +1223,68 @@ export class Scheduler {
     return member?.kind === 'worker' ? member.role : ledger.role
   }
 
+  // ------------------------------------------------------------------ recall
+
+  /**
+   * The Sessions of this main Session's roster a name or id can mean, for recall: the lead, any
+   * member by current or former name (archived and merged ones included). Unlike
+   * {@link Ledger.find}, a merged worker's name means that worker itself, not the one it went into.
+   * @returns matching Sessions, each with the name it is known by now.
+   */
+  recallTargets(caller: Agent, key: string): Array<{ name: string; session: string; state: string }> {
+    const ledger = this.ledgerOf(this.mainOf(caller))
+    if (key === 'lead' || key === ledger.mainId) return [{ name: 'lead', session: ledger.mainId, state: 'lead' }]
+    const members = ledger.state.members
+    const view = (m: Member) => ({ name: m.name, session: m.id, state: m.mergedInto !== undefined ? 'merged' : m.state })
+    const byId = members.find(m => m.id === key)
+    if (byId !== undefined) return [view(byId)]
+    const current = members.filter(m => m.name === key)
+    return (current.length > 0 ? current : members.filter(m => m.formerNames?.includes(key) === true)).map(view)
+  }
+
+  /**
+   * Look a detail up in the history of a Session in this roster (docs/merge-recall.md): events
+   * of its own log holding every word of `query`, newest first; or, with `around`, one event in
+   * full and its neighbours.
+   * @param caller - the lead, a fork or a worker.
+   * @param args - `name` or `session`, and `query` or `around`.
+   * @returns hits with seq numbers, or the window.
+   */
+  async recall(caller: Agent, args: { name?: string | undefined; session?: string | undefined; query?: string | undefined; limit?: number | undefined; around?: number | undefined; includeInherited?: boolean | undefined }): Promise<RecallResult> {
+    const history = this.deps.history
+    if (history === undefined || !history.available) throw new Error('recall is not available on this DeepSeek Harness (its session query has no filterEvents/readEvent); use session_event_read with a session id from agent_list')
+    this.assertTakesPart(caller)
+    const key = args.session ?? args.name
+    if (key === undefined || key === '') throw new Error('give name (current, former or merged-away) or session')
+    const targets = this.recallTargets(caller, key)
+    if (targets.length === 0) throw new Error(`"${key}" is not in this session's roster (the lead, its forks and workers, archived and merged ones included); recall reads only those`)
+    if (targets.length > 1) throw new Error(`"${key}" names ${targets.length} sessions: ${targets.map(t => `${t.name} (${t.state}) → session ${t.session}`).join('; ')}. Pass session to pick one`)
+    const target = targets[0]!
+    const ownedFrom = await history.ownedFrom(target.session)
+    if (args.around !== undefined) {
+      const window = await history.window(target.session, args.around, 3)
+      return { name: target.name, session: target.session, ownedFrom, window, next: 'Read around another seq with around, or search again with query.' }
+    }
+    const terms = (args.query ?? '').split(/\s+/u).filter(t => t !== '').slice(0, 8)
+    if (terms.length === 0) throw new Error('give query (words that must all appear in one event) or around (a seq)')
+    const limit = Math.min(Math.max(1, Math.trunc(args.limit ?? 10)), 50)
+    const budget = this.deps.recallTimeoutMs ?? 10_000
+    const signal = AbortSignal.timeout(budget)
+    let found: Awaited<ReturnType<HistoryPort['find']>>
+    try {
+      found = await history.find(target.session, terms, { fromSeq: args.includeInherited === true ? 0 : ownedFrom, limit, signal })
+    } catch (error) {
+      if (signal.aborted) throw new Error(`recall in ${target.name}'s history took over ${Math.round(budget / 1000)} s; use rarer words`)
+      throw error
+    }
+    return {
+      name: target.name, session: target.session, ownedFrom,
+      hits: found.hits.map(h => ({ ...h, time: new Date(h.time).toISOString() })),
+      total: found.total, truncated: found.total > found.hits.length,
+      next: found.hits.length === 0 ? 'Nothing holds all those words; try fewer or other words.' : 'Read one in full with agent_recall({ session, around: seq }) or session_event_read.',
+    }
+  }
+
   // ------------------------------------------------------------------ merge
 
   /** Refuse to rename, split or delegate around a worker a merge is under way for. */
@@ -1400,13 +1479,29 @@ export class Scheduler {
     const name = merge.name ?? survivor.name
     const role = merge.role ?? mergedRole(survivor, absorbed)
     const area = survivor.area ?? absorbed.area
-    this.record(main, s => appendMerge(s, { action: 'merged', id, name, previousName: survivor.name, role, ...(area === undefined ? {} : { area }) }))
+    // Where the absorbed worker's own history is, for recall: its events after what it inherited.
+    const span = await this.ownSpan(absorbed.id)
+    if (!this.writable(main)) return
+    this.record(main, s => appendMerge(s, { action: 'merged', id, name, previousName: survivor.name, role, ...(area === undefined ? {} : { area }), session: absorbed.id, ...span }))
     // Its last report went to the survivor in the handoff: nothing of it is left to review (#9).
     const archived = ledger.members.get(absorbed.id)
     if (archived !== undefined && unread(archived)) this.record(main, s => appendSeen(s, { agent: absorbed.id }))
     this.retitle(survivor.id, name, role)
     const renamed = name === survivor.name ? '' : ` (formerly ${survivor.name})`
     this.toLead(main, `[merged ${id}: ${absorbed.name} into ${name}${renamed}; its handoff went to ${name}]\n${name} now also answers to ${[absorbed.name, ...(absorbed.formerNames ?? [])].join(', ')}. Role: ${role}`, survivor.id)
+  }
+
+  /** The part of a member's log it wrote itself, and how many rounds it ran; nothing when unreadable. */
+  private async ownSpan(memberId: string): Promise<{ seqFrom?: number; seqTo?: number; rounds?: number }> {
+    try {
+      const log = await this.logOf(memberId)
+      const last = log.events.at(-1)?.seq
+      if (last === undefined) return {}
+      return { seqFrom: log.inherited, seqTo: Number(last), rounds: completedRounds(log.events, log.inherited).length }
+    } catch (error) {
+      this.deps.log?.(`reading ${memberId} for its history span failed`, error)
+      return {}
+    }
   }
 
   /** Give the survivor the handoff, once: a message already in its session is not sent again. */
@@ -1429,6 +1524,7 @@ export class Scheduler {
     const text = handoffMessage({
       id: merge.id, absorbed: absorbed.name, name: survivor.name, formerNames: survivor.formerNames ?? [], role: survivor.role ?? survivor.text,
       area: survivor.area, handoff: merge.handoff ?? '', facts: merge.facts,
+      history: survivor.mergedFrom?.find(f => f.merge === merge.id),
     })
     let failure = ''
     const outcome = await this.run(main, survivor.id, `handoff ${merge.id}`, async () => {

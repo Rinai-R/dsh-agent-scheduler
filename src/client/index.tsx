@@ -51,7 +51,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number; readonly mergedFrom?: readonly { readonly merge: string; readonly name: string; readonly session: string; readonly at: number }[] }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster {
@@ -276,6 +276,9 @@ const STYLE = `
 .sch-roster-merge:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-item:has(.sch-roster-merge):hover .sch-roster-end{visibility:hidden}
 .sch-roster-item > .sch-roster-form{margin:2px 12px 8px}
+.sch-roster-merged-from{display:flex;flex-wrap:wrap;gap:4px;margin:-4px 16px 4px 36px}
+.sch-roster-merged-link{border:0;background:none;padding:1px 4px;border-radius:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
+.sch-roster-merged-link:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .sch-merge-keep{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-merge-keep label{display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary)}
 select.sch-roster-input{padding:0 4px}
@@ -1307,6 +1310,15 @@ export function createAgentsPage(ctx: {
           </button>
         )}
         {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
+        {member.state === 'archived' || (member.mergedFrom ?? []).length === 0 || props.sessionId === undefined ? null : (
+          <div className="sch-roster-merged-from" data-scheduler-merged-from={member.name}>
+            {member.mergedFrom!.map(f => (
+              <button key={f.merge} type="button" className="sch-roster-merged-link" title={t('mergedFrom.title', { name: f.name, session: f.session, id: f.merge })} onClick={() => { openMember(props.sessionId!, f.session) }}>
+                ↶ {t('mergedFrom.label', { name: f.name })}
+              </button>
+            ))}
+          </div>
+        )}
         </div>
       )
     }

@@ -243,6 +243,8 @@ export const zh = {
   'merge.cancel': '取消',
   'merge.hint': '被合并方先写交接、提交代码，然后归档；它的名字以后都指向保留方。',
   'merge.pending': '合并中 {id}',
+  'mergedFrom.label': '合并自 {name}',
+  'mergedFrom.title': '打开 {name} 的会话（{id} 并入；session {session}）',
   'merge.into': '合并到 {name} · {id}',
   'merge.from': '合并 {name} 进来 · {id}',
 

@@ -10,7 +10,7 @@ import { promisify } from 'node:util'
 import { existsSync } from 'node:fs'
 import type { SessionEvent } from './dsh/types.js'
 import type { GitFacts } from './records.js'
-import type { RosterMember, RosterRequest } from './projection.js'
+import type { MergedFrom, RosterMember, RosterRequest } from './projection.js'
 import { completedRounds } from './rounds.js'
 
 export { defaultSurvivor } from './merge-pick.js'
@@ -132,10 +132,12 @@ export function mergedRole(survivor: Pick<RosterMember, 'role' | 'text'>, absorb
  * The message the survivor reads: who it is now, the handoff, and what git showed.
  * @returns the message (not a request).
  */
-export function handoffMessage(args: { id: string; absorbed: string; name: string; formerNames: readonly string[]; role: string; area?: string | undefined; handoff: string; facts?: GitFacts | undefined }): string {
+export function handoffMessage(args: { id: string; absorbed: string; name: string; formerNames: readonly string[]; role: string; area?: string | undefined; handoff: string; facts?: GitFacts | undefined; history?: MergedFrom | undefined }): string {
   const facts = args.facts
+  const h = args.history
   return [
     `[handoff ${args.id} from ${args.absorbed}, merged into you; not a request]`,
+    ...(h === undefined ? [] : [historyLine(h)]),
     `[you are now worker "${args.name}"${args.formerNames.length === 0 ? '' : ` (also reached as ${args.formerNames.map(n => `"${n}"`).join(', ')})`}${args.area === undefined ? '' : ` in area "${args.area}"`}; your role: ${args.role.replace(/\s+/gu, ' ')}]`,
     `"${args.absorbed}" was archived; its work is yours now. Its handoff:`,
     '',
@@ -150,4 +152,14 @@ export function handoffMessage(args: { id: string; absorbed: string; name: strin
       facts.dirty.length === 0 ? 'uncommitted: none' : `uncommitted (now yours to commit or drop, in ${facts.cwd}):\n${facts.dirty.slice(0, 30).map(l => `  ${l}`).join('\n')}`,
     ]),
   ].join('\n')
+}
+
+/**
+ * Where an absorbed worker's history is, in one line the survivor (and its prompt) carries.
+ * @param h - the merge's pointer.
+ * @returns e.g. `[absorbed hub-image → session session-63a0…; its own events seq 412–1187, 9 rounds; …]`.
+ */
+export function historyLine(h: MergedFrom): string {
+  const span = h.seqFrom === undefined || h.seqTo === undefined ? '' : `; its own events seq ${h.seqFrom}–${h.seqTo}${h.rounds === undefined ? '' : `, ${h.rounds} round${h.rounds === 1 ? '' : 's'}`}`
+  return `[absorbed ${h.name} → session ${h.session}${span}; recall details with agent_recall({ name: "${h.name}", query: "…" })]`
 }
