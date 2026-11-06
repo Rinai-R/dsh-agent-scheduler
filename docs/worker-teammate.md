@@ -23,6 +23,7 @@
   - **lead 组队用原生 Agent Teams**，开关由我们的守卫控制。
   - **worker 组队由我们的调度层实现**，语义对齐 Agent Teams。teammate 仍是主会话的直接子会话（不受深度限制），但在账本里属于这个 worker 的团队：worker 是团队负责人，团队成员的答复和消息回到 worker，不进 lead 收件箱。worker 再按我们原来的请求结算答复 lead。
   - 这样做不要求宿主改动；等 Agent Teams 将来支持「子会话当 Team Lead」，适配层再切到原生实现。
+- **方案 D**（worker 改为顶层会话，原生用 Agent Teams）可行，但代价大：右栏并排、`agent_split` 继承对话、DSH 原生的重启、归档、中断都要放弃或重做；`sessionController` 只在 web-app 组合包里有；已有的 worker 无法迁移。推荐**分阶段**：先做现方案，D 作为将来可选的 worker 类型（3.8）。
 
 ## 1. Agent Teams 是什么（带出处）
 
@@ -216,6 +217,70 @@ flowchart LR
 | #19 `isLive` | 所有新写入都走 `record()` / `writable()`；适配层只读，不写主会话 |
 | 适配层与契约 | 新增可选依赖 `agentTeams`（实验级），pinned 和 next 都跑契约；缺失时整体降级，调度不受影响 |
 
+### 3.8 方案 D：worker 改为顶层会话，用原生 Agent Teams 组队（并排对比）
+
+用户追问「能不能移除 worker 的子会话标记」。核实结论如下。
+
+**标记移不掉。** 所谓标记，是 worker 会话日志里的 `subagent/descriptor` 事件。`startActivation` 在子会话的首个回合写入（`dsh-subagent/lib/index.js:1806` `child.session.append("subagent/descriptor", create.descriptor)`），`foldSubagentDescriptor` 从日志里读取（`:703-704`；冷恢复 `:2174`）。它是持久日志里的事件，不是一个开关。下面这些都依赖它：
+
+- 冷恢复时重建 composition；
+- `sendMessage` 校验父子归属（`UNAUTHORIZED` / `NOT_RESUMABLE`）；
+- 「N 个子智能体」目录；
+- 右栏的 `subagentchat` tab。
+
+改写日志就是把会话写坏，不可行。Agent Teams 判定成员时读的也是它（`agent-team/lib/index.js:1186-1188`）。
+
+**另一条路是顶层会话。** `tryMembership` 对**既没有 `parentSession` 也没有 descriptor** 的会话直接判为 Team Lead（`:896-905`）。如果 worker 不是用 `startActivation` 建的子会话，而是顶层会话，它天然就是 Team Lead，能原生拿到 9 个 Team 工具；它建的 teammate 是深度 1 的子会话，在默认 `maxDepth = 1` 以内（`resolveChildDepth`，`:280-283`；配置项 `maxDepth` 默认 1、可热改，`:2993`；请求里没传时用配置值，`:3038-3043`）。我们的插件调 `startActivation` 时**没有传 `maxDepth`**（`src/` 中搜不到 `maxDepth` 或 `subagentDepth`），所以现在的 worker 深度是 1，它再建子会话就是深度 2，会被拒。
+
+**怎么建顶层会话。** 有两种办法：
+
+- `ctx.sessionController.create({ sessionId?, workspaceId | cwd, agentPreset? })`，属于 `@deepseek-ai/dsh-api-session-controller`。
+  - pinned 0.2.1-rc.5 和 next 0.2.2-rc.1 都有，签名相同（pinned `lib/index.js:755`，next `:666`），可以直接传 `cwd`，所以一个 worker 一个 worktree 能保留。
+  - 但这个服务**只由 `dsh-web-app` 组合包挂载**（`dsh-web-app/cordis.patch.yml`，`dsh-base` 里没有），headless 和 TUI profile 下不存在。
+  - 它的定位是「客户端经 API Gateway 调用的会话控制」（README Summary），不是给插件用的公开 API。
+- 更底层的 `ctx.agentLoop.createAgent(ctx, { sessionId, agentOptions })`（`dsh-agent-loop`，我们的测试 harness 就在用）。所有 profile 都有，但它不把会话挂到工作区，会话列表的归属需要自己处理。
+
+**D 的代价：失去原生父子关系后要重做的东西**
+
+| 方面 | 现在（子会话） | D（顶层会话） |
+|---|---|---|
+| 请求投递 | `ctx.subagents.sendMessage(main, worker, …)` 返回 inbox id，用来匹配回合 | `sendMessage` 只认直接父子关系，对顶层会话会报 `UNAUTHORIZED`；要改成直接调 `agent.followup/steer`。顶层 worker 没加载时，要自己经 sessionController 恢复再投递 |
+| 答复归属与结算 | 读子会话日志里的回合，按认领的 message id 结算 | 读法不变（用 `readLog` 读任意会话），但「谁的答复」完全靠我们账本里的 `worker id → main id` 映射；DSH 不再提供 settled 通知（现在是 `subagent-settled`，结算的兜底信号） |
+| 重启恢复 | DSH 按 descriptor 冷恢复子会话；`recover` 处理被切断的回合 | 顶层 worker 不会随主会话一起恢复，也不会被 DSH 的关停流程级联取消。`recover` 要自己负责「哪些 worker 还该在跑、要不要唤醒」，`cutByRestart` 的判断也要重写 |
+| fork-from（`agent_create from`、`agent_split`） | 我们注册的 `fork-from` 子代理 provider，用来源 worker 的日志 seed 新子会话 | provider 只能建子会话。要继承对话，得先建顶层会话再把种子事件写进去，没有公开 API；否则 `agent_split` 只能「新开空白会话」 |
+| 右栏嵌入 | `dsh-resource://subagentchat/session/<child>?parent=…`，右栏 tab 直接打开 | `subagentchat` 要求有 parent 地址，顶层会话**打不开**；只能在主栏切换会话，右栏「Agents 页 + 成员对话并排」的布局失效 |
+| DSH 的「N 个子智能体」目录 | 自动列出 | 不出现 |
+| archive / interrupt | `drainChildren`、`interrupt({ kind: 'ancestor' })` | 两者都要求祖先关系，不可用；要改成 `agent.cancel()`，以及经 sessionController 归档或关闭会话 |
+| 派活锁、`rosterVersion` | 不受影响 | 不受影响（纯账本逻辑） |
+| 圆点、收件箱 | 依赖结算与 `agent/status` | `agent/status` 仍然能收到（顶层 agent 也发）；结算改了，这两项跟着改 |
+| `isLive`（#19） | 主会话释放时子会话跟着释放 | 顶层 worker 比主会话活得久：主会话关了、worker 还在跑，答复无处可写。要另加「主会话不在时把答复暂存在 worker 侧记录里」的逻辑 |
+| 会话列表 | 子会话不出现在左侧列表 | 每个 worker 都出现在左侧会话列表，和主会话平级。需要在 worker 会话头里记 `scheduler.main = <主会话 id>`（插件记录），标题加前缀，并在 Agents 页反查；用户在列表里删掉或归档 worker，我们要能察觉 |
+| 迁移 | — | 已有的子会话型 worker 转不过去（descriptor 去不掉）。只能新旧两种并存：老 worker 保持子会话、没有团队能力，新建的才是顶层；或者让用户把老 worker 归档后重建 |
+| 宿主依赖 | `ctx.subagents`（公开） | sessionController（只在 web-app 里有，且是给客户端用的）或 `agentLoop.createAgent` 加自己处理工作区。契约测试要在 pinned 和 next 上都覆盖：create 的签名、`tryMembership` 对无 descriptor 顶层会话的判定（证明 Team 工具会装上）、顶层 agent 的 `followup` 投递、web-app 之外的降级 |
+| 收益 | — | worker 原生拿到 Agent Teams 的全部能力（9 个工具、任务板、成员互发消息、Team 浮层）；worker 的 teammate 在 Team 浮层里显示；不用自己实现团队 |
+
+**并排对比**
+
+| | 现推荐方案（子会话 worker + 调度层团队） | D（顶层 worker + 原生 Team） |
+|---|---|---|
+| worker 组队 | 我们实现，语义对齐 Agent Teams | 原生 |
+| 要不要开组合包 | worker 组队不需要；lead 组队需要 | 需要（否则没有 Team 工具） |
+| 右栏并排看成员对话 | 保留 | 失去 |
+| `agent_split` 继承对话 | 保留 | 失去（或只能开空白会话） |
+| 重启、归档、中断 | DSH 原生 | 自己重做 |
+| 会话列表 | 干净 | 每个 worker 一行 |
+| 宿主依赖 | 公开 API + 实验包只读探测 | web-app 专属服务 + 实验包承载核心 |
+| 改动量 | 中 | 大（worker 生命周期整体重写） |
+| 已有 worker | 不受影响 | 无法迁移 |
+
+**推荐：分阶段，先做现方案，D 只作为将来可选的增强。**
+
+1. 第一阶段做现推荐方案（3.1-3.7）：适配层、按角色和开关的守卫、调度层实现的 worker 团队。不碰 worker 的生命周期。
+2. 适配层的契约测试同时盯两件事：L1（带 descriptor 的子会话不是成员）是否还成立；sessionController 和 `agentLoop.createAgent` 的形状。
+3. 第二阶段，二选一，满足即可：
+   - Agent Teams 放开「子会话当 Team Lead」（L1 被打破），这时直接让子会话型 worker 用原生 Team，D 就不需要了；
+   - 用户明确更看重「worker 原生用 Team 工具和 Team 浮层」，而不是右栏并排和 `agent_split` 继承对话。这时再按 D 做一个可选的 worker 类型（「顶层 worker」），和子会话型 worker 并存，不迁移老 worker。
+
 ## 4. 实现分几步
 
 | 步 | 内容 | 主要文件 | 测试 |
@@ -243,3 +308,4 @@ flowchart LR
 5. **负责人请求延后结算**：推荐「等团队请求都答完」。另一种是负责人回合一结束就答复 lead，团队结果另走「团队动态」。前者 lead 收到的是完整结论，后者更快但会收到半成品。
 6. **worker 团队的人数上限**：沿用全局并发容量（`maxActiveSubagents`），还是每个团队单独设上限（例如 6）？
 7. **长期方向**：要不要给 DSH 提需求，让 Agent Teams 允许「子会话当 Team Lead」并放开深度（L1、L3）？放开后适配层可以把 worker 团队切到原生实现，届时 worker 的团队也能进 Team 浮层。
+8. **方案 D 何时启动**：等宿主放开 L1，还是在第一阶段之后就把「顶层 worker」做成可选类型？如果要做，接受右栏并排和 `agent_split` 继承对话的损失吗？
