@@ -44,7 +44,7 @@ worker 负责干活，每条请求、答复和结论都回到 lead——你只�
 
 ## 开始使用
 
-界面和命令回复跟随 DeepSeek Harness 的语言设置（中文或英文），切换后无需刷新；给模型看的提示词和工具描述保持英文。
+界面和命令回复跟随 DeepSeek Harness 的语言设置（DSH 支持的全部语言：中文、English、日本語、Español、Français、Deutsch、Русский、Português，见 [docs/i18n.md](docs/i18n.md)），切换后无需刷新；给模型看的提示词和工具描述保持英文。
 
 ### 前置要求
 

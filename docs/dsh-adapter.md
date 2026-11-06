@@ -120,8 +120,9 @@
 
 | # | 依赖点 | 位置 | 级 | 坏掉的表现 |
 |---|---|---|---|---|
-| L1 | 客户端 `ctx.locale`（dsh-client-locale 的 `LocaleRuntime`）：`register(ns, { zh, en })` 返回 disposer、`bind(ns)` 返回 `t(key, params)`、`getSnapshot().revision`、`subscribe(fn)`（切换语言和注册词典都会通知） | dsh/client/locale.ts | B | 界面停在中文（warn once） |
-| L2 | 模板占位符 `{name}`（`/\{(\w+)\}/g`，未知名字原样保留），与 src/i18n `format` 一致；复数由调用方选 `.one` / `.other` 键 | i18n/index.ts | C | 占位符原样显示 |
+| L1 | 客户端 `ctx.locale`（dsh-client-locale 的 `LocaleRuntime`）：`register(ns, { zh, en, ja, es, fr, de, ru, pt })` 返回 disposer、`bind(ns)` 返回 `t(key, params)`、`getSnapshot().revision`、`subscribe(fn)`（切换语言和注册词典都会通知） | dsh/client/locale.ts | B | 界面停在中文（warn once） |
+| L2 | 模板占位符 `{name}`（`/\{(\w+)\}/g`，未知名字原样保留），与 src/i18n `format` 一致；复数由调用方选 `.one` / `.other` 键（`Intl.PluralRules` 的 `one` 类别取 `.one`） | i18n/index.ts | C | 占位符原样显示 |
+| L5 | DSH 用 `locale.addLanguage({ id, label, fallback: 'en' })` 加入 ja、es、fr、de、ru、pt；`register` 接受任何符合 `LOCALE_ID_PATTERN` 的语言 id | dsh/client/locale.ts、i18n/index.ts | C | 新语言消失时回落英文；`register` 收紧时整套词典注册失败（界面停在中文） |
 | L3 | 用户显式选择的语言是 Host 设置 `locale` 命名空间的 `preference` 字段（volatile）：`ctx.settings.describe()` 读当前值，写入后 `settings/document-updated(ns, revision)` | dsh/host/locale.ts | B | 命令回复停在中文（warn once）；未显式选择（DSH 跟随浏览器）时 host 看不到浏览器，也回中文 |
 | L4 | 插件页显示名读 `locale/<lang>.json` 的 `meta.title` / `meta.description`（dsh-app-boot `readPluginMeta`） | locale/*.json | C | 插件页标题回落到 package.json 的英文 |
 

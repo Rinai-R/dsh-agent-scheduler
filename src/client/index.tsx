@@ -313,7 +313,8 @@ textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:ver
 .sch-roster-fold[aria-expanded=true] svg{transform:rotate(90deg)}
 .sch-forkmodel{display:flex;flex-direction:column;gap:2px;padding:0 12px 4px 18px}
 .sch-forkmodel-row{display:flex;align-items:center;gap:4px;min-width:0;margin-left:-6px}
-.sch-forkmodel-label{flex:none;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-forkmodel-label{flex:0 1 auto;min-width:3em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
+.sch-forkmodel-row>.sch-mt{flex:none;max-width:60%}
 .sch-forkmodel-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
 .sch-mm-composer{display:inline-flex;align-items:center;min-width:0}
 .sch-roster-empty{margin:auto;padding:24px;max-width:220px;text-align:center;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:18px}
@@ -1062,7 +1063,7 @@ function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null;
   return (
     <div className="sch-forkmodel" data-scheduler-worker-model={value === '' ? 'default' : value}>
       <div className="sch-forkmodel-row">
-        <span className="sch-forkmodel-label">{t('worker.model.label')}</span>
+        <span className="sch-forkmodel-label" title={t('worker.model.label')}>{t('worker.model.label')}</span>
         <ModelMenu
           groups={groups}
           current={current}

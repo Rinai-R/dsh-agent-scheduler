@@ -1,7 +1,7 @@
 /**
  * DSH's language in the browser: the `locale` service of `@deepseek-ai/dsh-client-locale`
  * (`ctx.locale`, a `LocaleRuntime`). The plugin registers its namespace's dictionaries with
- * `register(ns, { zh, en })`, translates through `bind(ns)`, and renders again on `subscribe`,
+ * `register(ns, { zh, en, ja, es, fr, de, ru, pt })`, translates through `bind(ns)`, and renders again on `subscribe`,
  * which fires on every language switch and dictionary registration (the snapshot's `revision`).
  * Which language is active (the user's explicit choice, else the browser's) is DSH's business.
  * A DSH without the service leaves the plugin in Chinese, with one warning.
@@ -40,6 +40,7 @@ export function localeSource(locale: LocaleFace): Source {
     t: (key: MessageKey, params?: Params) => t(key, params),
     subscribe: listener => locale.subscribe(listener),
     revision: () => locale.getSnapshot().revision,
+    lang: () => locale.getSnapshot().active,
   }
 }
 

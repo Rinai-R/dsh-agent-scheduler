@@ -5,13 +5,20 @@
  * installed, and wherever DSH offers neither, text is Chinese.
  * @module dsh-agent-scheduler/i18n
  */
+import { de } from './de.js'
 import { en } from './en.js'
+import { es } from './es.js'
+import { fr } from './fr.js'
+import { ja } from './ja.js'
+import { pt } from './pt.js'
+import { ru } from './ru.js'
 import { zh } from './zh.js'
 
-export { en, zh }
+export { de, en, es, fr, ja, pt, ru, zh }
 
-/** The languages this plugin ships. */
-export type Lang = 'zh' | 'en'
+/** The languages this plugin ships: every language DSH offers (dsh-client-locale). */
+export const LANGS = ['zh', 'en', 'ja', 'es', 'fr', 'de', 'ru', 'pt'] as const
+export type Lang = typeof LANGS[number]
 export type MessageKey = keyof typeof zh
 export type Params = Readonly<Record<string, string | number>>
 /** A key pair `<base>.one` / `<base>.other`, chosen by count. */
@@ -19,7 +26,7 @@ export type PluralKey = MessageKey extends infer K ? K extends `${infer B}.one` 
 
 /** Namespace of the plugin's dictionaries in DSH's locale registry. */
 export const NAMESPACE = 'agentScheduler'
-export const DICTIONARIES: Readonly<Record<Lang, Readonly<Record<MessageKey, string>>>> = { zh, en }
+export const DICTIONARIES: Readonly<Record<Lang, Readonly<Record<MessageKey, string>>>> = { zh, en, ja, es, fr, de, ru, pt }
 
 /**
  * Fill `{name}` placeholders, the way DSH's locale runtime does: an unknown name stays as written.
@@ -39,17 +46,38 @@ export function format(template: string, params?: Params): string {
  * @returns the text in that language.
  */
 export function translate(lang: Lang, key: MessageKey, params?: Params): string {
-  return format(DICTIONARIES[lang][key] ?? zh[key] ?? key, params)
+  // Like DSH's fallback chains: every added language falls back to English.
+  return format(DICTIONARIES[lang][key] ?? en[key] ?? zh[key] ?? key, params)
 }
 
 /**
- * The language a DSH locale id reads in: Chinese for any zh tag, English for every other
- * (DSH's fallback chains all end in English).
- * @param id - a BCP 47-style id, e.g. `zh`, `zh-TW`, `en-US`.
+ * The language a DSH locale id reads in: the shipped language its primary subtag names, else
+ * English (DSH's fallback chains all end in English).
+ * @param id - a BCP 47-style id, e.g. `zh`, `zh-TW`, `pt-BR`, `en-US`.
  * @returns the language.
  */
 export function langOf(id: string): Lang {
-  return /^zh(?:-|$)/iu.test(id) ? 'zh' : 'en'
+  const primary = id.split(/[-_]/u)[0]!.toLowerCase()
+  return (LANGS as readonly string[]).includes(primary) ? primary as Lang : 'en'
+}
+
+const pluralRules = new Map<string, Intl.PluralRules>()
+
+/**
+ * Which of a key pair a count takes: `.one` when the language's plural rules call the count
+ * `one` (1 in English and German; 0 and 1 in French and Portuguese; 1, 21, 31… in Russian;
+ * never in Chinese or Japanese, whose pairs read the same), else `.other`.
+ * @param lang - a locale id.
+ * @param count - how many.
+ * @returns the form.
+ */
+export function pluralForm(lang: string, count: number): 'one' | 'other' {
+  let rules = pluralRules.get(lang)
+  if (rules === undefined) {
+    try { rules = new Intl.PluralRules(lang) } catch { rules = new Intl.PluralRules('en') }
+    pluralRules.set(lang, rules)
+  }
+  return rules.select(count) === 'one' ? 'one' : 'other'
 }
 
 /** Where translations come from: DSH's locale service, or a fixed language. */
@@ -59,6 +87,8 @@ export interface Source {
   subscribe(listener: () => void): () => void
   /** Changes whenever {@link t} may answer differently. */
   revision(): number
+  /** The active locale id, for plural forms; absent reads as English. */
+  lang?(): string
 }
 
 /**
@@ -68,7 +98,7 @@ export interface Source {
  */
 export function fixedSource(lang: Lang | (() => Lang)): Source {
   const read = typeof lang === 'function' ? lang : () => lang
-  return { t: (key, params) => translate(read(), key, params), subscribe: () => () => undefined, revision: () => 0 }
+  return { t: (key, params) => translate(read(), key, params), subscribe: () => () => undefined, revision: () => 0, lang: read }
 }
 
 let source: Source = fixedSource('zh')
@@ -87,14 +117,15 @@ export function t(key: MessageKey, params?: Params): string {
 }
 
 /**
- * Translate a count: the `.one` form for 1, else `.other`; `{count}` is filled in.
+ * Translate a count: the `.one` form when the active language calls it `one` ({@link pluralForm}),
+ * else `.other`; `{count}` is filled in.
  * @param key - the key pair's base.
  * @param count - how many.
  * @param params - other placeholder values.
  * @returns the text.
  */
 export function tn(key: PluralKey, count: number, params?: Params): string {
-  return t(`${key}.${count === 1 ? 'one' : 'other'}` as MessageKey, { ...params, count })
+  return t(`${key}.${pluralForm(source.lang?.() ?? 'en', count)}` as MessageKey, { ...params, count })
 }
 
 /**
