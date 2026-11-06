@@ -8,8 +8,15 @@
 import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
-import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, type DockLayout } from './layout.js'
+import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE } from './layout.js'
 import { reviewOf } from '../review.js'
+import {
+  chatPlacement, clientHost, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
+  steadyTabStrips, SUBAGENT_CHAT_KIND, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
+} from '../dsh/client/index.js'
+
+// Moved to the DSH adapter (src/dsh/client); re-exported for callers of this module.
+export { chatPlacement, commandFailure, retainChatTabs, steadyTabStrips, subagentAddress, type Face, type SidebarFace, type TabTypesFace } from '../dsh/client/index.js'
 
 const INPUT = 'plugin:dsh-agent-scheduler/input'
 const FORK_STATE = 'plugin:dsh-agent-scheduler/fork-state'
@@ -42,9 +49,6 @@ interface Member { readonly id: string; readonly name: string; readonly kind: 'f
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster { readonly enabled?: boolean; readonly role: string | null; readonly workerModel?: ForkModel | null; readonly members: readonly Member[]; readonly openRequests: readonly { id: string; from: string; to: string; text: string }[] }
 /** One Session's live status as the client root hook reports it. */
-interface StatusRow { running?: boolean; pendingInteraction?: unknown; completionUnread?: boolean }
-type Statuses = Map<string, StatusRow>
-type UseSessionStatus = (selector: (value: Statuses) => Statuses) => Statuses
 
 /** What the roster draws for one member: lifecycle record, refined by live status. */
 type RowState = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'queued' | 'archived'
@@ -185,12 +189,9 @@ const STYLE = `
 .sch-dot[data-review=reported],.sch-review-n[data-review=reported]{--sch-dot:var(--dsw-alias-state-success-primary)}
 .sch-dot[data-review=failed],.sch-review-n[data-review=failed]{--sch-dot:var(--dsw-alias-state-error-primary)}
 .sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
-.sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:var(--dsw-alias-label-on-color,#fff);font-size:11px;font-weight:600;line-height:16px}
+.sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:#fff;font-size:11px;font-weight:600;line-height:16px}
 .sch-roster-section-title{display:inline-flex;align-items:center;gap:6px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
-/* A wake whose only message was handed off leaves a turn with no content: process row, then tail. */
-[data-chat-flow-kind="turn-process"]:has(+ [data-chat-flow-kind="turn-tail"]),
-[data-chat-flow-kind="turn-process"] + [data-chat-flow-kind="turn-tail"]{display:none}
 
 /* Scheduling switch in the composer's mode row, beside access mode and Plan, in their metrics. */
 .sch-mode-group{display:inline-flex;align-items:center;gap:4px}
@@ -259,7 +260,7 @@ textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:ver
 .sch-roster-form{display:flex;flex-direction:column;gap:6px;margin:4px 12px 6px;padding:10px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:10px;background:var(--dsw-alias-bg-layer-1,transparent)}
 .sch-roster-form label{display:flex;flex-direction:column;gap:3px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-roster-form-actions{display:flex;justify-content:flex-end;gap:4px;margin-top:2px}
-.sch-roster-primary{border:0;padding:4px 10px;border-radius:8px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-on-color,#fff);font:var(--dsw-font-xxs-12);cursor:pointer}
+.sch-roster-primary{border:0;padding:4px 10px;border-radius:8px;background:var(--dsw-alias-state-business-primary);color:#fff;font:var(--dsw-font-xxs-12);cursor:pointer}
 .sch-roster-primary:disabled{opacity:.5;cursor:default}
 .sch-roster-form-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12);overflow-wrap:anywhere}
 .sch-roster-below{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;justify-content:center;gap:4px;flex:none;margin:auto 0 0;border:0;border-top:1px solid var(--dsw-alias-border-l1,transparent);padding:7px 12px 8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;box-shadow:0 -8px 12px -6px color-mix(in srgb,var(--dsw-alias-bg-layer-1) 90%,transparent)}
@@ -383,134 +384,6 @@ function ReviewBadge({ summary }: { summary: { n: number; tone: ReviewMark | und
   return <span className="sch-review-n" data-review={summary.tone} title={`${summary.n} 个待查看`}>{summary.n}</span>
 }
 
-/** The parts of `ctx.sidebarRightTabs` used to keep agent chats mounted. */
-export interface TabTypesFace {
-  get?: (kind: string) => { keepMounted?: boolean } | undefined
-  subscribe?: (listener: () => void) => () => void
-}
-
-/**
- * Keep the native subagent chat tabs mounted while another tab of their pane is in front.
- * The dock renders only each pane's active tab unless its type says `keepMounted`, so closing one
- * chat (or switching tabs) brought the neighbour back as a fresh mount: its conversation reloaded
- * from the top. The type is the product's own (`subagentchat`, builtin band); taking it over with
- * an extension would mean re-implementing its body, so the flag is set on the registered
- * definition, again whenever the registry changes, and put back on dispose.
- * @param tabs - `ctx.sidebarRightTabs`.
- * @returns undo.
- */
-export function retainChatTabs(tabs: TabTypesFace | undefined): () => void {
-  if (tabs?.get === undefined) return () => undefined
-  const touched = new Map<object, boolean | undefined>()
-  const apply = () => {
-    const definition = tabs.get?.('subagentchat')
-    if (definition === undefined || definition.keepMounted === true || touched.has(definition)) return
-    touched.set(definition, definition.keepMounted)
-    try { definition.keepMounted = true } catch { touched.delete(definition) }
-  }
-  apply()
-  const unsubscribe = tabs.subscribe?.(apply)
-  return () => {
-    unsubscribe?.()
-    for (const [definition, before] of touched) {
-      try {
-        if (before === undefined) delete (definition as { keepMounted?: boolean }).keepMounted
-        else (definition as { keepMounted?: boolean }).keepMounted = before
-      } catch { /* frozen after the fact: leave it */ }
-    }
-  }
-}
-
-/**
- * Keep the right sidebar's tab strip still when its active tab changes.
- *
- * The dock draws a pane's tab strip inside the host of the pane's active tab, so closing or
- * switching a tab mounts a brand-new strip under the next tab: its scroll offset starts at 0 and
- * the dock then reveals the active tab with `scroll-behavior: smooth`. With more tabs than fit,
- * every close slid the whole strip for ~100 ms. This carries each pane's scroll offset over to
- * the strip that replaces it, reveals the active tab instantly, and turns the smooth animation
- * off for these strips, all before the next paint.
- * @param doc - the page's document.
- * @returns undo.
- */
-export function steadyTabStrips(doc: Document | undefined): () => void {
-  const view = doc?.defaultView
-  if (doc === undefined || view === undefined || view === null || typeof view.MutationObserver !== 'function') return () => undefined
-  const SELECTOR = '[data-sidebar-right-session] [data-dockkit-strip-tabs]'
-  const style = doc.createElement('style')
-  style.dataset.plugin = 'dsh-agent-scheduler/strip'
-  style.textContent = `${SELECTOR}{scroll-behavior:auto!important}`
-  doc.head.appendChild(style)
-  const offsets = new Map<string, number>()
-  const seen = new WeakSet<Element>()
-  const remember = (event: globalThis.Event) => {
-    const el = event.target
-    if (!(el instanceof view.HTMLElement) || !el.matches(SELECTOR)) return
-    const pane = el.dataset.dockkitStripTabs
-    if (pane !== undefined) offsets.set(pane, el.scrollLeft)
-  }
-  const settle = () => {
-    for (const el of doc.querySelectorAll<HTMLElement>(SELECTOR)) {
-      const pane = el.dataset.dockkitStripTabs
-      if (pane === undefined) continue
-      if (seen.has(el)) { offsets.set(pane, el.scrollLeft); continue }
-      seen.add(el)
-      const before = offsets.get(pane)
-      if (before !== undefined) el.scrollLeft = before
-      const active = el.querySelector<HTMLElement>('[role=tab][aria-selected=true]')
-      if (active !== null) {
-        const box = el.getBoundingClientRect()
-        const tab = active.getBoundingClientRect()
-        if (tab.left < box.left) el.scrollLeft += tab.left - box.left - 24
-        else if (tab.right > box.right) el.scrollLeft += tab.right - box.right + 24
-      }
-      offsets.set(pane, el.scrollLeft)
-    }
-  }
-  doc.addEventListener('scroll', remember, true)
-  const observer = new view.MutationObserver(settle)
-  observer.observe(doc.body, { childList: true, subtree: true })
-  settle()
-  return () => {
-    observer.disconnect()
-    doc.removeEventListener('scroll', remember, true)
-    style.remove()
-  }
-}
-
-/**
- * Address of one child's native sidebar chat, preferring the controller's known mode.
- * @param ctx - client plugin context.
- * @param parent - main Session id, the fallback parent when the controller has no address.
- * @param child - fork or worker Session id.
- * @returns the resource address.
- */
-export function subagentAddress(
-  ctx: { sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined } },
-  parent: string,
-  child: string,
-): string {
-  const known = ctx.sessions?.subagentAddress?.(child)
-  const query = new URLSearchParams({ parent: known?.parentSessionId ?? parent, mode: known?.mode ?? 'continuable' })
-  return `dsh-resource://subagentchat/session/${encodeURIComponent(child)}?${query}`
-}
-
-/**
- * Where an agent's chat goes in the right column: a docked pane other than the one showing the
- * Agents page, so opening a second agent never covers the roster. The column allows two panes;
- * once both exist, `preferNewPane` no longer splits and would drop the chat into the active pane,
- * which is the roster's pane right after a row click.
- * @param doc - the document.
- * @param rosterPane - the Agents page's own pane id, when known.
- * @returns placement options for `openResource`.
- */
-export function chatPlacement(doc: Pick<Document, 'querySelectorAll'>, rosterPane?: string): { paneId: string } | { preferNewPane: true } {
-  const panes = [...doc.querySelectorAll<HTMLElement>('[data-sidebar-right-session]:not([hidden]) [data-dockkit-pane]')]
-  const holding = rosterPane ?? panes.find(p => p.querySelector('[data-scheduler-roster]') !== null)?.dataset.dockkitPane
-  const other = panes.map(p => p.dataset.dockkitPane).find(id => id !== undefined && id !== '' && id !== holding)
-  return other === undefined ? { preferNewPane: true } : { paneId: other }
-}
-
 /**
  * Read the roster projection, tolerating a missing hook.
  * @param props - framework standard props of the seat.
@@ -564,24 +437,6 @@ export function createInputCard(open: (parent: string, child: string) => void) {
   })
 }
 
-/** The parts of `ctx.sidebarRight` this plugin uses; every member is optional at this boundary. */
-export interface SidebarFace {
-  mounted?: { getSnapshot: () => string | undefined }
-  mountedSurface?: () => { layout: DockLayout } | undefined
-  actionsFor?: (sessionId: string) => DockActions | undefined
-  openTab?: (kind: string, options?: Record<string, unknown>) => void
-  openResource?: (address: string, options?: Record<string, unknown>) => void
-  focus?: (tabId: string) => void
-  isExpanded?: () => boolean
-  toggleExpanded?: () => void
-}
-/** The sidebar store's own gestures: dropping a tab on a pane edge, moving it, resizing the divider. */
-interface DockActions {
-  dropTab?: (sessionId: string, tabId: string, paneId: string, zone: 'left') => void
-  placeTab?: (sessionId: string, tabId: string, paneId: string, index?: number) => void
-  resizeSplit?: (sessionId: string, splitId: string, sizes: number[]) => void
-}
-
 /**
  * Give the Agents page a column of its own at the left of the right sidebar, moving any other
  * tab out of that column, and size it narrow when this call made the split. Each step is a
@@ -589,12 +444,12 @@ interface DockActions {
  * @param sidebar - `ctx.sidebarRight`.
  */
 export function arrangeRoster(sidebar: SidebarFace | undefined): void {
-  const sessionId = sidebar?.mounted?.getSnapshot()
-  const actions = sessionId === undefined ? undefined : sidebar?.actionsFor?.(sessionId)
-  if (sidebar === undefined || sessionId === undefined || actions === undefined) return
+  const gestures = gesturesOf(sidebar)
+  if (sidebar === undefined || gestures === undefined) return
+  const { sessionId, actions } = gestures
   let split = false
   for (let i = 0; i < 12; i += 1) {
-    const layout = sidebar.mountedSurface?.()?.layout
+    const layout = layoutOf(sidebar)
     const step = layout === undefined ? undefined : nextRosterStep(layout, AGENTS_KIND)
     if (step === undefined) break
     if (step.op === 'drop') {
@@ -606,7 +461,7 @@ export function arrangeRoster(sidebar: SidebarFace | undefined): void {
       actions.placeTab(sessionId, step.tabId, step.paneId, step.index)
     }
   }
-  const layout = sidebar.mountedSurface?.()?.layout
+  const layout = layoutOf(sidebar)
   const root = layout?.nodes[layout.rootId]
   if (split && root?.kind === 'split' && actions.resizeSplit !== undefined) {
     actions.resizeSplit(sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
@@ -624,7 +479,7 @@ export function arrangeRoster(sidebar: SidebarFace | undefined): void {
 export function openAgentsPage(sidebar: SidebarFace | undefined): void {
   if (sidebar?.openTab === undefined || sidebar.mounted?.getSnapshot() === undefined) return
   try {
-    const layout = sidebar.mountedSurface?.()?.layout
+    const layout = layoutOf(sidebar)
     const roster = layout === undefined ? undefined : findRoster(layout, AGENTS_KIND)
     if (roster !== undefined && roster.pane.host === 'dock') {
       if (sidebar.isExpanded?.() === false) sidebar.toggleExpanded?.()
@@ -649,7 +504,7 @@ export function openAgentsPage(sidebar: SidebarFace | undefined): void {
  * @returns placement options for `openResource`.
  */
 function placeChat(sidebar: SidebarFace | undefined, rosterPane?: string) {
-  const layout = sidebar?.mountedSurface?.()?.layout
+  const layout = layoutOf(sidebar)
   return layout === undefined ? chatPlacement(document, rosterPane) : chatPlacementIn(layout, AGENTS_KIND)
 }
 
@@ -706,14 +561,14 @@ function summaryParts(counts: ReturnType<typeof countsOf>, total: number): strin
  * @param sidebar - `ctx.sidebarRight`.
  */
 export function narrowRoster(sidebar: SidebarFace | undefined): void {
-  const sessionId = sidebar?.mounted?.getSnapshot()
-  const layout = sidebar?.mountedSurface?.()?.layout
+  const gestures = gesturesOf(sidebar)
+  const layout = layoutOf(sidebar)
   const root = layout?.nodes[layout.rootId]
-  if (sessionId === undefined || layout === undefined || root?.kind !== 'split') return
+  if (gestures === undefined || layout === undefined || root?.kind !== 'split') return
   const roster = findRoster(layout, AGENTS_KIND)
   const [left] = dockPanes(layout)
   if (roster === undefined || left === undefined || roster.pane.id !== left.id || left.tabs.length !== 1) return
-  sidebar?.actionsFor?.(sessionId)?.resizeSplit?.(sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
+  gestures.actions.resizeSplit?.(gestures.sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
 }
 
 /** What the Agents button says: the most urgent count, or how many are still around. */
@@ -1016,20 +871,6 @@ export function renameCommand(from: string, to: string): { line: string } | { er
   return { line: `/agents rename ${from} ${next}` }
 }
 
-/**
- * The failure text of a remote command's result, or null when it succeeded. The server answers
- * `{ commandId, result: { kind, text } }`; older servers answered `{ kind, text }` directly.
- * @param value - `result.value` of `remote.commands.execute`.
- * @param line - the command line, for the unknown-command message.
- * @returns the error text, or null.
- */
-export function commandFailure(value: unknown, line: string): string | null {
-  if (value === undefined || value === null) return `unknown command: ${line.split(' ')[0]}`
-  const outer = value as { kind?: string; text?: string; result?: { kind?: string; text?: string } }
-  const inner = outer.result !== undefined && typeof outer.result === 'object' ? outer.result : outer
-  return inner.kind === 'error' ? (inner.text ?? 'failed') : null
-}
-
 /** A host that predates `/agents new` and `/agents rename` answers with its old usage line. */
 export function needsRestartFor(error: string): boolean {
   return /^Usage: \/agents archive/u.test(error)
@@ -1069,8 +910,6 @@ export function memberModelLabel(groups: readonly CatalogGroup[], selection: For
  * @returns the slot component.
  */
 /** A subscribable read of one projection key, as the client session binding exposes it. */
-export interface Face { getSnapshot: () => unknown; subscribe: (listener: () => void) => () => void }
-const NO_FACE: Face = { getSnapshot: () => undefined, subscribe: () => () => undefined }
 
 /**
  * The worker a Session is, from its parent's roster: only a worker has a model of its own (a fork
@@ -1126,7 +965,7 @@ export function createMemberModelPicker(deps: {
           label={own === null ? '默认模型' : own.model}
           defaultLabel="默认模型（创建时的模型）"
           defaultValue="默认模型"
-          avoid="[data-composer-card]"
+          avoid={SEL.composerCard}
           busy={busy}
           ariaLabel={`${member.name} 的模型：${label}`}
           title={`${member.name} 自己用的模型，下一次模型调用生效（/agent-model）。`}
@@ -1235,8 +1074,9 @@ function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null;
  * @returns the slot component.
  */
 export function createAgentsPage(ctx: {
-  sessions?: { subagentAddress?: (id: string) => { parentSessionId?: string; mode?: string } | undefined }
-  sidebarRight?: SidebarFace
+  sidebarRight?: SidebarFace | undefined
+  /** The sidebar resource address of a member's native chat. */
+  chatAddress: (parent: string, child: string) => string
 }, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: () => Promise<readonly CatalogGroup[]>) {
   return memo(function AgentsPage(props: {
     sessionId?: string
@@ -1312,7 +1152,7 @@ export function createAgentsPage(ctx: {
       }
       run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
     }
-    const layout = ctx.sidebarRight?.mountedSurface?.()?.layout
+    const layout = layoutOf(ctx.sidebarRight)
     const selected = (layout === undefined ? undefined : activeChild(layout, AGENTS_KIND, rows.map(m => m.id))) ?? picked
     const open = (member: Member) => {
       if (props.sessionId === undefined || tab === undefined) return
@@ -1320,7 +1160,7 @@ export function createAgentsPage(ctx: {
       // Opening the chat reads its latest report; a prompt waiting stays marked until answered.
       if (reviewOf(member) !== undefined) markSeen(props.sessionId, member.id)
       const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
-      tab.tab.actions.openResource(subagentAddress(ctx, props.sessionId, member.id), placement)
+      tab.tab.actions.openResource(ctx.chatAddress(props.sessionId, member.id), placement)
       if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
     }
     // Fold the whole column, keeping its tabs: closing only this tab would leave open agent chats
@@ -1500,66 +1340,37 @@ export function createAgentsPage(ctx: {
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
 export function apply(ctx: any): void {
-  ctx.uiConversation.events.register(inputDefinition)
-  ctx.uiConversation.events.register(requestDefinition)
-  ctx.effect(() => {
-    const style = document.createElement('style')
-    style.dataset.plugin = 'dsh-agent-scheduler'
-    style.textContent = STYLE + MODEL_MENU_STYLE
-    document.head.appendChild(style)
-    return () => { style.remove() }
-  }, 'agent-scheduler: styles')
+  const host: ClientHost = clientHost(ctx)
+  registerChatEvent(ctx, inputDefinition)
+  registerChatEvent(ctx, requestDefinition)
+  const doc = typeof document === 'undefined' ? undefined : document
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
+  const run = (sessionId: string, line: string) => host.run(sessionId, line)
+  const has = (sessionId: string, name: string) => host.has(sessionId, name)
+  const catalog = () => host.catalog<CatalogGroup>()
+  /** The parent's roster projection; the parent is the open main Session, so its binding is retained. */
+  const rosterFace = (parent: string): Face => host.projection(parent, ROSTER)
   const open = (parent: string, child: string) => {
     // Opening a member from its status pill in the main chat reads its latest report too.
     const member = (rosterFace(parent).getSnapshot() as Roster | undefined)?.members.find(m => m.id === child)
     if (member !== undefined && reviewOf(member) !== undefined) run(parent, seenLine(child)).catch(() => undefined)
-    const address = { parentSessionId: parent, childSessionId: child, mode: 'continuable' }
     const face = sidebar()
-    if (face?.openResource === undefined) { ctx.uiWorkspace?.openSession(address); return }
+    if (face?.openResource === undefined) { host.openSession(parent, child); return }
     const placement = placeChat(face)
-    face.openResource(subagentAddress(ctx, parent, child), { kind: 'subagentchat', ...placement })
+    face.openResource(host.chatAddress(parent, child), { kind: SUBAGENT_CHAT_KIND, ...placement })
     if ('preferNewPane' in placement) narrowRoster(face)
   }
   const openAgents = () => { openAgentsPage(sidebar()) }
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: NODE_KIND }, createInputCard(open)))
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: REQUEST_KIND }, RequestCardView))
-  ctx.effect(() => ctx.sidebarRightTabs.register({
-    id: AGENTS_ID,
-    kind: AGENTS_KIND,
-    priority: 'extension',
-    title: () => 'Agents',
-    keepMounted: true,
-  }), 'agent-scheduler: agents tab type')
-  ctx.effect(() => retainChatTabs(ctx.sidebarRightTabs), 'agent-scheduler: keep agent chats mounted')
-  ctx.effect(() => steadyTabStrips(typeof document === 'undefined' ? undefined : document), 'agent-scheduler: keep the sidebar tab strip still')
-  /** Run one command line; returns null on success, otherwise what went wrong. */
-  const run = async (sessionId: string, line: string): Promise<string | null> => {
-    const result = await ctx.remote.commands.execute(sessionId, line, [])
-    if (!result.ok) return `${result.error.message} (${result.error.code})`
-    return commandFailure(result.value, line)
-  }
-  /** Whether the Session's host half knows a command: it lags the browser half until a restart. */
-  const has = async (sessionId: string, name: string): Promise<boolean> => {
-    const result = await ctx.remote.commands.list(sessionId)
-    if (!result.ok) throw new Error(result.error.message)
-    return (result.value as readonly { name?: string }[]).some(command => command.name === name)
-  }
-  /** The Host's provider-grouped model catalog, the one the composer's model menu lists. */
-  const catalog = async (): Promise<readonly CatalogGroup[]> => {
-    const result = await ctx.remote.session.modelCatalog()
-    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-    return (result.value as { groups: readonly CatalogGroup[] }).groups
-  }
-  ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: AGENTS_ID }, createAgentsPage(ctx, run, has, catalog)))
+  registerSlot(ctx, 'chatNode', { key: NODE_KIND }, createInputCard(open))
+  registerSlot(ctx, 'chatNode', { key: REQUEST_KIND }, RequestCardView)
+  registerTabType(ctx, { id: AGENTS_ID, kind: AGENTS_KIND, title: () => 'Agents', keepMounted: true })
+  ctx.effect(() => keepChatTabsMounted(ctx), 'agent-scheduler: keep agent chats mounted')
+  ctx.effect(() => steadyTabStrips(doc), 'agent-scheduler: keep the sidebar tab strip still')
+  registerSlot(ctx, 'paneTab', { key: AGENTS_ID }, createAgentsPage({ get sidebarRight() { return sidebar() }, chatAddress: host.chatAddress }, run, has, catalog))
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
-  const isChild = (sessionId: string) => ctx.sessions?.subagentAddress?.(sessionId) !== undefined
   const supports = (sessionId: string) => has(sessionId, 'schedule')
-  /** Parent of an addressed fork or worker chat. */
-  const parentOf = (sessionId: string): string | undefined => (ctx.sessions?.subagentAddress?.(sessionId) as { parentSessionId?: string } | undefined)?.parentSessionId
-  /** The parent's roster projection; the parent is the open main Session, so its binding is retained. */
-  const rosterFace = (parent: string): Face => ctx.sessions?.binding?.(parent)?.session?.projections?.faceOf?.(ROSTER) ?? NO_FACE
-  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({ name: 'conversation.input.right', id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf, rosterFace, run, has, catalog })))
-  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild, supports })))
+  registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
+  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports }))
   registerRecoveryConfig(ctx)
 }
