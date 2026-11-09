@@ -231,8 +231,6 @@ export const en: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Cancel',
   'merge.hint': 'The absorbed worker writes a handoff and settles its code, then is archived; its names reach the survivor.',
   'merge.pending': 'Merging {id}',
-  'mergedFrom.label': 'merged from {name}',
-  'mergedFrom.title': 'Open {name}\'s session (merged in {id}; session {session})',
   'merge.into': 'Merging into {name} · {id}',
   'merge.from': 'Taking in {name} · {id}',
 

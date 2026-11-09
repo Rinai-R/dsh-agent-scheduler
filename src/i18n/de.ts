@@ -268,8 +268,6 @@ export const de: Record<keyof typeof zh, string> = {
   'merge.cancel': 'Abbrechen',
   'merge.hint': 'Der aufgenommene Worker schreibt eine Übergabe und räumt seinen Code auf, dann wird er archiviert; seine Namen gehen an den verbleibenden über.',
   'merge.pending': 'Wird zusammengeführt {id}',
-  'mergedFrom.label': 'zusammengeführt aus {name}',
-  'mergedFrom.title': 'Sitzung von {name} öffnen (zusammengeführt in {id}; Session {session})',
   'merge.into': 'Wird mit {name} zusammengeführt · {id}',
   'merge.from': 'Übernimmt {name} · {id}',
 }
