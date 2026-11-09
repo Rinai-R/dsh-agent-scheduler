@@ -120,7 +120,7 @@ describe('registration follows the language', () => {
     await ctx.plugin(CommandRuntime)
     await ctx.plugin(RulePlugin as never, {} as never)
     const rows = ctx.commands.list(lead).filter(d => String(d.definitionId ?? '').startsWith('dsh-agent-scheduler/'))
-    expect(rows.map(r => r.name).sort()).toEqual(['agent-model', 'agents', 'fork', 'role', 'schedule', 'worker'])
+    expect(rows.map(r => r.name).sort()).toEqual(['agent-access', 'agent-model', 'agents', 'fork', 'role', 'schedule', 'worker'])
     // No settings service here: Chinese, as every other reply.
     for (const r of rows) expect(r.description, r.name).toMatch(/ · /u)
     expect(rows.find(r => r.name === 'fork')!.input).toBeUndefined()

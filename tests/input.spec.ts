@@ -266,7 +266,7 @@ describe('rule plugin', () => {
     ctx.on('internal/error' as never, ((error: unknown) => { errors.push(error) }) as never)
     await ctx.plugin(RulePlugin as never, {} as never)
     expect(errors).toEqual([])
-    expect(names).toEqual(expect.arrayContaining(['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model']))
+    expect(names).toEqual(expect.arrayContaining(['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model', 'agent-access']))
     // The exact failure seen in the GUI: an empty hint is refused by the runtime.
     expect(() => real({ definitionId: 'x/y' as never, name: 'zz', description: 'd', input: { hint: '' }, handler: () => ({ kind: 'success', text: '' }) } as never)).toThrow(/hint must not be empty/u)
   })

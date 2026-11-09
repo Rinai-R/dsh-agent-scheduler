@@ -132,6 +132,10 @@ or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not 
 screen carries no dot at all: what arrives there is already in front of you, and this browser keeps
 it as read, so moving on does not light it up. That read stays in the browser and is not written to
 the session, so it leaves no command row in the lead's chat; another browser still shows the dot.
+A worker's access mode (sandbox + approval) is switchable from its own chat footer, with
+`/agent-access <worker> <mode>`, and from its row on the Agents page; the lead's `agent_access`
+tool may narrow it, or match the user's own mode, never past it. A new worker starts in the lead's
+current mode, and the choice survives a restart. See [`worker-access.md`](worker-access.md).
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 

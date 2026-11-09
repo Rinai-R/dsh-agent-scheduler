@@ -20,17 +20,19 @@ import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserM
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
   isLive, pendingOf, relayMessage, turnEndOf, removePending, wakeForPending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
-  type AgentLookup, type HistoryPort, type RecallWindow, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
+  type AccessPort, type AgentLookup, type HistoryPort, type RecallWindow, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
 import { Ledger, type Member, type Request } from './ledger.js'
 import {
-  appendAgent, appendForkState, appendInput, appendMail, appendMerge, appendMode, appendRequest, appendRole, appendSeen, appendSettled, appendTeam, workerModelOf,
+  appendAgent, appendForkState, appendMemberAccess, appendInput, appendMail, appendMerge, appendMode, appendRequest, appendRole, appendSeen, appendSettled, appendTeam, workerModelOf,
   type ForkModelSelection, type MailKind,
 } from './records.js'
 import { mergePending, schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
 import { unread } from './review.js'
+import { applyMemberAccess, ceilingOf, rankOf, wideningReason } from './member-access.js'
+import { applyMemberModel, appendMemberModel } from './member-model.js'
 import { defaultSurvivor, gitFacts, handoffFromLog, handoffMessage, handoffRequest, mergedRole, unsettled } from './merge.js'
 import type { MergeState } from './projection.js'
 import { fateOf, recoveryPolicy, RESTART_DETAIL, resumeText, traceChild, type ChildTrace } from './recovery.js'
@@ -107,6 +109,8 @@ export interface SchedulerDeps {
   readonly team?: TeamPort | undefined
   /** Reads of one Session's history for `agent_recall`; absent: recall is unavailable. */
   readonly history?: HistoryPort | undefined
+  /** The host's permission presets (access modes); absent: access switching is unavailable. */
+  readonly access?: AccessPort | undefined
   /** Time budget of one recall scan; tests shorten it. */
   readonly recallTimeoutMs?: number
 }
@@ -1023,6 +1027,140 @@ export class Scheduler {
    * @returns the old and new name.
    * @throws when there is no such worker, it is archived, or the new name is invalid or taken.
    */
+  /**
+   * Switch a worker's model (the lead's `agent_model`, or the user's `/agent-model`). Forks and
+   * failed members are refused; the choice is recorded in the main Session and applied now.
+   * @returns the member's name and the recorded selection.
+   */
+  setMemberModel(caller: Agent, args: { name: string; selection: { provider: string; model: string; reasoningEffort?: string } | null; by: 'user' | 'lead' }): { name: string; selection: { provider: string; model: string; reasoningEffort?: string } | null } {
+    // Only the lead (or the user's command in the main Session) switches a worker: never a worker
+    // or fork, whatever tools a profile shows them.
+    if (!isMainSession(caller)) throw new Error('only the lead changes a worker\'s model')
+    const main = this.mainOf(caller)
+    const ledger = this.ledgerOf(main)
+    const member = this.lookup(ledger, args.name)
+    if (member.kind === 'fork') throw new Error(`"${member.name}" is a fork; forks always run on the lead's model`)
+    if (member.state === 'failed') throw new Error(`"${member.name}" failed to start`)
+    this.record(main, s => appendMemberModel(s, { agent: member.id, selection: args.selection }))
+    const child = this.live(member.id)
+    if (child !== undefined) applyMemberModel(child, args.selection)
+    return { name: member.name, selection: args.selection }
+  }
+
+  /**
+   * @returns the access modes the host offers, for the lead to name one in agent_access.
+   */
+  accessModes(): Array<{ name: string; sandbox: string; approval: string }> {
+    const access = this.deps.access
+    return access === undefined || !access.available ? [] : access.modes().map(m => ({ name: m.name, sandbox: m.sandbox, approval: m.approval }))
+  }
+
+  /**
+   * The worker rows `agent_list` reports: the model in effect (its own choice over the one it
+   * started with) and the access preset recorded for it.
+   */
+  effectiveModels(agent: Agent): Map<string, string | undefined> {
+    const out = new Map<string, string | undefined>()
+    for (const m of this.ledgerOf(this.mainOf(agent)).members.values()) {
+      const picked = m.pickedModel === undefined ? undefined : `${m.pickedModel.provider}/${m.pickedModel.model}${m.pickedModel.reasoningEffort === undefined ? '' : `:${m.pickedModel.reasoningEffort}`}`
+      out.set(m.id, picked ?? m.model)
+    }
+    return out
+  }
+
+  // ------------------------------------------------------------------ access modes
+
+  /**
+   * A member's access: what is recorded for it, and what its Session is on now.
+   * @returns the view; `current` is `custom` when the host matches no preset.
+   */
+  memberAccessView(agent: Agent): { preset?: string | undefined; current: string; by?: 'user' | 'lead' | 'inherited' | undefined } {
+    const access = this.deps.access
+    const member = this.ledgerOf(this.mainOf(agent)).members.get(agent.id)
+    const current = access?.available === true ? access.current(agent.session) : 'custom'
+    return { preset: member?.accessPreset, current, by: member?.accessBy }
+  }
+
+  /**
+   * Switch a worker's access mode. The user may choose any offered mode; the lead may narrow a
+   * worker or match the user's own mode, never widen past it. Recorded in the main Session and
+   * applied to the live worker, then re-applied whenever it is created again.
+   * @param caller - the lead, or the user's command.
+   * @param args - the member, the preset (null = the lead's current mode), and who chose it.
+   * @returns the member's name and the preset now recorded.
+   */
+  setMemberAccess(caller: Agent, args: { name: string; preset: string | null; by: 'user' | 'lead' }): { name: string; preset: string } {
+    if (!isMainSession(caller)) throw new Error('only the lead changes a worker\'s access mode')
+    const main = this.mainOf(caller)
+    const access = this.deps.access
+    if (access === undefined || !access.available) throw new Error('this DeepSeek Harness has no permission presets')
+    const ledger = this.ledgerOf(main)
+    const member = this.lookup(ledger, args.name)
+    if (member.kind === 'fork') throw new Error(`"${member.name}" is a fork; forks route on the lead's model and carry no access mode`)
+    if (member.state === 'failed') throw new Error(`"${member.name}" failed to start`)
+    const modes = access.modes()
+    if (modes.length === 0) throw new Error('this DeepSeek Harness offers no access modes')
+    const ceiling = ceilingOf(access, main)
+    const preset = args.preset ?? ceiling?.name
+    if (preset === undefined) throw new Error(`the user's own access mode is not one of the offered presets (${modes.map(m => m.name).join(', ')}); ask the user to pick one`)
+    const target = modes.find(m => m.name === preset)
+    if (target === undefined) throw new Error(`no access mode "${preset}" (available: ${modes.map(m => m.name).join(', ')})`)
+    if (args.by === 'lead') {
+      const why = wideningReason(target, ceiling)
+      if (why !== undefined) throw new Error(why)
+    }
+    this.record(main, s => appendMemberAccess(s, { agent: member.id, preset, by: args.by }))
+    const child = this.live(member.id)
+    if (child !== undefined && member.state !== 'archived') applyMemberAccess(access, child, preset)
+    return { name: member.name, preset }
+  }
+
+  /**
+   * Keep a mode the lead chose within the user's current one. The lead may set a worker only as
+   * wide as the user's own mode; when the user narrows their mode later, a worker the lead set
+   * follows it down before its next step (and the narrowed mode is recorded, by the lead's
+   * choice being clamped). Modes the user chose, or inherited at creation, are left alone.
+   * @param agent - any agent; only workers whose recorded mode came from the lead are checked.
+   */
+  clampMemberAccess(agent: Agent): void {
+    const access = this.deps.access
+    if (access === undefined || !access.available || isMainSession(agent)) return
+    const main = this.live(mainIdOf(agent))
+    if (main === undefined) return
+    const member = this.ledgerOf(main).members.get(agent.id)
+    if (member?.kind !== 'worker' || member.accessBy !== 'lead' || member.accessPreset === undefined) return
+    const modes = access.modes()
+    const ceiling = ceilingOf(access, main)
+    const target = modes.find(m => m.name === member.accessPreset)
+    if (wideningReason(target, ceiling) === undefined) return
+    // Past the user's mode now (or no longer comparable): fall back to the user's own mode, or
+    // the narrowest offered when the user is on a custom combination.
+    const narrowest = [...modes].sort((a, b) => (rankOf(a) ?? 99) - (rankOf(b) ?? 99))[0]
+    const fallback = ceiling ?? narrowest
+    if (fallback === undefined) return
+    this.record(main, s => appendMemberAccess(s, { agent: agent.id, preset: fallback.name, by: 'lead' }))
+    applyMemberAccess(access, agent, fallback.name)
+  }
+
+  /**
+   * Give a just-created worker the access recorded for it, or (first creation) the lead's mode,
+   * recorded as inherited so a later lead switch does not move it.
+   * @param agent - the created Agent; main Sessions and forks are left alone.
+   */
+  adoptMemberAccess(agent: Agent): void {
+    const access = this.deps.access
+    if (access === undefined || !access.available || isMainSession(agent)) return
+    const main = this.live(mainIdOf(agent))
+    if (main === undefined) return
+    const ledger = this.ledgerOf(main)
+    const member = ledger.members.get(agent.id)
+    if (member?.kind !== 'worker' || member.state === 'archived' || member.state === 'failed') return
+    const preset = member.accessPreset ?? ceilingOf(access, main)?.name
+    if (preset === undefined) return
+    applyMemberAccess(access, agent, preset)
+    if (member.accessPreset === undefined) this.record(main, s => appendMemberAccess(s, { agent: agent.id, preset, by: 'inherited' }))
+  }
+
   async rename(caller: Agent, name: string, next: string): Promise<{ from: string; to: string }> {
     const main = this.mainOf(caller)
     // Inside the dispatch lock: a creation checking whether a name is free must not race it.
@@ -1961,6 +2099,8 @@ export async function preStep(
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const { agent, messages, step } = payload
+  // A worker the lead set never runs a step wider than the user's mode is now.
+  if (!isMainSession(agent)) scheduler.clampMemberAccess(agent)
   // Nothing claimed at all: the scheduler took the turn's message before DSH claimed it (a hand-off).
   const claimedNothing = messages.length === 0
   const admitted = await scheduler.admit(agent, messages)
