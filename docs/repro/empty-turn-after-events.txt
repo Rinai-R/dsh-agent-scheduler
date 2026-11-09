@@ -1,0 +1,61 @@
+session-c1d9af23-2645-4531-a656-a3073ae389b1
+turns 9 zero-step: [(3, 'blocked'), (4, 'blocked'), (6, 'blocked'), (8, 'blocked')]
+  3 agent/inbox/spliced {"target": "next-turn", "start": 0} INS user [{"type": "text", "text": "STEP1: 建一个 hub worker"}
+  4 turn/start {"turn": 1} 
+  5 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  6 step/start {"turn": 1, "step": 1} 
+  23 step/start {"turn": 1, "step": 2} 
+  33 step/start {"turn": 1, "step": 3} 
+  38 turn/end {"turn": 1, "reason": {"kind": "completed"}} 
+  40 plugin:dsh-agent-scheduler/settled {"version": 1, "agent": "session-17c28c46-abec-4bc2-b510-f1ec892f79c0", "through": 29} 
+  43 agent/inbox/spliced {"target": "next-turn", "start": 0} INS agent-message [{"type": "text", "text": "[reply to r-1 from hub]
+  44 turn/start {"turn": 2} 
+  45 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  46 agent/inbox/spliced {"target": "next-step", "start": 0} INS subagent-settled [{"type": "text", "text": "Background subagent ses
+  47 step/start {"turn": 2, "step": 1} 
+  52 agent/inbox/spliced {"target": "next-step", "start": 0, "removedCount": 1} 
+  53 turn/end {"turn": 2, "reason": {"kind": "completed"}} 
+  61 plugin:dsh-agent-scheduler/settled {"version": 1, "agent": "session-17c28c46-abec-4bc2-b510-f1ec892f79c0", "through": 40} 
+  62 agent/inbox/spliced {"target": "next-turn", "start": 0} INS subagent-settled [{"type": "text", "text": "Background subagent ses
+  63 turn/start {"turn": 3} 
+  64 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  65 turn/end {"turn": 3, "reason": {"kind": "blocked"}} 
+  69 agent/inbox/spliced {"target": "next-turn", "start": 0} INS user [{"type": "text", "text": "ON1: 第 1 条"}]
+  72 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1, "outcome": "canceled"} 
+  73 plugin:dsh-agent-scheduler/input {"version": 1, "messageId": "182cb850-87f3-474c-a23e-9c8d7393f1e6", "forkId": "session-b60 
+  74 turn/start {"turn": 4} 
+  75 turn/end {"turn": 4, "reason": {"kind": "blocked"}} 
+  77 plugin:dsh-agent-scheduler/settled {"version": 1, "agent": "session-b6094023-f5d2-4f9a-9cec-fa137da6bb97", "through": 82} 
+  81 agent/inbox/spliced {"target": "next-turn", "start": 0} INS agent-message [{"type": "text", "text": "The user said: ON1: 第 1
+  82 turn/start {"turn": 5} 
+  83 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  84 agent/inbox/spliced {"target": "next-step", "start": 0} INS subagent-settled [{"type": "text", "text": "Background subagent ses
+  86 step/start {"turn": 5, "step": 1} 
+  95 agent/inbox/spliced {"target": "next-step", "start": 0, "removedCount": 1} 
+  96 turn/end {"turn": 5, "reason": {"kind": "completed"}} 
+  97 agent/inbox/spliced {"target": "next-turn", "start": 0} INS user [{"type": "text", "text": "ON2: 第 2 条"}]
+  100 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1, "outcome": "canceled"} 
+  101 plugin:dsh-agent-scheduler/input {"version": 1, "messageId": "28f41cb2-94ee-4462-a77f-80b151b751dc", "forkId": "session-46d 
+  102 turn/start {"turn": 6} 
+  103 turn/end {"turn": 6, "reason": {"kind": "blocked"}} 
+  105 plugin:dsh-agent-scheduler/settled {"version": 1, "agent": "session-46df4ebc-4657-4e84-85e9-6059d166ce73", "through": 112} 
+  109 agent/inbox/spliced {"target": "next-turn", "start": 0} INS agent-message [{"type": "text", "text": "The user said: ON2: 第 2
+  110 turn/start {"turn": 7} 
+  111 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  112 agent/inbox/spliced {"target": "next-step", "start": 0} INS subagent-settled [{"type": "text", "text": "Background subagent ses
+  114 step/start {"turn": 7, "step": 1} 
+  120 agent/inbox/spliced {"target": "next-step", "start": 0, "removedCount": 1} 
+  121 turn/end {"turn": 7, "reason": {"kind": "completed"}} 
+  122 agent/inbox/spliced {"target": "next-turn", "start": 0} INS user [{"type": "text", "text": "ON3: 第 3 条"}]
+  125 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1, "outcome": "canceled"} 
+  126 plugin:dsh-agent-scheduler/input {"version": 1, "messageId": "10040c45-0327-4622-8207-55a3eb887422", "forkId": "session-f8c 
+  127 turn/start {"turn": 8} 
+  128 turn/end {"turn": 8, "reason": {"kind": "blocked"}} 
+  130 plugin:dsh-agent-scheduler/settled {"version": 1, "agent": "session-f8c602c2-b974-4f05-9720-d82494eba6c3", "through": 137} 
+  134 agent/inbox/spliced {"target": "next-turn", "start": 0} INS agent-message [{"type": "text", "text": "The user said: ON3: 第 3
+  135 turn/start {"turn": 9} 
+  136 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1} 
+  137 agent/inbox/spliced {"target": "next-step", "start": 0} INS subagent-settled [{"type": "text", "text": "Background subagent ses
+  139 step/start {"turn": 9, "step": 1} 
+  145 agent/inbox/spliced {"target": "next-step", "start": 0, "removedCount": 1} 
+  146 turn/end {"turn": 9, "reason": {"kind": "completed"}} 
