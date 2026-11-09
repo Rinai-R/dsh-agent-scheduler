@@ -1961,15 +1961,21 @@ export async function preStep(
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const { agent, messages, step } = payload
+  // Nothing claimed at all: the scheduler took the turn's message before DSH claimed it (a hand-off).
+  const claimedNothing = messages.length === 0
   const admitted = await scheduler.admit(agent, messages)
   if (admitted !== undefined) messages.splice(0, messages.length, ...admitted)
   const main = isMainSession(agent)
   // A turn opened only by a runtime notice the scheduler emptied takes the lead's inbox instead.
   if (step === 1 && main && admitted !== undefined && messages.every(isContextOnly)) scheduler.takeMail(agent, messages)
+  // A first step the scheduler emptied (a hand-off, a settlement notice whose answers already went
+  // to the inbox) must not run on context alone, whether or not scheduling is on: DSH appends its
+  // time and runtime snapshots to it, and the lead would answer them as an empty user message.
   // Checked on both sides of next(): listener order decides where the runtime's context appears.
-  if (step === 1 && main && scheduler.isOn(agent) && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
+  const guarded = step === 1 && main && (scheduler.isOn(agent) || admitted !== undefined || claimedNothing)
+  if (guarded && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
   const decision = await next()
-  if (step === 1 && main && scheduler.isOn(agent) && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
+  if (guarded && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
   return decision
 }
 

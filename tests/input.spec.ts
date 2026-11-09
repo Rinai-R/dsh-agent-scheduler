@@ -165,6 +165,12 @@ describe('lead wakes', () => {
     expect(reached).toBe(0)
     expect(await preStep(scheduler, { agent: lead, messages: [], step: 1 }, pass)).toEqual({ kind: 'reject' })
     expect((await preStep(scheduler, { agent: lead, messages: [], step: 2 }, pass)).kind).toBe('enter')
+    // Scheduling off: a first step that claimed nothing is still not run on context alone.
+    const off = new Scheduler({ subagents: {} as never, agents: { get: () => undefined }, readLog: async () => ({ events: [], inherited: 0 }), defaultOn: false })
+    expect(await preStep(off, { agent: lead, messages: [], step: 1 }, pass)).toEqual({ kind: 'reject' })
+    // But a step with the user's own words runs, on or off.
+    const words = createUserMessage({ content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } })
+    expect((await preStep(off, { agent: lead, messages: [words] as never[], step: 1 }, async () => ({ kind: 'enter' as const, messages: [words, context] as never[] }))).kind).toBe('enter')
   })
 
   it('a withheld report mid-turn does not end the lead\'s tool loop', async () => {
