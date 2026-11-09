@@ -77,6 +77,40 @@ describe('/agents fork', () => {
     expect(reread.members.find(m => m.id === forked.id)?.createdVia).toBe('user')
   })
 
+  it('the fork runs on its owner\'s model, and in its owner\'s access mode unless that is wider than the user\'s', async () => {
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'W'))
+    const MODES = [
+      { name: 'read-only', sandbox: 'read-only', approval: 'ask' as const },
+      { name: 'workspace-write', sandbox: 'workspace-write', approval: 'ask' as const },
+      { name: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never' as const },
+    ]
+    let userMode = 'workspace-write'
+    const applied: Array<{ session: object; name: string }> = []
+    const access = { available: true, modes: () => MODES, current: () => userMode, set: (session: object, name: string) => { applied.push({ session, name }) } }
+    const scheduler = install(ctx, { defaultOn: false, access })
+    const dir = mkdtempSync(join(tmpdir(), 'hub-'))
+    await scheduler.createWorker(lead, { name: 'hub', role: 'develops hub', cwd: dir, task: 'warm up', model: { provider: 'mock', model: 'owner-model' } })
+    await until(lead, '[reply to r-1 from hub]')
+    await lead.whenIdle()
+    // The owner was narrowed to read-only by the user.
+    scheduler.setMemberAccess(lead, { name: 'hub', preset: 'read-only', by: 'user' })
+    const run = (line: string) => runAgentsCommand(scheduler, { agent: lead, rawInput: line } as never)
+    expect(await run(`fork hub hub-a --cwd ${mkdtempSync(join(tmpdir(), 'hub-a-'))}`)).toMatchObject({ kind: 'success' })
+    const a = scheduler.ledgerOf(lead).find('hub-a')!
+    expect(a.model).toBe('mock/owner-model')
+    // The created hook (not wired in this harness) adopts the access mode.
+    const adopt = (id: string) => { scheduler.adoptMemberAccess({ id, session: { header: { parentSession: lead.id } } } as never) }
+    adopt(a.id)
+    expect(scheduler.ledgerOf(lead).find('hub-a')).toMatchObject({ accessPreset: 'read-only', accessBy: 'inherited' })
+    // An owner on full access while the user is on workspace-write: the fork gets the user's mode.
+    userMode = 'danger-full-access'
+    scheduler.setMemberAccess(lead, { name: 'hub', preset: 'danger-full-access', by: 'user' })
+    userMode = 'workspace-write'
+    expect(await run(`fork hub hub-b --cwd ${mkdtempSync(join(tmpdir(), 'hub-b-'))}`)).toMatchObject({ kind: 'success' })
+    adopt(scheduler.ledgerOf(lead).find('hub-b')!.id)
+    expect(scheduler.ledgerOf(lead).find('hub-b')?.accessPreset).toBe('workspace-write')
+  })
+
   it('with --owner-name it is a split: the owner is renamed and keeps its work, both share the area', async () => {
     const { lead, scheduler, run } = await withHub()
     const cwd = mkdtempSync(join(tmpdir(), 'hub-image-'))
@@ -107,6 +141,36 @@ describe('/agents fork', () => {
     // Only the user (the main Session) forks this way.
     const hubAgent = { id: scheduler.ledgerOf(lead).find('hub')!.id, session: { header: { parentSession: lead.id } } }
     await expect(scheduler.forkWorker(hubAgent as never, { owner: 'hub', name: 'y' })).rejects.toThrow()
+  })
+
+  it('creates the worktree from the owner\'s current commit, and refuses an existing path or branch', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { writeFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+    const repo = mkdtempSync(join(tmpdir(), 'owner-repo-'))
+    git(repo, 'init', '-q')
+    writeFileSync(join(repo, 'a'), '1')
+    git(repo, 'add', '.'); git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'first')
+    git(repo, 'branch', 'taken')
+    // The owner has moved on: a commit origin/main (absent here) and the first commit do not have.
+    writeFileSync(join(repo, 'a'), '2')
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qam', 'owner work')
+    const ownerHead = git(repo, 'rev-parse', 'HEAD')
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'W'))
+    const scheduler = install(ctx, { defaultOn: false })
+    await scheduler.createWorker(lead, { name: 'owner', role: 'r', cwd: repo, task: 'warm up' })
+    await until(lead, '[reply to r-1 from owner]')
+    await lead.whenIdle()
+    const run = (line: string) => runAgentsCommand(scheduler, { agent: lead, rawInput: line } as never)
+    // What the form submits: --base HEAD in the owner's checkout.
+    const wt = join(tmpdir(), `fork-wt-${Date.now()}`)
+    expect(await run(`fork owner owner-2 --cwd ${wt} --repo ${repo} --branch feat/owner-2 --base HEAD`)).toMatchObject({ kind: 'success' })
+    expect(git(wt, 'rev-parse', 'HEAD')).toBe(ownerHead)
+    // An existing path, or a branch that exists, is refused with git's reason.
+    expect(await run(`fork owner owner-3 --cwd ${wt} --repo ${repo} --branch feat/owner-3 --base HEAD`)).toMatchObject({ kind: 'error' })
+    expect(await run(`fork owner owner-4 --cwd ${wt}-b --repo ${repo} --branch taken --base HEAD`)).toMatchObject({ kind: 'error' })
+    expect(scheduler.ledgerOf(lead).find('owner-3')).toBeUndefined()
+    expect(scheduler.ledgerOf(lead).find('owner-4')).toBeUndefined()
   })
 
   it('parses flags whose values have spaces', () => {

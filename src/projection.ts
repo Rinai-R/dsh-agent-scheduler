@@ -59,6 +59,10 @@ export interface RosterMember {
   readonly mergedInto?: string | undefined
   /** Workers merged into this one, oldest first: where their history is (`agent_recall`). */
   readonly mergedFrom?: readonly MergedFrom[] | undefined
+  /** Access preset chosen for this worker (`/agent-access`, the lead's tool, or inherited at creation). */
+  readonly accessPreset?: string | undefined
+  /** Who chose it. */
+  readonly accessBy?: 'user' | 'lead' | 'inherited' | undefined
 }
 
 /** One worker merged into another, and the part of its log that was its own. */
@@ -362,6 +366,12 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
   }
   const mail = R.mail(event)
   if (mail !== undefined) return applyMail(state, mail, event.time)
+  const access = R.memberAccess(event)
+  if (access !== undefined) {
+    if (!state.members.some(m => m.id === access.agent)) return state
+    const preset = access.preset === null ? undefined : access.preset
+    return { ...state, members: upsert(state.members, access.agent, m => compact({ ...m!, accessPreset: preset, accessBy: access.by })) }
+  }
   const merge = R.merge(event)
   if (merge !== undefined) return applyMerge(state, merge, event.time)
   const team = R.team(event)
@@ -484,7 +494,7 @@ function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
-  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt', 'mergedInto', 'createdVia']) if (!optionalString(m[key])) fail(`member ${key}`)
+  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt', 'mergedInto', 'createdVia', 'accessPreset', 'accessBy']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (m.formerNames !== undefined && !(Array.isArray(m.formerNames) && m.formerNames.every(isString))) fail('member formerNames')
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')

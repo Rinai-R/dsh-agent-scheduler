@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
-  claimOnce, eventsOf, historyPort, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  accessPort, claimOnce, eventsOf, historyPort, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
   registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
 } from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
@@ -19,6 +19,7 @@ import { forkGuard } from './fork-guard.js'
 import { teamGuard } from './team-guard.js'
 import { list, t } from './i18n/index.js'
 import { MENU, menuDescription, menuHint } from './menu.js'
+import { installMemberAccess } from './member-access.js'
 import { installMemberModels, restoreMemberModel, type Validate } from './member-model.js'
 
 export const name = 'agent-scheduler-rule'
@@ -311,7 +312,7 @@ export function incompatible(missing: readonly string[], version = hostVersion()
 }
 
 /** The plugin's slash commands, as the composer lists them. */
-const COMMANDS = ['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model'] as const
+const COMMANDS = ['schedule', 'agents', 'fork', 'worker', 'role', 'agent-model', 'agent-access'] as const
 export { menuDescription, menuHint } from './menu.js'
 
 
@@ -338,6 +339,7 @@ export function apply(ctx: Context, config: Config): void {
     return
   }
   const names = titleService(ctx, log)
+  const access = accessPort(ctx)
   const scheduler = new Scheduler({
     subagents: ctx.subagents,
     agents: ctx.agents as never,
@@ -348,6 +350,7 @@ export function apply(ctx: Context, config: Config): void {
     // A worker renamed in a split gets a title to match, when it is resident and titles exist.
     team: teamPort(ctx),
     history: historyPort(ctx),
+    access,
     renameSession: (id, title) => {
       const session = ctx.agents.get(id as never)?.session
       if (session !== undefined) names.rename(session, title)
@@ -365,6 +368,7 @@ export function apply(ctx: Context, config: Config): void {
     status: (agent, status) => { scheduler.onStatus(agent, status) },
     created: (agent, resumed) => {
       restoreMemberModel(scheduler, agent)
+      scheduler.adoptMemberAccess(agent)
       // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
       // After creation resolves: the runtime only delivers to children of a published parent.
       if (!resumed || !isMainSession(agent)) return
@@ -375,7 +379,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     disposed: (agent) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() },
   })
-  for (const tool of schedulerTools(scheduler, ctx.agents as never)) registerTool(ctx, tool)
+  for (const tool of schedulerTools(scheduler, ctx.agents as never, { validateModel: modelValidator(ctx) })) registerTool(ctx, tool)
   // Forks route only: every working tool is refused at dispatch (src/fork-guard.ts).
   installGuard(ctx, forkGuard(agent => scheduler.forkNameOf(agent)))
   // Agent Teams, when mounted: who may form a team (src/team-guard.ts), and workers as Team Leads.
@@ -384,6 +388,7 @@ export function apply(ctx: Context, config: Config): void {
   teamPort(ctx).watch(id => { scheduler.onTeamRecord(id) })
   promptSection(ctx, 'agent-scheduler', 900, agent => sectionFor(scheduler, agent))
   installMemberModels(ctx, scheduler, ctx.agents as never)
+  installMemberAccess(ctx, scheduler, access)
   const validate: Validate = modelValidator(ctx)
   registerCommand(ctx, {
     id: 'dsh-agent-scheduler/schedule',

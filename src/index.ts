@@ -7,7 +7,7 @@
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { DEFAULT_RECOVERY, setRecoveryPolicy, type RecoveryPolicy } from './recovery.js'
-import { HOST_SERVICES, installForkFrom, registerProjection } from './dsh/host/index.js'
+import { accessPort, HOST_SERVICES, installForkFrom, registerProjection } from './dsh/host/index.js'
 import { applyRoster, initRoster, rosterSchema, rosterView, rosterViewSchema, SCHEDULER_PROJECTION } from './projection.js'
 
 export const name = 'agent-scheduler'
@@ -38,6 +38,7 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installForkFrom(ctx)
+  const access = accessPort(ctx)
   ctx.effect(() => setRecoveryPolicy(() => config.recovery.get() as RecoveryPolicy), 'agent-scheduler: recovery policy')
   registerProjection(ctx, {
     key: SCHEDULER_PROJECTION,
@@ -46,13 +47,14 @@ export function apply(ctx: Context, config: Config): void {
     // 7: a renamed worker's former names, and the area workers split from one area share.
     // 8: the lead's inbox.
     // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges. 11: where merged workers' history is.
+    // 12: each worker's access mode, and workers the user forked.
     // Older cached state is dropped and refolded.
-    stateVersion: 11,
+    stateVersion: 12,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,
     apply: applyRoster,
-    toView: rosterView,
+    toView: state => ({ ...rosterView(state), accessModes: access.modes().map((m: { name: string; sandbox: string }) => ({ name: m.name, sandbox: m.sandbox })) }),
   })
 }
 

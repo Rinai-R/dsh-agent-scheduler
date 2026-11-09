@@ -37,7 +37,13 @@ export function parseModel(value: string): ForkModelSelection {
  * @param agents - live agents, to describe status.
  * @returns tool definitions.
  */
-export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefinition[] {
+/**
+ * @param scheduler - the scheduler.
+ * @param agents - live Agents.
+ * @param deps - a model validator (the host's own routability check); without one, a model the
+ *   lead names is recorded as given.
+ */
+export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { validateModel?: (selection: { provider: string; model: string; reasoningEffort?: string }) => Promise<{ provider: string; model: string; reasoningEffort?: string }> } = {}): ToolDefinition[] {
   const status = (id: string): string => statusOf(agents, id) ?? 'idle'
   // Registered in every session of the preset so the tool list never changes with the switch.
   // The lead keeps them with scheduling off: the switch decides only who takes user messages.
@@ -51,6 +57,10 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
   const requireVersion = (agent: Agent, version: string | undefined): void => {
     if (version !== undefined && version !== '') return
     throw new DispatchRefused('rosterVersion is required: call agent_list first and decide from the roster it returns (who already has this work), then pass its rosterVersion.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
+  }
+  // The lead names what it acts on while scheduling is on, as with agent_create.
+  const requireFor = (agent: Agent, named: string | undefined): void => {
+    if (isMainSession(agent) && (named === undefined || named === '') && scheduler.isOn(agent)) throw new DispatchRefused('The lead must say what this is for: pass for: the fork-N whose conclusion or the r-N whose reply you act on.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
   }
   return [
     defineTool({
@@ -145,6 +155,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
         const withForks = (args as { forks?: boolean }).forks === true
         const allHistory = (args as { history?: boolean }).history === true
         const ledger = scheduler.ledgerOf(caller(exec))
+        const effectiveModel = scheduler.effectiveModels(caller(exec))
         // Archived and merged workers move to history: their sessions stay readable (agent_recall).
         const past = [...ledger.members.values()].filter(m => m.kind === 'worker' && (m.state === 'archived' || m.mergedInto !== undefined))
         const shown = allHistory ? past : past.slice(-20)
@@ -156,7 +167,9 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
             ...(m.area === undefined ? {} : { area: m.area }),
             ...(m.formerNames === undefined ? {} : { formerNames: [...m.formerNames] }),
             ...(m.cwd === undefined ? {} : { cwd: m.cwd }),
-            ...(m.model === undefined ? {} : { model: m.model }),
+            // The model in effect: its own choice (agent_model / agent-model) over the start model.
+            ...(() => { const effective = effectiveModel.get(m.id); return effective === undefined ? {} : { model: effective, ...(m.pickedModel === undefined ? {} : { modelChoice: 'picked' }) } })(),
+            ...(m.accessPreset === undefined ? {} : { access: m.accessPreset }),
             ...(m.createdFor === undefined ? {} : { createdFor: m.createdFor }),
             // Requests it has not answered yet: a backlog to fork around, not to add to.
             ...(() => { const open = ledger.openTo(m.id).length; return open > 0 ? { open } : {} })(),
@@ -181,6 +194,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
             })),
             ...(shown.length < past.length ? { historyMore: past.length - shown.length } : {}),
           }),
+          ...(isMainSession(caller(exec)) ? { accessModes: scheduler.accessModes() } : {}),
           rosterVersion: scheduler.rosterVersion(ledger),
         }
       },
@@ -224,6 +238,56 @@ export function schedulerTools(scheduler: Scheduler, agents: Live): ToolDefiniti
         else if (a.into === a.with) pair = { absorbed: a.worker, into: a.with }
         else throw new Error(`into must be "${a.worker}" or "${a.with}"`)
         return scheduler.merge(agent, { ...pair, name: a.name, role: a.role, rosterVersion: a.rosterVersion, for: named })
+      },
+    }),
+    defineTool({
+      name: 'agent_model',
+      description: 'Choose the model a worker uses for its later requests, like /worker model but for one worker: "provider/model[:effort]", or "default" to go back to the model it started with. Forks always run on the lead\'s model and have none of their own. Pass the rosterVersion from agent_list; the lead passes for while scheduling is on.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'The worker.' },
+        model: { type: 'string', required: true, description: '"provider/model" with an optional ":effort", or "default".' },
+        rosterVersion: VERSION,
+        for: { type: 'string', description: 'The lead only, as for agent_create; optional while scheduling is off.' },
+      },
+      output: { schema: OK, render: json },
+      execute: async (args, exec) => {
+        const a = args as { name: string; model: string; rosterVersion?: string; for?: string }
+        const agent = caller(exec)
+        requireVersion(agent, a.rosterVersion)
+        requireFor(agent, a.for)
+        const raw = a.model.trim()
+        let selection: { provider: string; model: string; reasoningEffort?: string } | null = null
+        if (raw !== 'default') {
+          const slash = raw.indexOf('/')
+          if (slash <= 0 || slash === raw.length - 1) throw new Error('model must be "provider/model" with an optional ":effort", or "default"')
+          const [route, effort] = [raw.slice(0, slash), raw.slice(slash + 1)]
+          const colon = effort.indexOf(':')
+          const base = colon < 0 ? { provider: route, model: effort } : { provider: route, model: effort.slice(0, colon), reasoningEffort: effort.slice(colon + 1) }
+          if (base.provider === '' || base.model === '' || (base.reasoningEffort ?? 'x') === '') throw new Error('model must be "provider/model" with an optional ":effort", or "default"')
+          selection = deps.validateModel === undefined ? base : await deps.validateModel(base)
+        }
+        const out = scheduler.setMemberModel(agent, { name: a.name, selection, by: 'lead' })
+        return { worker: out.name, model: out.selection === null ? 'default' : `${out.selection.provider}/${out.selection.model}${out.selection.reasoningEffort === undefined ? '' : `:${out.selection.reasoningEffort}`}` }
+      },
+    }),
+    defineTool({
+      name: 'agent_access',
+      description: 'Choose a worker\'s access mode (sandbox + approval bundle: e.g. read-only, workspace-write, danger-full-access). "default" gives it the lead\'s current mode. You may narrow a worker or bring it up to the user\'s own current mode, never past it: a wider mode is refused, ask the user to switch their own mode first. Forks have no access mode of their own. Pass the rosterVersion from agent_list; the lead passes for while scheduling is on.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'The worker.' },
+        mode: { type: 'string', required: true, description: 'An access mode name from agent_list, or "default" for the lead\'s current mode.' },
+        rosterVersion: VERSION,
+        for: { type: 'string', description: 'The lead only, as for agent_create; optional while scheduling is off.' },
+      },
+      output: { schema: OK, render: json },
+      execute: async (args, exec) => {
+        const a = args as { name: string; mode: string; rosterVersion?: string; for?: string }
+        const agent = caller(exec)
+        requireVersion(agent, a.rosterVersion)
+        requireFor(agent, a.for)
+        const mode = a.mode.trim()
+        const out = scheduler.setMemberAccess(agent, { name: a.name, preset: mode === 'default' ? null : mode, by: 'lead' })
+        return { worker: out.name, access: out.preset }
       },
     }),
     defineTool({
