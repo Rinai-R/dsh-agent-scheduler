@@ -22,11 +22,15 @@ export interface ReviewFields {
  * - `failed`: the latest report failed and the user has not opened the member since;
  * - `reported`: the latest report succeeded and the user has not opened the member since;
  * - undefined: read, or nothing reported yet.
+ * A member whose chat is on screen carries no mark: whatever arrived is already in front of the
+ * user. Pass `active` for the Session the viewer currently shows (the right pane's active tab).
  * @param member - the member's review fields.
  * @param pendingInteraction - whether the member's Session waits for the user right now.
+ * @param active - whether the user is looking at this member's chat right now.
  * @returns the mark.
  */
-export function reviewOf(member: ReviewFields, pendingInteraction = false): 'approval' | 'failed' | 'reported' | undefined {
+export function reviewOf(member: ReviewFields, pendingInteraction = false, active = false): 'approval' | 'failed' | 'reported' | undefined {
+  if (active) return undefined
   if (pendingInteraction) return 'approval'
   if (!unread(member)) return undefined
   return member.reportFailed === true ? 'failed' : 'reported'

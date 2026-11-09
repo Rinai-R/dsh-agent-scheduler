@@ -128,7 +128,9 @@ menu at the top sets the `/worker model` default.
 start) its dot turns solid with a halo until you open it (or its pill in the main chat): green for
 a result, red for a failure; yellow while it waits for you on a permission prompt or question, read
 or not. Opening it sends `/agents seen`, a `seen` record, so a restart does not light it again;
-「全部已读」 at the top (`/agents seen all`) reads them all at once.
+「全部已读」 at the top (`/agents seen all`) reads them all at once. A member whose chat is on
+screen carries no dot at all: what arrives there is already in front of you, and it is recorded as
+seen shortly after the reports stop, so moving on does not light it up.
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 

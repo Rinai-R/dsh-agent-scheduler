@@ -83,6 +83,15 @@ export function chatPlacementIn(layout: DockLayout, kind: string): { paneId: str
 }
 
 /**
+ * Whether a tab's resource address is one member's chat.
+ * @param contentId - the tab's content address.
+ * @param id - the member's Session id.
+ * @returns whether the address names that Session.
+ */
+const showsSession = (contentId: string, id: string): boolean =>
+  contentId.includes(`/session/${encodeURIComponent(id)}`) || contentId.includes(`/session/${id}`)
+
+/**
  * The child Session an open tab shows, for the roster's selected row.
  * @param layout - sidebar layout.
  * @param kind - the Agents page kind.
@@ -94,5 +103,24 @@ export function activeChild(layout: DockLayout, kind: string, ids: readonly stri
   const pane = dockPanes(layout).find(p => p.id !== roster?.pane.id)
   const tab = pane?.activeTabId === undefined ? undefined : layout.tabs[pane.activeTabId]
   if (tab === undefined) return undefined
-  return ids.find(id => tab.contentId.includes(`/session/${encodeURIComponent(id)}`) || tab.contentId.includes(`/session/${id}`))
+  return ids.find(id => showsSession(tab.contentId, id))
+}
+
+/**
+ * The members whose chats the user is looking at right now: the active tab of every pane that is
+ * on screen, docked or floating. A report arriving in one of them needs no review dot.
+ * @param layout - sidebar layout.
+ * @param ids - the roster's member Session ids.
+ * @returns the visible member Session ids.
+ */
+export function visibleChildren(layout: DockLayout, ids: readonly string[]): ReadonlySet<string> {
+  const visible = new Set<string>()
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== 'pane' || node.activeTabId === undefined) continue
+    const tab = layout.tabs[node.activeTabId]
+    if (tab === undefined) continue
+    const id = ids.find(candidate => showsSession(tab.contentId, candidate))
+    if (id !== undefined) visible.add(id)
+  }
+  return visible
 }
