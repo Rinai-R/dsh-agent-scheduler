@@ -9,7 +9,8 @@ import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 're
 import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
-import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE } from './layout.js'
+import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, visibleChildren } from './layout.js'
+import { autoSeenTargets, browserSeen, type LocalSeen } from './active-seen.js'
 import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
@@ -375,8 +376,8 @@ const reviewTitle = (mark: ReviewMark): string => t(`review.${mark}`)
  * @param statuses - the root Session-status map.
  * @returns the mark, or undefined when there is nothing to look at.
  */
-export function reviewMarkOf(member: Member, statuses: Statuses | undefined): ReviewMark | undefined {
-  return reviewOf(member, statuses?.get(member.id)?.pendingInteraction !== undefined)
+export function reviewMarkOf(member: Member, statuses: Statuses | undefined, visible?: ReadonlySet<string>): ReviewMark | undefined {
+  return reviewOf(member, statuses?.get(member.id)?.pendingInteraction !== undefined, visible?.has(member.id) === true)
 }
 
 /**
@@ -386,11 +387,12 @@ export function reviewMarkOf(member: Member, statuses: Statuses | undefined): Re
  * @param reportsOnly - count only unread reports (the composer already says 「N 等你」).
  * @returns the count and the tone of the badge.
  */
-export function reviewSummary(members: readonly Member[], statuses: Statuses | undefined, reportsOnly = false): { n: number; tone: ReviewMark | undefined } {
+export function reviewSummary(members: readonly Member[], statuses: Statuses | undefined, reportsOnly = false, visible?: ReadonlySet<string>): { n: number; tone: ReviewMark | undefined } {
   let n = 0
   let tone: ReviewMark | undefined
   for (const member of members) {
-    const mark = reportsOnly ? reviewOf(member) : reviewMarkOf(member, statuses)
+    const active = visible?.has(member.id) === true
+    const mark = reportsOnly ? reviewOf(member, false, active) : reviewMarkOf(member, statuses, visible)
     if (mark === undefined) continue
     n += 1
     if (tone === undefined || REVIEW_RANK[mark] > REVIEW_RANK[tone]) tone = mark
@@ -611,10 +613,22 @@ function agentsLabel(members: readonly Member[], statuses: Statuses | undefined)
  * @param deps - the command runner and the Agents page opener.
  * @returns the slot component.
  */
-export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: boolean) => Promise<string | null>; openAgents: () => void; isChild: (sessionId: string) => boolean; supports: (sessionId: string) => Promise<boolean> }) {
+export function createScheduleSwitch(deps: {
+  setMode: (sessionId: string, on: boolean) => Promise<string | null>
+  openAgents: () => void
+  isChild: (sessionId: string) => boolean
+  supports: (sessionId: string) => Promise<boolean>
+  /** The right sidebar, for the Sessions its panes show; absent: no dot is suppressed. */
+  sidebar?: (() => SidebarFace | undefined) | undefined
+  /** Where reads of on-screen reports are kept (tests pass their own). */
+  seen?: LocalSeen | undefined
+}) {
+  const store = deps.seen ?? browserSeen
   return memo(function ScheduleSwitch(props: { sessionId?: string; locked?: boolean; useProjection?: (key: string) => unknown; useSessionStatus?: UseSessionStatus }) {
     useLocale()
-    const roster = rosterOf(props)
+    const raw = rosterOf(props)
+    useSyncExternalStore(store.subscribe, store.revision, store.revision)
+    const roster = raw === undefined || props.sessionId === undefined ? raw : { ...raw, members: store.apply(props.sessionId, raw.members) }
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -629,6 +643,18 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
       deps.supports(sessionId).then(ok => { if (alive) setSupported(ok) }, () => { if (alive) setSupported(undefined) })
       return () => { alive = false }
     }, [sessionId])
+    // The member chats on screen carry no dot, and a report arriving in one counts as read: kept
+    // in the browser, since a command per arrival would leave a row in the lead's chat each time.
+    const layout = deps.sidebar?.() === undefined ? undefined : layoutOf(deps.sidebar?.())
+    const onScreen = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+    const visible = layout === undefined || !onScreen ? undefined : visibleChildren(layout, (roster?.members ?? []).map(m => m.id))
+    const due = sessionId === undefined || deps.isChild(sessionId) ? [] : autoSeenTargets(roster?.members ?? [], visible ?? new Set())
+    const dueKey = due.join(',')
+    useEffect(() => {
+      if (sessionId === undefined || dueKey === '') return
+      const ids = new Set(dueKey.split(','))
+      store.mark(sessionId, (roster?.members ?? []).filter(m => ids.has(m.id)))
+    }, [dueKey, sessionId])
     if (sessionId === undefined || deps.isChild(sessionId)) return null
     if (supported === false) {
       return (
@@ -645,7 +671,7 @@ export function createScheduleSwitch(deps: { setMode: (sessionId: string, on: bo
     const members = (roster?.members ?? []).filter(m => m.state !== 'archived')
     const label = agentsLabel(members, statuses)
     // A fork archives itself right after handing back, so unread reports count over every member.
-    const unreadReports = reviewSummary(roster?.members ?? [], statuses, true)
+    const unreadReports = reviewSummary(roster?.members ?? [], statuses, true, visible)
     const switchTo = (next: boolean) => {
       setBusy(true)
       setError(null)
@@ -1123,7 +1149,9 @@ export function createAgentsPage(ctx: {
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const tab = props.useTabInfo?.()
-    const rows = roster?.members ?? []
+    // What this browser read on screen (see active-seen.ts) counts here too.
+    useSyncExternalStore(browserSeen.subscribe, browserSeen.revision, browserSeen.revision)
+    const rows = props.sessionId === undefined ? roster?.members ?? [] : browserSeen.apply(props.sessionId, roster?.members ?? [])
     const [picked, setPicked] = useState<string | undefined>(undefined)
     const [showArchived, setShowArchived] = useState(false)
     const [showAllArchived, setShowAllArchived] = useState(false)
@@ -1191,6 +1219,8 @@ export function createAgentsPage(ctx: {
       run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
     }
     const layout = layoutOf(ctx.sidebarRight)
+    // A member whose chat the user is looking at carries no dot: what arrived is already visible.
+    const visible = layout === undefined ? new Set<string>() : visibleChildren(layout, rows.map(m => m.id))
     const selected = (layout === undefined ? undefined : activeChild(layout, AGENTS_KIND, rows.map(m => m.id))) ?? picked
     const open = (member: Member) => {
       if (props.sessionId === undefined || tab === undefined) return
@@ -1211,7 +1241,7 @@ export function createAgentsPage(ctx: {
     const live = rows.filter(m => m.state !== 'archived')
     // A member with something to look at stays in its section until the user opens it, even a
     // fork that archived itself right after handing back: the folds hide only what was read.
-    const marked = (m: Member) => reviewMarkOf(m, statuses) !== undefined
+    const marked = (m: Member) => reviewMarkOf(m, statuses, visible) !== undefined
     // A fork that handed back its conclusion and is not working again is finished work: folded
     // away under 「已交回」, where one click archives it or all of them.
     const finished = (m: Member) => m.kind === 'fork' && m.state === 'done' && statuses?.get(m.id)?.running !== true && statuses?.get(m.id)?.pendingInteraction === undefined
@@ -1242,7 +1272,7 @@ export function createAgentsPage(ctx: {
       const pendingRequests = openTo(member.id)
       const waiting = (roster?.inbox ?? []).filter(m => m.from === member.id).length
       const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
-      const review = reviewMarkOf(member, statuses)
+      const review = reviewMarkOf(member, statuses, visible)
       // An archived member is history: one line, no subtitle. A dozen of them must not push the
       // live work off the page. One still unread keeps its full row until it is opened.
       const compact = member.state === 'archived' && review === undefined
@@ -1354,7 +1384,7 @@ export function createAgentsPage(ctx: {
       const busy = members.filter(m => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' }).length
       return (
         <>
-          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses)} /></span><span>{busy === 0 ? members.length : t('section.busy', { busy, total: members.length })}</span></div>
+          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses, false, visible)} /></span><span>{busy === 0 ? members.length : t('section.busy', { busy, total: members.length })}</span></div>
           {members.map(member => row(member))}
         </>
       )
@@ -1369,7 +1399,7 @@ export function createAgentsPage(ctx: {
             <div className="sch-roster-summary">{live.length === 0 ? t('roster.none') : [tn('roster.total', live.length), ...summaryParts(counts, live.length)].join(' · ')}</div>
           </div>
           <div className="sch-roster-head-actions">
-            {props.sessionId === undefined || reviewSummary(rows, statuses, true).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title={t('seenAll.title')} onClick={() => { markSeen(props.sessionId!, 'all') }}>{t('seenAll.label')}</button>}
+            {props.sessionId === undefined || reviewSummary(rows, statuses, true, visible).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title={t('seenAll.title')} onClick={() => { markSeen(props.sessionId!, 'all') }}>{t('seenAll.label')}</button>}
             {sessionId === undefined || !canArchiveHere ? null : <button type="button" className="sch-roster-collapse" aria-label={t('new.aria')} aria-expanded={creating} title={t('new.title')} onClick={() => { setCreating(v => !v); setFormError(null) }}>{ICON.plus}</button>}
             <button type="button" className="sch-roster-collapse" aria-label={t('collapse.aria')} title={t('collapse.title')} onClick={collapse}>{ICON.collapse}</button>
           </div>
@@ -1532,6 +1562,6 @@ export function apply(ctx: any): void {
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
-  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports }))
+  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar }))
   registerRecoveryConfig(ctx)
 }
