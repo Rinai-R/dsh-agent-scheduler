@@ -14,6 +14,7 @@ import { autoSeenTargets, browserSeen, type LocalSeen } from './active-seen.js'
 import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
+import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
 import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
@@ -52,7 +53,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number; readonly accessPreset?: string; readonly accessBy?: 'user' | 'lead' | 'inherited' }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster {
@@ -63,6 +64,8 @@ interface Roster {
   /** Merges under way; absent from a host not restarted since merges existed. */
   readonly merging?: readonly { id: string; absorbed: string; survivor: string; state: string }[]
   readonly teams?: Readonly<Record<string, TeamView>>
+  /** Access modes the host offers; absent when it has no permission presets. */
+  readonly accessModes?: readonly { readonly name: string; readonly sandbox: string }[]
 }
 /** One Session's live status as the client root hook reports it. */
 
@@ -277,6 +280,7 @@ const STYLE = `
 .sch-roster-merge:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-item:has(.sch-roster-merge):hover .sch-roster-end{visibility:hidden}
 .sch-roster-item > .sch-roster-form{margin:2px 12px 8px}
+.sch-roster-access{display:flex;align-items:center;margin:-2px 12px 6px 34px;color:var(--dsw-alias-label-tertiary)}
 .sch-merge-keep{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-merge-keep label{display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary)}
 select.sch-roster-input{padding:0 4px}
@@ -1337,6 +1341,14 @@ export function createAgentsPage(ctx: {
           </button>
         )}
         {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
+        {member.kind !== 'worker' || member.state === 'archived' || (roster?.accessModes ?? []).length === 0 ? null : (
+          <div className="sch-roster-access" data-scheduler-row-access={member.name}>
+            <AccessPicker name={member.name} preset={member.accessPreset} modes={roster!.accessModes!} choose={preset => {
+              if (props.sessionId === undefined) return
+              run(props.sessionId, `/agent-access ${member.name} ${preset}`).then(error => { setFailure(error) }, (reason: unknown) => { setFailure(reason instanceof Error ? reason.message : String(reason)) })
+            }} />
+          </div>
+        )}
         </div>
       )
     }
@@ -1530,7 +1542,7 @@ export function apply(ctx: any): void {
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
-  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + TEAM_STYLE), 'agent-scheduler: styles')
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + ACCESS_STYLE + TEAM_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)
@@ -1563,5 +1575,41 @@ export function apply(ctx: any): void {
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
   registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar }))
+  // A worker's own chat: the working access control (DSH's own picker cannot write an addressed child).
+  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler-access', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createMemberAccessPicker({ parentOf: host.parentOf, rosterFace, run }))
   registerRecoveryConfig(ctx)
+}
+
+/**
+ * A worker's access mode in its own chat footer: the chip writes through the main Session's
+ * `/agent-access`, which the host's own permission picker cannot do for an addressed child.
+ * @param deps - how to find the member's parent and roster, and run a command there.
+ * @returns the slot component.
+ */
+export function createMemberAccessPicker(deps: {
+  parentOf: (sessionId: string) => string | undefined
+  rosterFace: (parent: string) => Face
+  run: (sessionId: string, line: string) => Promise<string | null>
+}) {
+  return memo(function MemberAccessPicker(props: { sessionId?: string }) {
+    useLocale()
+    const sessionId = props.sessionId
+    const parentId = sessionId === undefined ? undefined : deps.parentOf(sessionId)
+    const face = parentId === undefined ? NO_FACE : deps.rosterFace(parentId)
+    const roster = useSyncExternalStore(face.subscribe, face.getSnapshot) as Roster | undefined
+    const row = sessionId === undefined ? undefined : (roster?.members ?? []).find(m => m.id === sessionId)
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const modes = roster?.accessModes ?? []
+    if (parentId === undefined || sessionId === undefined || row === undefined || row.kind !== 'worker' || row.state === 'archived' || modes.length === 0) return null
+    const choose = (preset: string) => {
+      setBusy(true)
+      setError(null)
+      deps.run(parentId, `/agent-access ${row.name} ${preset}`).then(failure => {
+        setBusy(false)
+        setError(failure)
+      }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    return <AccessPicker name={row.name} preset={row.accessPreset} modes={modes} busy={busy} error={error} choose={choose} />
+  })
 }

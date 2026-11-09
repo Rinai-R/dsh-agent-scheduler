@@ -16,6 +16,8 @@ export const SETTLED_RECORD = 'plugin:dsh-agent-scheduler/settled'
 export const MODE_RECORD = 'plugin:dsh-agent-scheduler/mode'
 export const SEEN_RECORD = 'plugin:dsh-agent-scheduler/seen'
 export const MAIL_RECORD = 'plugin:dsh-agent-scheduler/mail'
+/** Per-worker access mode; see src/member-access.ts. */
+export const MEMBER_ACCESS_RECORD = 'plugin:dsh-agent-scheduler/member-access'
 export const MERGE_RECORD = 'plugin:dsh-agent-scheduler/merge'
 export const TEAM_RECORD = 'plugin:dsh-agent-scheduler/team'
 
@@ -247,6 +249,8 @@ export const appendMode = (session: Session, on: boolean): SessionSeq =>
   appendPluginRecord(session, MODE_RECORD, { version: 1, on })
 export const appendSeen = (session: Session, record: Fields<SeenRecord>): SessionSeq =>
   appendPluginRecord(session, SEEN_RECORD, { version: 1, ...record })
+export const appendMemberAccess = (session: Session, record: { agent: string; preset: string; by: 'user' | 'lead' | 'inherited' }): SessionSeq =>
+  appendPluginRecord(session, MEMBER_ACCESS_RECORD, { version: 1, ...record })
 export const appendMail = (session: Session, record: Fields<MailRecord>): SessionSeq =>
   appendPluginRecord(session, MAIL_RECORD, { version: 1, ...record })
 export const appendMerge = (session: Session, record: Fields<MergeRecord>): SessionSeq =>
@@ -324,6 +328,7 @@ export const recordReaders = {
   mode: (e: SessionEvent) => { const d = dataOf<ModeRecord>(e, MODE_RECORD); return typeof d?.on === 'boolean' ? d : undefined },
   team: (e: SessionEvent) => { const d = dataOf<TeamRecord>(e, TEAM_RECORD); return typeof d?.owner === 'string' && Array.isArray(d.members) && Array.isArray(d.tasks) ? d : undefined },
   mail: (e: SessionEvent) => mailOf(e),
+  memberAccess: (e: SessionEvent) => { const d = dataOf<{ agent?: unknown; preset?: unknown; by?: unknown }>(e, 'plugin:dsh-agent-scheduler/member-access'); return typeof d?.agent === 'string' && (d.preset === null || typeof d.preset === 'string') ? d as unknown as { agent: string; preset: string | null; by?: 'user' | 'lead' | 'inherited' } : undefined },
   merge: (e: SessionEvent) => mergeOf(e),
 }
 

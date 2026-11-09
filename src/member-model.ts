@@ -74,6 +74,11 @@ export function memberModelRecordOf(event: SessionEvent): { agent: string; selec
 }
 
 
+/** Append one member-model choice to the main Session's log. */
+export const appendMemberModel = (session: { append(type: never, data: never): unknown } | Parameters<typeof appendPluginRecord>[0], record: { agent: string; selection: MemberModel }): void => {
+  appendPluginRecord(session as never, MEMBER_MODEL_RECORD, { version: 1, ...record })
+}
+
 /**
  * Point a live member's later requests at a selection; `null` returns it to the model it was
  * started with. The step already assembling keeps its model, as with the runtime's selector.

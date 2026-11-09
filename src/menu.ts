@@ -5,7 +5,7 @@
 import { t } from './i18n/index.js'
 
 /** The `/` menu face of each command, by command name: dictionary keys under `menu.`. */
-export const MENU = { schedule: 'schedule', agents: 'agents', fork: 'fork', worker: 'worker', role: 'role', 'agent-model': 'agentModel' } as const
+export const MENU = { schedule: 'schedule', agents: 'agents', fork: 'fork', worker: 'worker', role: 'role', 'agent-model': 'agentModel', 'agent-access': 'agentAccess' } as const
 
 /**
  * The `/` menu description of a command in DSH's language now: its title, then one line.
