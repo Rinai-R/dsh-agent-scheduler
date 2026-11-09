@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-scheduler",
-  "version": "0.1.0-rc.7",
+  "version": "0.1.0-rc.8",
   "description": "DeepSeek Harness plugin: a lead agent that forks one analyst per input, long-lived worker agents, and a right-sidebar roster.",
   "license": "MIT",
   "author": "Rinai-R",

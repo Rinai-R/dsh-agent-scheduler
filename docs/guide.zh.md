@@ -51,7 +51,7 @@
 ```bash
 dsh plugin add dsh-agent-scheduler                   # npm 上的最新正式版
 dsh plugin add dsh-agent-scheduler@next              # 最新预发布版
-dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.7.tgz  # Release 附带的 tgz
+dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.8.tgz  # Release 附带的 tgz
 dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 ```
 
