@@ -15,6 +15,7 @@ import { MEMBER_ACCESS_RECORD, wideningReason, parseMemberAccess, rankOf } from 
 import type { AccessPort } from '../src/dsh/host/access.js'
 import type { Scheduler } from '../src/scheduler.js'
 import { runAgentsCommand } from '../src/rule-plugin.js'
+import { memberModelLabel, startedModel } from '../src/client/index.js'
 
 afterEach(teardown)
 
@@ -146,6 +147,97 @@ describe('the lead\'s tools and agent_list', () => {
     // With scheduling on the lead names what it acts on.
     scheduler.setMode(lead, true)
     await expect(access.execute({ name: 'w', mode: 'read-only', rosterVersion: version() }, exec(lead))).rejects.toThrow(/must say what this is for/u)
+  })
+})
+
+describe('the lead never takes a worker past the user', () => {
+  const AUTO = { name: 'auto', sandbox: 'danger-full-access', approval: 'ask' as const }
+  const FULL = MODES[2]!
+  const RO = MODES[0]!
+
+  it('Auto sits between workspace-write and danger-full-access; asking is never a widening', () => {
+    expect(rankOf(AUTO)).toBeGreaterThan(rankOf(MODES[1])!)
+    expect(rankOf(AUTO)).toBeLessThan(rankOf(FULL)!)
+    // A user on Auto: the lead may not drop a worker's per-call review.
+    expect(wideningReason(FULL, AUTO)).toMatch(/wider than the user's own mode/u)
+    expect(wideningReason(AUTO, FULL)).toBeUndefined()
+    // A user on full access: the lead may narrow a worker to a mode that asks.
+    expect(wideningReason(RO, FULL)).toBeUndefined()
+    expect(wideningReason(MODES[1], FULL)).toBeUndefined()
+  })
+
+  it('the user narrows their own mode after the lead set a worker: the worker follows before its next step', async () => {
+    let userMode = 'danger-full-access'
+    const order: string[] = []
+    const { ctx, lead } = await setup(o => {
+      if (body(o).includes('You are worker')) { order.push(`model:${body(o).includes('second') ? 'second' : body(o).includes('third') ? 'third' : 'first'}`); return textResponse('W') }
+      return textResponse('LEAD')
+    })
+    const access = fakeAccess(() => userMode)
+    const set = access.set
+    access.set = (session, name) => { order.push(`set:${name}`); set(session, name) }
+    const scheduler = install(ctx, { defaultOn: false, access })
+    await scheduler.createWorker(lead, { name: 'w', role: 'does things', task: 'first' })
+    await until(lead, '[reply to r-1 from w]')
+    expect(scheduler.setMemberAccess(lead, { name: 'w', preset: 'danger-full-access', by: 'lead' })).toMatchObject({ preset: 'danger-full-access' })
+    // The user narrows right after.
+    userMode = 'workspace-write'
+    order.length = 0
+    await scheduler.send(lead, 'w', 'second')
+    await until(lead, '[reply to r-2 from w]')
+    // The narrowed mode is applied before the worker's model is called.
+    expect(order.indexOf('set:workspace-write')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('set:workspace-write')).toBeLessThan(order.indexOf('model:second'))
+    expect(order).not.toContain('set:danger-full-access')
+    expect(memberOf(scheduler, lead)).toMatchObject({ accessPreset: 'workspace-write', accessBy: 'lead' })
+    // What the user chose for a worker is theirs: not clamped.
+    scheduler.setMemberAccess(lead, { name: 'w', preset: 'danger-full-access', by: 'user' })
+    order.length = 0
+    await scheduler.send(lead, 'w', 'third')
+    await until(lead, '[reply to r-3 from w]')
+    expect(order.filter(o => o.startsWith('set:') && o !== 'set:danger-full-access')).toEqual([])
+  })
+
+  it('"default" from the lead resolves to the user\'s mode at that moment and is clamped like any lead choice', async () => {
+    let userMode = 'workspace-write'
+    const { ctx, lead } = await setup(o => textResponse(body(o).includes('You are worker') ? 'W' : 'LEAD'))
+    const access = fakeAccess(() => userMode)
+    const scheduler = install(ctx, { defaultOn: false, access })
+    await scheduler.createWorker(lead, { name: 'w', role: 'r', task: 'first' })
+    await until(lead, '[reply to r-1 from w]')
+    expect(scheduler.setMemberAccess(lead, { name: 'w', preset: null, by: 'lead' })).toMatchObject({ preset: 'workspace-write' })
+    userMode = 'read-only'
+    await scheduler.send(lead, 'w', 'again')
+    await until(lead, '[reply to r-2 from w]')
+    expect(memberOf(scheduler, lead)).toMatchObject({ accessPreset: 'read-only', accessBy: 'lead' })
+  })
+
+  it('workers and forks cannot call agent_access or agent_model; the fork allowlist is unchanged', async () => {
+    const { ctx, lead, scheduler } = await withWorker()
+    // The worker as a tool caller (it is released while idle): a Session with the lead as parent.
+    const id = memberOf(scheduler, lead).id
+    const worker = (ctx.agents.get(SessionId(id)) ?? { id, session: { header: { parentSession: lead.id } } }) as Agent
+    for (const name of ['agent_access', 'agent_model']) {
+      // Whether or not a profile shows the tool to a worker, its call is refused.
+      const tool = ctx.tools.get(name, worker) ?? ctx.tools.get(name, lead)!
+      await expect(tool.execute({ name: 'w', mode: 'read-only', model: 'default', rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) } as never, exec(worker))).rejects.toThrow(/only the lead/u)
+    }
+    expect(() => scheduler.setMemberAccess(worker, { name: 'w', preset: 'read-only', by: 'lead' })).toThrow(/only the lead/u)
+    expect(() => scheduler.setMemberModel(worker, { name: 'w', selection: null, by: 'lead' })).toThrow(/only the lead/u)
+    // Forks keep exactly their routing tools.
+    const { FORK_TOOLS } = await import('../src/fork-guard.js')
+    for (const name of ['agent_access', 'agent_model']) expect(FORK_TOOLS.has(name)).toBe(false)
+  })
+})
+
+describe('the worker chat\'s model chip', () => {
+  it('shows the model a worker started on when it has none of its own', () => {
+    expect(startedModel('deepseek/deepseek-flash')).toEqual({ provider: 'deepseek', model: 'deepseek-flash' })
+    expect(startedModel('p/m:high')).toEqual({ provider: 'p', model: 'm', reasoningEffort: 'high' })
+    expect(startedModel(undefined)).toBeUndefined()
+    expect(startedModel('nonsense')).toBeUndefined()
+    // Not in the live catalog: the id itself, not 「默认模型」.
+    expect(memberModelLabel([], startedModel('deepseek/deepseek-flash'))).toBe('deepseek-flash')
   })
 })
 

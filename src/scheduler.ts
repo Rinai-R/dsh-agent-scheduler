@@ -31,7 +31,7 @@ import {
 import { mergePending, schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
 import { unread } from './review.js'
-import { applyMemberAccess, ceilingOf, wideningReason } from './member-access.js'
+import { applyMemberAccess, ceilingOf, rankOf, wideningReason } from './member-access.js'
 import { applyMemberModel, appendMemberModel } from './member-model.js'
 import { defaultSurvivor, gitFacts, handoffFromLog, handoffMessage, handoffRequest, mergedRole, unsettled } from './merge.js'
 import type { MergeState } from './projection.js'
@@ -1033,6 +1033,9 @@ export class Scheduler {
    * @returns the member's name and the recorded selection.
    */
   setMemberModel(caller: Agent, args: { name: string; selection: { provider: string; model: string; reasoningEffort?: string } | null; by: 'user' | 'lead' }): { name: string; selection: { provider: string; model: string; reasoningEffort?: string } | null } {
+    // Only the lead (or the user's command in the main Session) switches a worker: never a worker
+    // or fork, whatever tools a profile shows them.
+    if (!isMainSession(caller)) throw new Error('only the lead changes a worker\'s model')
     const main = this.mainOf(caller)
     const ledger = this.ledgerOf(main)
     const member = this.lookup(ledger, args.name)
@@ -1087,6 +1090,7 @@ export class Scheduler {
    * @returns the member's name and the preset now recorded.
    */
   setMemberAccess(caller: Agent, args: { name: string; preset: string | null; by: 'user' | 'lead' }): { name: string; preset: string } {
+    if (!isMainSession(caller)) throw new Error('only the lead changes a worker\'s access mode')
     const main = this.mainOf(caller)
     const access = this.deps.access
     if (access === undefined || !access.available) throw new Error('this DeepSeek Harness has no permission presets')
@@ -1109,6 +1113,33 @@ export class Scheduler {
     const child = this.live(member.id)
     if (child !== undefined && member.state !== 'archived') applyMemberAccess(access, child, preset)
     return { name: member.name, preset }
+  }
+
+  /**
+   * Keep a mode the lead chose within the user's current one. The lead may set a worker only as
+   * wide as the user's own mode; when the user narrows their mode later, a worker the lead set
+   * follows it down before its next step (and the narrowed mode is recorded, by the lead's
+   * choice being clamped). Modes the user chose, or inherited at creation, are left alone.
+   * @param agent - any agent; only workers whose recorded mode came from the lead are checked.
+   */
+  clampMemberAccess(agent: Agent): void {
+    const access = this.deps.access
+    if (access === undefined || !access.available || isMainSession(agent)) return
+    const main = this.live(mainIdOf(agent))
+    if (main === undefined) return
+    const member = this.ledgerOf(main).members.get(agent.id)
+    if (member?.kind !== 'worker' || member.accessBy !== 'lead' || member.accessPreset === undefined) return
+    const modes = access.modes()
+    const ceiling = ceilingOf(access, main)
+    const target = modes.find(m => m.name === member.accessPreset)
+    if (wideningReason(target, ceiling) === undefined) return
+    // Past the user's mode now (or no longer comparable): fall back to the user's own mode, or
+    // the narrowest offered when the user is on a custom combination.
+    const narrowest = [...modes].sort((a, b) => (rankOf(a) ?? 99) - (rankOf(b) ?? 99))[0]
+    const fallback = ceiling ?? narrowest
+    if (fallback === undefined) return
+    this.record(main, s => appendMemberAccess(s, { agent: agent.id, preset: fallback.name, by: 'lead' }))
+    applyMemberAccess(access, agent, fallback.name)
   }
 
   /**
@@ -2068,6 +2099,8 @@ export async function preStep(
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const { agent, messages, step } = payload
+  // A worker the lead set never runs a step wider than the user's mode is now.
+  if (!isMainSession(agent)) scheduler.clampMemberAccess(agent)
   // Nothing claimed at all: the scheduler took the turn's message before DSH claimed it (a hand-off).
   const claimedNothing = messages.length === 0
   const admitted = await scheduler.admit(agent, messages)

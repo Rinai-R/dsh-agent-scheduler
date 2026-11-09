@@ -59,11 +59,19 @@ const SANDBOX_RANK: Readonly<Record<string, number>> = { 'read-only': 0, 'worksp
  * @param mode - one selectable mode.
  * @returns its rank, or undefined for a sandbox mode this plugin does not know.
  */
-export const rankOf = (mode: AccessMode | undefined): number | undefined => mode === undefined ? undefined : SANDBOX_RANK[mode.sandbox]
+export const rankOf = (mode: AccessMode | undefined): number | undefined => {
+  if (mode === undefined) return undefined
+  // DSH's experimental Auto runs with full access but has every call reviewed: narrower than
+  // danger-full-access, wider than workspace-write.
+  if (mode.name === 'auto') return 1.5
+  return SANDBOX_RANK[mode.sandbox]
+}
 
 /**
- * Whether a target mode stays within a ceiling: same or narrower sandbox, and never a laxer
- * approval policy than the ceiling's.
+ * Whether a target mode stays within a ceiling: no wider than it. Width is the sandbox (with
+ * Auto between workspace-write and danger-full-access). The approval policy is not a widening
+ * either way: `ask` puts each escalation in front of the user, `never` rejects it, so narrowing a
+ * full-access worker to a mode that asks is allowed.
  * @returns why it does not, or undefined when it does.
  */
 export function wideningReason(target: AccessMode | undefined, ceiling: AccessMode | undefined): string | undefined {
@@ -72,7 +80,6 @@ export function wideningReason(target: AccessMode | undefined, ceiling: AccessMo
   const [t, c] = [rankOf(target), rankOf(ceiling)]
   if (t === undefined || c === undefined) return `cannot compare access modes "${target.sandbox}" and "${ceiling.sandbox}"`
   if (t > c) return `that is wider than the user's own mode ("${ceiling.name}"); the lead may narrow a worker or match the user's choice, never widen it — ask the user to switch their own mode first`
-  if (target.approval === 'ask' && ceiling.approval === 'never') return `that asks the user for approvals, which the user's own mode ("${ceiling.name}") does not; ask the user to switch their own mode first`
   return undefined
 }
 

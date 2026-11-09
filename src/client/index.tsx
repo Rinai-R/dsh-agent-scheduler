@@ -961,6 +961,18 @@ export function memberModelCommand(member: string, selection: ForkModel | null):
 }
 
 /**
+ * The model a member started with, as the roster records it (`provider/model` or
+ * `provider/model:effort`).
+ * @param model - the roster's `model` field.
+ * @returns the selection, or undefined when absent or unreadable.
+ */
+export function startedModel(model: string | undefined): ForkModel | undefined {
+  const m = model === undefined ? null : /^([^/\s]+)\/([^:\s]+)(?::(\S+))?$/u.exec(model)
+  if (m === null) return undefined
+  return { provider: m[1]!, model: m[2]!, ...(m[3] === undefined ? {} : { reasoningEffort: m[3] }) }
+}
+
+/**
  * What the member composer's trigger says.
  * @param groups - the catalog.
  * @param selection - the member's own choice.
@@ -1031,13 +1043,16 @@ export function createMemberModelPicker(deps: {
       setError(null)
       deps.run(member.parent, memberModelCommand(member.name, selection)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
     }
-    const label = memberModelLabel(groups, own)
+    // With no model of its own the worker still runs on a definite one (the one it started with):
+    // show that instead of a bare 「默认模型」.
+    const started = own === null ? startedModel(row?.model) : undefined
+    const label = memberModelLabel(groups, own ?? started)
     return (
       <span className="sch-mm-composer" data-scheduler-member-model={own === null ? 'default' : `${own.provider}/${own.model}${own.reasoningEffort === undefined ? '' : ` ${own.reasoningEffort}`}`}>
         <ModelMenu
           groups={groups}
           current={own}
-          label={own === null ? t('model.default') : own.model}
+          label={own !== null ? own.model : started !== undefined ? label : t('model.default')}
           defaultLabel={t('model.memberDefaultRow')}
           defaultValue={t('model.default')}
           avoid={SEL.composerCard}
