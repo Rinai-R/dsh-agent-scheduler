@@ -89,6 +89,84 @@ describe('no empty lead turn', () => {
     expect(steps(events).some(s => s.inputs.includes('user'))).toBe(false)
   })
 
+  it('a message that lands while a refused turn is closing is still answered', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(isWorker(o) ? 'WORKER ANSWER' : body(o).includes('LATE USER') ? 'ANSWERED LATE' : 'LEAD'))
+    timeContext(ctx)
+    const scheduler = install(ctx, { defaultOn: false })
+    await scheduler.createWorker(lead, { name: 'w', role: 'w', task: 'task' })
+    await until(lead, '[reply to r-1 from w]')
+    // The user types at the very moment a refused turn ends: after the scheduler found nothing
+    // pending, before DSH's driver goes idle.
+    let sent = false
+    let lateStatus = ''
+    ctx.on('session/event', (session, event) => {
+      if (session !== lead.session || sent || event.type !== 'turn/end') return
+      const turn = (event.data as { turn: number }).turn
+      const events = lead.session.snapshotEvents()
+      const start = events.findLastIndex(e => e.type === 'turn/start' && (e.data as { turn: number }).turn === turn)
+      if (events.slice(start).some(e => e.type === 'step/start')) return
+      sent = true
+      // Not inside the event itself (an append there is reentrant): the next microtask, while
+      // DSH's driver is still closing the refused turn.
+      queueMicrotask(() => { lateStatus = lead.status; lead.followup(user('LATE USER message')) })
+    })
+    // Wake the lead with something the scheduler empties (a settlement-style notice).
+    const workerId = scheduler.ledgerOf(lead).find('w')!.id
+    lead.followup(createUserMessage({ content: [{ type: 'text', text: 'Background subagent finished' }], source: { kind: 'subagent-settled', senderSessionId: workerId } as never }))
+    await vi.waitFor(() => { expect(sent).toBe(true) }, { timeout: 10_000 })
+    await new Promise(r => setTimeout(r, 500))
+    // It really landed while the refused turn's driver was still running.
+    expect(lateStatus).toBe('running')
+    await vi.waitFor(() => {
+      expect(adapter.requests.filter(r => r.sessionId === 'lead' && body(r).includes('LATE USER'))).toHaveLength(1)
+    }, { timeout: 10_000 })
+  })
+
+  it('a user message and an inbox answer landing while a refused turn closes both reach the lead, the user first', async () => {
+    const { ctx, lead, adapter } = await setup(o => textResponse(isWorker(o) ? 'WORKER ANSWER' : 'LEAD'))
+    timeContext(ctx)
+    const scheduler = install(ctx, { defaultOn: false })
+    await scheduler.createWorker(lead, { name: 'w', role: 'w', task: 'task' })
+    await until(lead, '[reply to r-1 from w]')
+    const workerId = scheduler.ledgerOf(lead).find('w')!.id
+    let sent = false
+    ctx.on('session/event', (session, event) => {
+      if (session !== lead.session || sent || event.type !== 'turn/end') return
+      const turn = (event.data as { turn: number }).turn
+      const events = lead.session.snapshotEvents()
+      const start = events.findLastIndex(e => e.type === 'turn/start' && (e.data as { turn: number }).turn === turn)
+      if (events.slice(start).some(e => e.type === 'step/start')) return
+      sent = true
+      queueMicrotask(() => {
+        lead.followup(user('LATE USER message'))
+        ;(scheduler as unknown as { toLead(main: unknown, text: string, sender: string): void }).toLead(lead, '[reply to r-9 from w]\nLATE MAIL', workerId)
+      })
+    })
+    lead.followup(createUserMessage({ content: [{ type: 'text', text: 'Background subagent finished' }], source: { kind: 'subagent-settled', senderSessionId: workerId } as never }))
+    await vi.waitFor(() => { expect(sent).toBe(true) }, { timeout: 10_000 })
+    await vi.waitFor(() => {
+      const calls = adapter.requests.filter(r => r.sessionId === 'lead')
+      const user = calls.findIndex(r => body(r).includes('LATE USER'))
+      const mail = calls.findIndex(r => body(r).includes('LATE MAIL'))
+      expect(user).toBeGreaterThanOrEqual(0)
+      expect(mail).toBeGreaterThan(user)
+    }, { timeout: 10_000 })
+    await lead.whenIdle()
+    expect(scheduler.ledgerOf(lead).mail).toEqual([])
+    expect(leadSaw(lead, 'LATE MAIL')).toBe(1)
+    expect(contextOnlyCalls(lead.session.snapshotEvents())).toEqual([])
+    // Refused turns leave turn/start + turn/end and nothing else: the log stays contiguous, and no
+    // assistant message is written for them.
+    const events = lead.session.snapshotEvents()
+    events.forEach((e, i) => { expect(Number(e.seq)).toBe(i) })
+    for (let i = 0; i < events.length; i += 1) {
+      if (events[i]!.type !== 'turn/start') continue
+      const end = events.findIndex((e, j) => j > i && e.type === 'turn/end')
+      const turn = events.slice(i, end)
+      if (!turn.some(e => e.type === 'step/start')) expect(turn.some(e => e.type === 'assistant/message')).toBe(false)
+    }
+  })
+
   it('a real message to the lead with scheduling off is still answered', async () => {
     const { ctx, lead, adapter } = await setup(() => textResponse('LEAD ANSWER'))
     timeContext(ctx)

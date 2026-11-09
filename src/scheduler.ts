@@ -19,7 +19,7 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, PreStepDecision, Session, SessionEvent, UserMessage } from './dsh/types.js'
 import {
   admitHidden, agentOptionsOf, cwdOf, eventsOf, isCapacity, isContextOnly, isMainSession, isPending, isUserInput, lastEvent, liveLog, mainIdOf,
-  isLive, pendingOf, relayMessage, turnEndOf, removePending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
+  isLive, pendingOf, relayMessage, turnEndOf, removePending, wakeForPending, replacePending, SessionId, settledSender, statusOf, steerLead, subagentPort, textOf, toLead, withoutReturnGuidance,
   type AgentLookup, type HistoryPort, type RecallWindow, type SessionLog, type SubagentPort, type SubagentService, type TeamPort,
 } from './dsh/host/index.js'
 import { ForkSeedError, forkSeed } from './forks-from.js'
@@ -1973,9 +1973,9 @@ export async function preStep(
   // time and runtime snapshots to it, and the lead would answer them as an empty user message.
   // Checked on both sides of next(): listener order decides where the runtime's context appears.
   const guarded = step === 1 && main && (scheduler.isOn(agent) || admitted !== undefined || claimedNothing)
-  if (guarded && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return { kind: 'reject' }
+  if (guarded && messages.every(isContextOnly) && !await takePending(scheduler, agent, messages)) return refuse(agent)
   const decision = await next()
-  if (guarded && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return { kind: 'reject' }
+  if (guarded && decision.kind === 'enter' && decision.messages.every(isContextOnly) && !await takePending(scheduler, agent, decision.messages)) return refuse(agent)
   return decision
 }
 
@@ -1985,6 +1985,16 @@ export async function preStep(
  * Take it into this step instead, through the same admission.
  * @returns whether the step now holds something besides context.
  */
+/**
+ * Refuse a first step that carries only context. A refused turn ends without DSH's usual check for
+ * more input, so anything sent from here until the driver is idle would wait with no driver: once
+ * idle, the lead is woken for it.
+ */
+function refuse(agent: Agent): PreStepDecision {
+  void agent.whenIdle().then(() => { wakeForPending(agent) }).catch(() => undefined)
+  return { kind: 'reject' }
+}
+
 async function takePending(scheduler: Scheduler, agent: Agent, messages: UserMessage[]): Promise<boolean> {
   const pending = pendingOf(agent).filter(message => removePending(agent, message.id))
   if (pending.length === 0) return false

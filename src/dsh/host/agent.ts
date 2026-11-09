@@ -67,6 +67,21 @@ export const isPending = (agent: Agent, id: string): boolean => pendingOf(agent)
 export const removePending = (agent: Agent, id: string): boolean => agent.inbox.remove(id as never)
 
 /**
+ * Wake an idle agent for what still waits in its inbox. DSH starts a driver only when a message is
+ * sent: one sent while a turn is closing (after its last claim, before the driver goes idle) waits
+ * with no driver. Sending those messages again, in order, wakes it; nothing is added or dropped.
+ * @param agent - any agent, idle.
+ * @returns how many messages were sent again.
+ */
+export function wakeForPending(agent: Agent): number {
+  if (agent.status !== 'idle') return 0
+  const waiting = pendingOf(agent)
+  for (const message of waiting) agent.inbox.remove(message.id as never)
+  for (const message of waiting) agent.followup(message)
+  return waiting.length
+}
+
+/**
  * @param agent - any agent.
  * @param message - the new content of a message still waiting, same id.
  * @returns whether it was replaced.
