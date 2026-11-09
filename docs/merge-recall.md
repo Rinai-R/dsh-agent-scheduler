@@ -23,7 +23,7 @@
   1. 交接消息和 `agent_list` 带上会话指针；
   2. 新工具 `agent_recall`，只用 `filterEvents` 加 `readEvent`，经适配层调用；
   3. 范围限定在本主会话的名单之内；
-  4. Agents 页在保留方行上加「合并自 …」入口，用 DSH 原生的子会话 tab 只读打开被合并方。
+  4. ~~Agents 页在保留方行上加「合并自 …」入口~~（用户看了截图后要求去掉，见第 7 节）。
 
 ## 1. 现状核实
 
@@ -97,11 +97,9 @@ agent_recall({ name?, session?, query, limit? = 10, around? })
 3. 压缩后被 shadow 的事件仍能匹配；
 4. 宿主默认服务的 `searchEvents` 报 `SESSION_QUERY_SEARCH_DISABLED`。这条用来证明我们没有依赖它；哪天它放开了，测试会提醒重新评估。
 
-### 2.4 Agents 页（可选）
+### 2.4 Agents 页（可选，已按用户要求撤掉）
 
-- 保留方行的副标题后面加一个 `↶ 合并自 hub-image`，可以有多个，悬停显示会话 id 和合并时间。
-- 点它，在右栏用原生的 `subagentchat` tab 打开被合并方的会话（`chatAddress(main, absorbedId)`，和现在点成员行一样）。被合并方已归档，对话框按 DSH 原生规则只读或可续写，我们不改。
-- 文案进 zh/en（以及 #25 新增的各语种）词典。
+- ~~保留方行下的「↶ 合并自 …」链接~~：做成后用户觉得难看，已全部移除（行内标记、悬停样式、8 种语言的 `mergedFrom.*` 文案，以及只给它用的点击处理）。被合并方的会话仍可从 `agent_list` 的 `history` 里的 session id，或用 `agent_recall` 召回其历史。
 
 ### 2.5 代价与限制
 
@@ -125,7 +123,8 @@ flowchart LR
   R -->|filterEvents：text 与 seq 过滤| Q[(ctx.sessionQuery<br/>宿主服务，无需 SQLite)]
   Q --> R -->|hits: seq + snippet| S
   S -->|agent_recall around: seq / session_event_read| Q
-  P --> UI[Agents 页：↶ 合并自 …] -->|subagentchat tab| A[(被合并方会话，只读查看)]
+  P --> UI[Agents 页：只有成员行（链接已移除）]
+  UI -.->|session id 见 agent_list history| A[(被合并方会话，可用 session_event_read / agent_recall 读)]
 ```
 
 ## 4. 需要用户拍板的点
@@ -136,7 +135,7 @@ flowchart LR
    - (b) worker 只能召回自己合并进来的会话和 lead 的，其余只有 lead 能查。
 3. **要不要正则**：推荐不要，用多个词「与」匹配已经够用；正则需要把整个会话的文档都拉出来自己扫，成本高。
 4. **`agent_list` 默认显示多少历史成员**：推荐 20 个，传 `history: true` 显示全部。
-5. **Agents 页的「合并自 …」入口要不要做**：推荐做，工作量很小。
+5. ~~Agents 页的「合并自 …」入口~~：做过，用户要求去掉；现在没有任何界面入口。
 6. **本机 `session_search` 的故障**：是否需要我在隔离环境复现后，向 DSH 提 issue（「首次建索引时，一个坏会话或一个一直在写的会话就让整个全文搜索失败」）？这不阻塞本功能。
 
 ## 5. 与已有能力
@@ -161,7 +160,7 @@ flowchart LR
 | 2 | merge 记录加 `session` 和 `seqRange`，投影加 `mergedFrom`，交接消息加指针行，身份行 | `tests/merge.spec.ts` 补断言；旧记录兼容 |
 | 3 | `agent_list` 带 `session` 和 `history` | `tests/user-workers.spec.ts` 或新增 |
 | 4 | `agent_recall`（解析、多词与匹配、倒序取前若干条、片段、`around`、超时、范围检查），加入 `FORK_TOOLS` | 新 `tests/recall.spec.ts`：合并后按旧名召回被合并方、冷会话、压缩后、继承种子被排除、越界会话被拒、一名对多会话 |
-| 5 | Agents 页「↶ 合并自 …」；各语种文案 | 渲染测试、`i18n.spec` |
+| 5 | ~~Agents 页「↶ 合并自 …」；各语种文案~~（已移除） | 回归测试 `merged-from-gone.spec.ts`、`i18n.spec` |
 | 6 | 隔离 GUI 实测：split → 合并 → 保留方用 `agent_recall` 取回被合并方的原话 → 重启后再取；截图；README；`docs/dsh-adapter.md` | — |
 
 ## 7. 实现与复现
@@ -177,7 +176,7 @@ flowchart LR
   - 交接消息加指针行（`historyLine`），保留方的系统提示加身份行；
   - `agent_list` 带 `session`、`mergedFrom`、`history`（默认 20 条）；
   - `agent_recall`，并加入分身白名单；
-  - Agents 页「↶ 合并自 …」；
+  - ~~Agents 页「↶ 合并自 …」~~（后按用户要求移除，见第 7 节）；
   - 8 种语言的文案。
 - **测试**：
   - `tests/recall.spec.ts`；
@@ -187,7 +186,14 @@ flowchart LR
 ### GUI 实测（隔离 `DSH_HOME=/tmp/recall-gui/home`，mock 模型，调度关）
 
 1. hub 拆成 hub-asr 和 hub-image。hub-image 的回报里提到「换成了 mozjpeg，质量 82」，交接只写了「换了编码器，细节见我的历史」。
-2. 从 Agents 页把 hub-image 合并进 hub-asr，合并后改名 `hub`（[merged](img/merge-recall-2-merged.png)）。hub 行下出现「↶ 合并自 hub-image」。
+2. 从 Agents 页把 hub-image 合并进 hub-asr，合并后改名 `hub`（[merged](img/merge-recall-2-merged.png)）。当时 hub 行下出现过「↶ 合并自 hub-image」，现已移除。
 3. lead 让 hub 去查。hub 调 `agent_recall({ name: "hub-image", query: "mozjpeg 质量" })`，返回 `session-55dc…`、`ownedFrom: 30`，命中 seq 50，片段里有「质量 82」。hub 的答复就是这个数字。工具结果记录在 [recall-gui-tool-results.log](repro/recall-gui-tool-results.log)。
-4. 点「↶ 合并自 hub-image」，在右栏打开被合并方的会话（[link](img/merge-recall-5-merged-from-link.png)）。
+4. ~~点「↶ 合并自 hub-image」在右栏打开被合并方的会话~~：[link](img/merge-recall-5-merged-from-link.png) 记录了它当时的样子；该入口已随用户反馈移除。
 5. 重启 DSH 后再问一次，`agent_recall` 照样从冷会话里取回「82」（[restart](img/merge-recall-6-restart.png)）。
+
+### 后续：移除合并自链接（fix/drop-merged-from-link）
+
+用户看了截图后认为「↶ 合并自 …」难看，要求去掉。改动：
+- 行下方的链接、它的悬停/分隔样式、只给它用的点击处理，以及 8 种语言的 `mergedFrom.label` / `mergedFrom.title` 全部删除；
+- 保留数据与召回：merge 记录仍存被合并方的 session id 和 seq 范围，`agent_list` 仍有 `session` / `mergedFrom` / `history`，`agent_recall` 仍能把旧名解析到被合并方的会话，保留方的系统提示仍有历史指针；
+- 新增回归测试 `tests/merged-from-gone.spec.ts`：渲染 Agents 页，断言没有 `data-scheduler-merged-from` 元素、没有含 `merged` 的类名、没有「合并自 / merged from / ↶」文案（把链接加回去时该测试会失败）。
