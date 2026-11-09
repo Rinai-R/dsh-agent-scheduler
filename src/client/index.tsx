@@ -10,7 +10,7 @@ import { registerRecoveryConfig } from './recovery-config.js'
 import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
 import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, visibleChildren } from './layout.js'
-import { autoSeenTargets, seenScheduler } from './active-seen.js'
+import { autoSeenTargets, browserSeen, type LocalSeen } from './active-seen.js'
 import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
@@ -620,12 +620,15 @@ export function createScheduleSwitch(deps: {
   supports: (sessionId: string) => Promise<boolean>
   /** The right sidebar, for the Sessions its panes show; absent: no dot is suppressed. */
   sidebar?: (() => SidebarFace | undefined) | undefined
-  /** Runs a command in the main Session (the auto-seen write); absent: nothing is recorded. */
-  run?: ((sessionId: string, line: string) => Promise<string | null>) | undefined
+  /** Where reads of on-screen reports are kept (tests pass their own). */
+  seen?: LocalSeen | undefined
 }) {
+  const store = deps.seen ?? browserSeen
   return memo(function ScheduleSwitch(props: { sessionId?: string; locked?: boolean; useProjection?: (key: string) => unknown; useSessionStatus?: UseSessionStatus }) {
     useLocale()
-    const roster = rosterOf(props)
+    const raw = rosterOf(props)
+    useSyncExternalStore(store.subscribe, store.revision, store.revision)
+    const roster = raw === undefined || props.sessionId === undefined ? raw : { ...raw, members: store.apply(props.sessionId, raw.members) }
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -640,22 +643,18 @@ export function createScheduleSwitch(deps: {
       deps.supports(sessionId).then(ok => { if (alive) setSupported(ok) }, () => { if (alive) setSupported(undefined) })
       return () => { alive = false }
     }, [sessionId])
-    // The member chats on screen carry no dot; a report arriving in one is recorded as seen, once
-    // the reports go quiet, so navigating away does not light it up.
+    // The member chats on screen carry no dot, and a report arriving in one counts as read: kept
+    // in the browser, since a command per arrival would leave a row in the lead's chat each time.
     const layout = deps.sidebar?.() === undefined ? undefined : layoutOf(deps.sidebar?.())
-    const visible = layout === undefined ? undefined : visibleChildren(layout, (roster?.members ?? []).map(m => m.id))
-    const [current] = useState(() => ({ id: sessionId }))
-    current.id = sessionId
-    const [seen] = useState(() => seenScheduler(id => {
-      const sid = current.id
-      if (sid !== undefined) void deps.run?.(sid, seenLine(id))?.catch(() => undefined)
-    }))
-    const due = sessionId === undefined || deps.isChild(sessionId) ? '' : autoSeenTargets(roster?.members ?? [], visible ?? new Set()).join(',')
+    const onScreen = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+    const visible = layout === undefined || !onScreen ? undefined : visibleChildren(layout, (roster?.members ?? []).map(m => m.id))
+    const due = sessionId === undefined || deps.isChild(sessionId) ? [] : autoSeenTargets(roster?.members ?? [], visible ?? new Set())
+    const dueKey = due.join(',')
     useEffect(() => {
-      if (due === '') return
-      seen.note(due.split(','))
-    }, [due, seen])
-    useEffect(() => () => { seen.dispose() }, [seen])
+      if (sessionId === undefined || dueKey === '') return
+      const ids = new Set(dueKey.split(','))
+      store.mark(sessionId, (roster?.members ?? []).filter(m => ids.has(m.id)))
+    }, [dueKey, sessionId])
     if (sessionId === undefined || deps.isChild(sessionId)) return null
     if (supported === false) {
       return (
@@ -1150,7 +1149,9 @@ export function createAgentsPage(ctx: {
     const roster = rosterOf(props)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const tab = props.useTabInfo?.()
-    const rows = roster?.members ?? []
+    // What this browser read on screen (see active-seen.ts) counts here too.
+    useSyncExternalStore(browserSeen.subscribe, browserSeen.revision, browserSeen.revision)
+    const rows = props.sessionId === undefined ? roster?.members ?? [] : browserSeen.apply(props.sessionId, roster?.members ?? [])
     const [picked, setPicked] = useState<string | undefined>(undefined)
     const [showArchived, setShowArchived] = useState(false)
     const [showAllArchived, setShowAllArchived] = useState(false)
@@ -1561,6 +1562,6 @@ export function apply(ctx: any): void {
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
-  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar, run }))
+  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar }))
   registerRecoveryConfig(ctx)
 }

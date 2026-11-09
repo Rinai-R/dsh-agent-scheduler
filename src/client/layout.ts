@@ -108,7 +108,8 @@ export function activeChild(layout: DockLayout, kind: string, ids: readonly stri
 
 /**
  * The members whose chats the user is looking at right now: the active tab of every pane that is
- * on screen, docked or floating. A report arriving in one of them needs no review dot.
+ * on screen, docked or floating (docked ones only while the column is expanded). A report arriving
+ * in one of them needs no review dot.
  * @param layout - sidebar layout.
  * @param ids - the roster's member Session ids.
  * @returns the visible member Session ids.
@@ -117,6 +118,8 @@ export function visibleChildren(layout: DockLayout, ids: readonly string[]): Rea
   const visible = new Set<string>()
   for (const node of Object.values(layout.nodes)) {
     if (node.kind !== 'pane' || node.activeTabId === undefined) continue
+    // A collapsed column keeps its docked panes mounted, off screen: those chats are not in view.
+    if (node.host === 'dock' && layout.expanded === false) continue
     const tab = layout.tabs[node.activeTabId]
     if (tab === undefined) continue
     const id = ids.find(candidate => showsSession(tab.contentId, candidate))

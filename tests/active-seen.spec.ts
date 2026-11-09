@@ -1,14 +1,15 @@
 /**
  * No review dots for the Session on screen: the mark is suppressed while its chat is the active
- * tab, and a report arriving there is recorded as seen (debounced), so leaving does not light it up.
+ * tab, and a report arriving there counts as read in the browser, so leaving does not light it up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reviewOf, unread, type ReviewFields } from '../src/review.js'
 import { visibleChildren, type DockLayout } from '../src/client/layout.js'
-import { autoSeenTargets, seenScheduler, type SeenCandidate } from '../src/client/active-seen.js'
+import { autoSeenTargets, localSeen, type SeenCandidate } from '../src/client/active-seen.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema } from '../src/projection.js'
 import { reviewMarkOf, reviewSummary } from '../src/client/index.js'
 import { SEEN_RECORD } from '../src/records.js'
+import { ownFile } from './contract/probe.js'
 
 const reported = (extra: Partial<ReviewFields> = {}): ReviewFields => ({ reportedAt: 100, ...extra })
 
@@ -45,53 +46,52 @@ describe('the Session on screen carries no dot', () => {
       { id: 'w4' },
     ]
     expect(autoSeenTargets(members, new Set(['w1', 'w2', 'w3', 'w4']))).toEqual(['w1', 'w3'])
-    expect(autoSeenTargets(members, new Set(['w1', 'w3']), new Set(['w1']))).toEqual(['w3'])
     expect(autoSeenTargets(members, new Set())).toEqual([])
   })
 })
 
-describe('the seen write is debounced', () => {
-  beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => { vi.useRealTimers() })
+describe('reads kept in the browser', () => {
+  const memory = () => { const data = new Map<string, string>(); return { data, getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v) } } }
 
-  it('writes once after the reports go quiet, not once per report', () => {
-    const mark = vi.fn()
-    const writes: string[][] = []
-    const scheduler = seenScheduler(mark, 1000, ids => { writes.push([...ids]) })
-    // A streaming round reporting three times.
-    scheduler.note(['w1'])
-    vi.advanceTimersByTime(400)
-    scheduler.note(['w1'])
-    vi.advanceTimersByTime(400)
-    scheduler.note(['w1'])
-    expect(mark).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(999)
-    expect(mark).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(writes).toEqual([['w1']])
-    expect(mark).toHaveBeenCalledTimes(1)
-    expect(mark).toHaveBeenCalledWith('w1')
-    // Nothing left to flush.
-    vi.advanceTimersByTime(5000)
-    expect(mark).toHaveBeenCalledTimes(1)
+  it('a report seen on screen stays read after leaving, and the next report lights the row again', () => {
+    const store = localSeen(memory())
+    const w1 = { id: 'w1', reportedAt: 100 }
+    store.mark('main', [w1])
+    expect(reviewOf(store.apply('main', [w1])[0]!)).toBeUndefined()
+    // A later report is unread again until it too is on screen.
+    expect(reviewOf(store.apply('main', [{ id: 'w1', reportedAt: 200 }])[0]!)).toBe('reported')
+    // Other main Sessions and members are untouched.
+    expect(reviewOf(store.apply('other', [w1])[0]!)).toBe('reported')
+    expect(reviewOf(store.apply('main', [{ id: 'w2', reportedAt: 100 }])[0]!)).toBe('reported')
   })
 
-  it('writes each member once per quiet period, flush writes what is pending, dispose drops it', () => {
-    const mark = vi.fn()
-    const scheduler = seenScheduler(mark, 1000)
-    scheduler.note(['w1', 'w2'])
-    scheduler.note(['w2', 'w3'])
-    vi.advanceTimersByTime(1000)
-    expect(mark.mock.calls.map(c => c[0]).sort()).toEqual(['w1', 'w2', 'w3'])
-    mark.mockClear()
-    scheduler.note(['w4'])
-    scheduler.flush()
-    expect(mark).toHaveBeenCalledWith('w4')
-    mark.mockClear()
-    scheduler.note(['w5'])
-    scheduler.dispose()
-    vi.advanceTimersByTime(5000)
-    expect(mark).not.toHaveBeenCalled()
+  it('persists across page loads, notifies once per change, and ignores repeats', () => {
+    const storage = memory()
+    const store = localSeen(storage)
+    const calls: number[] = []
+    store.subscribe(() => { calls.push(store.revision()) })
+    store.mark('main', [{ id: 'w1', reportedAt: 100 }])
+    store.mark('main', [{ id: 'w1', reportedAt: 100 }])
+    store.mark('main', [{ id: 'w1', reportedAt: 100, seenAt: 150 }])
+    expect(calls).toEqual([1])
+    expect(JSON.parse(storage.data.get('dsh-agent-scheduler/seen/main')!)).toEqual({ w1: 100 })
+    // A new page load reads it back.
+    expect(reviewOf(localSeen(storage).apply('main', [{ id: 'w1', reportedAt: 100 }])[0]!)).toBeUndefined()
+  })
+
+  it('works without storage or with storage that throws', () => {
+    const broken = { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('full') } }
+    for (const store of [localSeen(), localSeen(broken)]) {
+      store.mark('main', [{ id: 'w1', reportedAt: 100 }])
+      expect(reviewOf(store.apply('main', [{ id: 'w1', reportedAt: 100 }])[0]!)).toBeUndefined()
+    }
+  })
+
+  it('writes nothing to the session: the switch no longer runs a command for it', () => {
+    const src = ownFile('src/client/index.tsx')
+    const sw = src.slice(src.indexOf('export function createScheduleSwitch'), src.indexOf('export function createScheduleSwitch') + 6000)
+    expect(sw).not.toMatch(/seenLine\(/u)
+    expect(sw).not.toMatch(/deps\.run/u)
   })
 })
 
@@ -118,6 +118,11 @@ describe('what is on screen', () => {
     expect([...visibleChildren(floating, ['w1'])]).toEqual(['w1'])
     // A tab of something else is nobody's chat.
     expect([...visibleChildren(layout([{ id: 'p1', tabs: ['agents'] }]), ['w1'])]).toEqual([])
+    // A collapsed column keeps docked chats mounted off screen: they are not in view; a float still is.
+    expect([...visibleChildren({ ...two, expanded: false }, ['w1', 'w2'])]).toEqual([])
+    expect([...visibleChildren({ ...floating, expanded: false }, ['w1'])]).toEqual(['w1'])
+    // A member shown in two panes counts once.
+    expect([...visibleChildren(layout([{ id: 'p1', tabs: ['w1'] }, { id: 'p2', tabs: ['w1'] }]), ['w1'])]).toEqual(['w1'])
   })
 })
 
