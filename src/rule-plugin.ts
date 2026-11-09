@@ -210,7 +210,42 @@ export function parseMerge(raw: string): { a: string; b: string; into?: string; 
   return t('cmd.agents.mergeUsage')
 }
 
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+const FORK_FLAGS = ['--role', '--task', '--cwd', '--repo', '--branch', '--base', '--owner-name', '--owner-role'] as const
+
+/**
+ * Parse `/agents fork <worker> <new-name> [--role …] [--task …] [--cwd <dir>] [--repo <dir> --branch <b> [--base <ref>]] [--owner-name <n> [--owner-role …]]`.
+ * A flag's value runs to the next flag, so roles and tasks may have spaces.
+ * @param raw - text after `fork`.
+ * @returns the fork, or an error message.
+ */
+export function parseFork(raw: string): { owner: string; name: string; role?: string; task?: string; cwd?: string; worktree?: { repo: string; branch: string; base?: string }; ownerName?: string; ownerRole?: string } | string {
+  const all = words(raw)
+  const first = all.findIndex(w => w.startsWith('--'))
+  const head = first < 0 ? all : all.slice(0, first)
+  if (head.length !== 2) return t('cmd.agents.forkUsage')
+  const values = new Map<string, string>()
+  for (let i = first < 0 ? all.length : first; i < all.length;) {
+    const flag = all[i]!
+    if (!(FORK_FLAGS as readonly string[]).includes(flag)) return t('cmd.agents.forkUsage')
+    const parts: string[] = []
+    i += 1
+    while (i < all.length && !all[i]!.startsWith('--')) parts.push(all[i++]!)
+    if (parts.length === 0) return t('cmd.agents.needsValue', { flag })
+    values.set(flag, parts.join(' '))
+  }
+  const repo = values.get('--repo')
+  const branch = values.get('--branch')
+  if ((repo === undefined) !== (branch === undefined)) return t('cmd.agents.forkRepoBranch')
+  const base = values.get('--base')
+  const pick = (flag: string, key: string) => (values.has(flag) ? { [key]: values.get(flag)! } : {})
+  return {
+    owner: head[0]!, name: head[1]!,
+    ...pick('--role', 'role'), ...pick('--task', 'task'), ...pick('--cwd', 'cwd'), ...pick('--owner-name', 'ownerName'), ...pick('--owner-role', 'ownerRole'),
+    ...(repo === undefined || branch === undefined ? {} : { worktree: { repo, branch, ...(base === undefined ? {} : { base }) } }),
+  }
+}
+
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor' | 'forkWorker'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -229,6 +264,12 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       if (from === undefined || to === undefined || extra.length > 0) return { kind: 'error', text: t('cmd.agents.renameUsage') }
       const done = await scheduler.rename(invocation.agent, from, to)
       return { kind: 'success', text: done.from === done.to ? t('cmd.agents.sameName', { name: done.to }) : t('cmd.agents.renamed', { from: done.from, to: done.to }) }
+    }
+    if (verb === 'fork') {
+      const parsed = parseFork(rest)
+      if (typeof parsed === 'string') return { kind: 'error', text: parsed }
+      const done = await scheduler.forkWorker(invocation.agent, parsed)
+      return { kind: 'success', text: t(done.renamed ? 'cmd.agents.forkedSplit' : 'cmd.agents.forked', { name: done.name, owner: done.owner }) }
     }
     if (verb === 'merge') {
       const parsed = parseMerge(rest)

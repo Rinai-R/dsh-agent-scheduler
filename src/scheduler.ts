@@ -194,6 +194,8 @@ export interface CreateWorker extends Dispatch {
   readonly for?: string | undefined
   /** Create `cwd` as a new git worktree of this repository first (forks have no shell to do it). */
   readonly worktree?: { readonly repo: string; readonly branch: string; readonly base?: string | undefined } | undefined
+  /** `user`: the user made it themselves (Agents page, `/agents fork`), recorded as such. */
+  readonly via?: 'user' | undefined
 }
 
 /**
@@ -261,6 +263,8 @@ export interface SplitWorker extends Dispatch {
   readonly model?: ForkModelSelection | undefined
   /** Its first request. */
   readonly task: string
+  /** As for {@link CreateWorker.via}. */
+  readonly via?: 'user' | undefined
   /** As for agent_create: what the new worker is for (the lead names a fork-N or r-N). */
   readonly for?: string | undefined
 }
@@ -875,8 +879,10 @@ export class Scheduler {
       }
       checkName()
     }
-    // The lead's explicit model, then the Agents page's 「Worker 模型」 (/worker model), then config.
-    const selection = args.model ?? workerModelOf(eventsOf(main.session)) ?? this.deps.configuredWorkerModel
+    // The explicit model, then (a fork of a worker) the model its owner runs on, then the Agents
+    // page's 「Worker 模型」 (/worker model), then config.
+    const ownerModel = source === undefined ? undefined : source.pickedModel ?? parseModelRoute(source.model)
+    const selection = args.model ?? ownerModel ?? workerModelOf(eventsOf(main.session)) ?? this.deps.configuredWorkerModel
     const preset = args.preset ?? this.deps.workerPreset
     // One worker per directory: this is what keeps two writers out of the same tree. A worker
     // continued from another gets no default directory, since its source still works in its own.
@@ -901,14 +907,14 @@ export class Scheduler {
   }
 
   /** Record a planned worker and start it; its task becomes its first request. */
-  private async launchWorker(main: Agent, caller: Agent, args: Pick<CreateWorker, 'name' | 'role' | 'task'>, plan: WorkerPlan, intro: readonly string[]): Promise<Created> {
+  private async launchWorker(main: Agent, caller: Agent, args: Pick<CreateWorker, 'name' | 'role' | 'task' | 'via'>, plan: WorkerPlan, intro: readonly string[]): Promise<Created> {
     const ledger = this.ledgerOf(main)
     const { id, source, seed, selection, preset, cwd, key, area } = plan
     const model = selection === undefined ? undefined : `${selection.provider}/${selection.model}`
     this.record(main, s => appendAgent(s, {
       action: 'created', id, name: args.name, role: args.role,
       ...(cwd === undefined ? {} : { cwd }), ...(model === undefined ? {} : { model }), ...(source === undefined || seed === undefined ? {} : { from: source.id }), ...(area === undefined ? {} : { area }),
-      by: caller.id, ...(key === undefined ? {} : { for: key }), at: new Date().toISOString(),
+      by: caller.id, ...(key === undefined ? {} : { for: key }), at: new Date().toISOString(), ...(args.via === 'user' ? { via: 'user' as const } : {}),
     }))
     const task = args.task
     const requestId = task === undefined ? undefined : ledger.nextRequestId()
@@ -978,7 +984,7 @@ export class Scheduler {
     const intro = [plan.seed === undefined
       ? `Area "${area}" was split because a new task came while worker "${formerName}" was busy; it is now "${args.ownerName}" and keeps its current work (${args.ownerRole}). You are its sibling in the area, started fresh: do only your own task, do not redo or finish its work.`
       : `Area "${area}" was split because a new task came while "${formerName}" was busy. The conversation so far is "${formerName}"'s; it is now "${args.ownerName}" and keeps its current work (${args.ownerRole}). You are its sibling in the area: do only your own task, do not redo or finish its work.`]
-    const result = await this.launchWorker(main, caller, { name: args.name, role: args.role, task: args.task }, { ...plan, area }, intro)
+    const result = await this.launchWorker(main, caller, { name: args.name, role: args.role, task: args.task, via: args.via }, { ...plan, area }, intro)
     // A running owner learns its new identity at its next step; an idle one is not woken for it:
     // its system prompt and its next request carry the identity (see requestText).
     let ownerNotified = false
@@ -996,6 +1002,45 @@ export class Scheduler {
       }
     }
     return { ...result, area, owner: args.ownerName, formerName, ownerNotified, seeded: plan.seed !== undefined }
+  }
+
+  /**
+   * The user forks a worker themselves (Agents page 「Fork…」, `/agents fork`): a new worker that
+   * continues the owner's conversation, as its own session and row. With `ownerName` it is a split
+   * (the owner is renamed and keeps its work, both share the area); without, the owner stays as it
+   * is (`agent_create from`). Same dispatch lock, roster version and seed rule as those; the new
+   * worker is recorded as made by the user.
+   * @param caller - the main agent (the user's command).
+   * @param args - the owner, the new worker, and optionally the owner's new name and role.
+   * @returns the new worker, and whether the owner was renamed.
+   */
+  async forkWorker(caller: Agent, args: {
+    owner: string; name: string; role?: string | undefined; task?: string | undefined; cwd?: string | undefined
+    worktree?: CreateWorker['worktree']; ownerName?: string | undefined; ownerRole?: string | undefined; rosterVersion?: string | undefined
+  }): Promise<{ name: string; id: string; request?: string | undefined; queued: boolean; owner: string; renamed: boolean }> {
+    const main = this.mainOf(caller)
+    if (!isMainSession(caller)) throw new Error('only the user forks a worker this way; agents use agent_split or agent_create with from')
+    const ledger = this.ledgerOf(main)
+    const owner = this.lookup(ledger, args.owner)
+    if (owner.kind !== 'worker') throw new Error(`"${owner.name}" is a fork; only a worker can be forked`)
+    const task = args.task === undefined || args.task.trim() === '' ? undefined : args.task.trim()
+    // Without a role of its own the fork does what its owner does (the user narrows it later).
+    const role = args.role === undefined || args.role.trim() === '' ? (owner.role ?? owner.text) : args.role.trim()
+    const rename = args.ownerName !== undefined && args.ownerName.trim() !== '' && args.ownerName.trim() !== owner.name
+    if (rename) {
+      // A split needs a task (it is what the new worker splits off for).
+      const done = await this.split(caller, {
+        owner: owner.name, ownerName: args.ownerName!.trim(), ownerRole: args.ownerRole?.trim() || (owner.role ?? owner.text),
+        name: args.name, role, cwd: args.cwd, worktree: args.worktree, task: task ?? `Take over: ${role}`, via: 'user',
+        ...(args.rosterVersion === undefined ? {} : { rosterVersion: args.rosterVersion }),
+      })
+      return { name: done.name, id: done.id, request: done.request, queued: done.queued, owner: done.owner, renamed: true }
+    }
+    const made = await this.createWorker(caller, {
+      name: args.name, role, from: owner.name, cwd: args.cwd, worktree: args.worktree, task, via: 'user',
+      ...(args.rosterVersion === undefined ? {} : { rosterVersion: args.rosterVersion }),
+    })
+    return { name: made.name, id: made.id, request: made.request, queued: made.queued, owner: owner.name, renamed: false }
   }
 
   /** Find a member by name or id, or say what became of a name a split shared out. */
@@ -1155,7 +1200,12 @@ export class Scheduler {
     const ledger = this.ledgerOf(main)
     const member = ledger.members.get(agent.id)
     if (member?.kind !== 'worker' || member.state === 'archived' || member.state === 'failed') return
-    const preset = member.accessPreset ?? ceilingOf(access, main)?.name
+    // A worker forked from another starts in its owner's mode, never wider than the user's own.
+    const ceiling = ceilingOf(access, main)
+    const ownerPreset = member.from === undefined ? undefined : ledger.members.get(member.from)?.accessPreset
+    const ownerMode = ownerPreset === undefined ? undefined : access.modes().find(m => m.name === ownerPreset)
+    const fromOwner = ownerMode !== undefined && wideningReason(ownerMode, ceiling) === undefined ? ownerMode.name : undefined
+    const preset = member.accessPreset ?? fromOwner ?? ceiling?.name
     if (preset === undefined) return
     applyMemberAccess(access, agent, preset)
     if (member.accessPreset === undefined) this.record(main, s => appendMemberAccess(s, { agent: agent.id, preset, by: 'inherited' }))
@@ -2125,6 +2175,12 @@ export async function preStep(
  * Take it into this step instead, through the same admission.
  * @returns whether the step now holds something besides context.
  */
+/** A recorded `provider/model` route as a selection; undefined when absent or unreadable. */
+function parseModelRoute(model: string | undefined): { provider: string; model: string } | undefined {
+  const m = model === undefined ? null : /^([^/\s]+)\/(\S+)$/u.exec(model)
+  return m === null ? undefined : { provider: m[1]!, model: m[2]! }
+}
+
 /**
  * Refuse a first step that carries only context. A refused turn ends without DSH's usual check for
  * more input, so anything sent from here until the driver is idle would wait with no driver: once

@@ -47,8 +47,9 @@ export function apply(ctx: Context, config: Config): void {
     // 7: a renamed worker's former names, and the area workers split from one area share.
     // 8: the lead's inbox.
     // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges. 11: where merged workers' history is.
+    // 12: each worker's access mode, and workers the user forked.
     // Older cached state is dropped and refolded.
-    stateVersion: 11,
+    stateVersion: 12,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,

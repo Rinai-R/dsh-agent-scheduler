@@ -195,6 +195,8 @@ export interface AgentRecord {
   readonly for?: string
   /** On `created`: ISO time of the creation. */
   readonly at?: string
+  /** On `created`: `user` when the user made it from the Agents page or a command (`/agents fork`). */
+  readonly via?: 'user'
 }
 
 /** One piece of delegated work, or what became of it. */
