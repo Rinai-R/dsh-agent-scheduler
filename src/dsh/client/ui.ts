@@ -18,6 +18,8 @@ export const SLOT = {
   inputLeft: 'conversation.input.left',
   /** The composer's right controls. */
   inputRight: 'conversation.input.right',
+  /** The action strip under an assistant answer (copy, feedback, branch), per Session. */
+  assistantActions: 'conversation.chat.assistant-actions',
   /** A bundle's configuration page on the Plugins page, keyed by package name. */
   bundleConfig: 'plugins.bundle.config',
 } as const

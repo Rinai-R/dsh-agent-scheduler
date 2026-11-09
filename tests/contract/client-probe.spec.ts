@@ -67,9 +67,14 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
       paneTab: 'dsh-client-ui-sidebar-right',
       inputLeft: 'dsh-client-ui-conversation',
       inputRight: 'dsh-client-ui-conversation',
+      assistantActions: 'dsh-client-ui-chat',
       bundleConfig: 'dsh-client-ui-plugin-manager',
     }
     for (const [slot, pkg] of Object.entries(where)) expect(fetched(pkg), slot).toContain(SLOT[slot as keyof typeof SLOT])
+    // The answer strip is a per-Session list the turn tail renders with the answer's messageId.
+    const chat = fetched('dsh-client-ui-chat')
+    expect(chat).toMatch(/"conversation\.chat\.assistant-actions": \{\s*kind: "list",\s*scope: "session"/u)
+    expect(chat).toContain('renderSlot("conversation.chat.assistant-actions", { messageId })')
   })
 
   it('U1-U4: every DOM attribute the plugin reads or styles is still rendered', () => {

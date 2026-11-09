@@ -17,6 +17,7 @@ import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
 import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
+import { createForkFromChat, FORK_STYLE, forkCommand, forkRequests, startFork, takeFork, withForkName, type ForkDraft } from './fork.js'
 import { list, t, tn, useLocale } from './i18n.js'
 import {
   chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
@@ -551,6 +552,9 @@ const ICON = {
   ),
   plus: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+  ),
+  forkWorker: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 13.5V9M8 9 4 5M8 9l4-4M4 5V2.5M12 5V2.5M2.5 4 4 2.5 5.5 4M10.5 4 12 2.5 13.5 4" /></svg>
   ),
   merge: (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 2.5v3.2c0 1.6 1.2 2.6 2.6 3.2L8 9.5M12 2.5v3.2c0 1.6-1.2 2.6-2.6 3.2L8 9.5V13.5M6 11.6l2 2 2-2" /></svg>
@@ -1192,6 +1196,68 @@ export function createAgentsPage(ctx: {
     // 「合并到…」 on a worker row: the other worker, which side stays, the survivor's new name.
     const [merging, setMerging] = useState<{ id: string; from: string; other: string; keep: 'other' | 'this'; name: string; error: string | null; busy: boolean } | undefined>(undefined)
     const [renaming, setRenaming] = useState<{ id: string; from: string; value: string; error: string | null; busy: boolean } | undefined>(undefined)
+    // 「Fork…」 on a worker row (or 「Fork this worker」 in its chat): a new worker of its own.
+    const [forking, setForking] = useState<ForkDraft | undefined>(undefined)
+    const forkWanted = useSyncExternalStore(forkRequests.subscribe, forkRequests.getSnapshot)
+    useEffect(() => {
+      if (sessionId === undefined || forkWanted === undefined) return
+      const worker = takeFork(sessionId)
+      const member = worker === undefined ? undefined : rows.find(m => m.id === worker)
+      if (member !== undefined) { setMerging(undefined); setForking(startFork(member)) }
+    }, [sessionId, forkWanted])
+    const commitFork = () => {
+      if (sessionId === undefined || forking === undefined || forking.busy) return
+      const built = forkCommand(forking)
+      if ('error' in built) { setForking({ ...forking, error: built.error }); return }
+      setForking({ ...forking, busy: true, error: null })
+      const id = forking.id
+      const settle = (error: string | null) => { setForking(f => f === undefined || f.id !== id ? f : error === null ? undefined : { ...f, busy: false, error: restartNote(error) }) }
+      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
+    }
+    const forkForm = (member: Member) => {
+      if (forking === undefined || forking.id !== member.id) return null
+      const set = (patch: Partial<ForkDraft>) => { setForking(f => f === undefined ? f : { ...f, ...patch, error: null }) }
+      const busy = forking.busy
+      return (
+        <form className="sch-roster-form" data-scheduler-fork={member.name} onSubmit={e => { e.preventDefault(); commitFork() }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setForking(undefined) } }}>
+          <div className="sch-roster-form-title">{t('fork.title', { name: member.name })}</div>
+          <label>{t('fork.name')}
+            <input className="sch-roster-input" data-fork-field="name" value={forking.name} autoFocus spellCheck={false} disabled={busy} onChange={e => { const name = e.currentTarget.value; setForking(f => f === undefined ? f : withForkName(f, name)) }} />
+          </label>
+          <label>{t('fork.role')}
+            <textarea className="sch-roster-input" data-fork-field="role" value={forking.role} placeholder={t('fork.rolePlaceholder', { name: member.name })} disabled={busy} onChange={e => { set({ role: e.currentTarget.value }) }} />
+          </label>
+          <label>{t('fork.task')}
+            <textarea className="sch-roster-input" data-fork-field="task" value={forking.task} placeholder={t('fork.taskPlaceholder')} disabled={busy} onChange={e => { set({ task: e.currentTarget.value }) }} />
+          </label>
+          {forking.repo === '' ? null : (
+            <label className="sch-fork-check"><input type="checkbox" data-fork-field="worktree" checked={forking.worktree} disabled={busy} onChange={e => { set({ worktree: e.currentTarget.checked }) }} />{t('fork.worktree')}</label>
+          )}
+          <label>{t('fork.cwd')}
+            <input className="sch-roster-input" data-fork-field="cwd" value={forking.cwd} spellCheck={false} disabled={busy} onChange={e => { set({ cwd: e.currentTarget.value, touched: true }) }} />
+          </label>
+          {!forking.worktree ? null : (
+            <label>{t('fork.branch')}
+              <input className="sch-roster-input" data-fork-field="branch" value={forking.branch} spellCheck={false} disabled={busy} onChange={e => { set({ branch: e.currentTarget.value, touched: true }) }} />
+            </label>
+          )}
+          <label>{t('fork.ownerName', { name: member.name })}
+            <input className="sch-roster-input" data-fork-field="ownerName" value={forking.ownerName} placeholder={t('fork.ownerNamePlaceholder', { name: member.name })} spellCheck={false} disabled={busy} onChange={e => { set({ ownerName: e.currentTarget.value }) }} />
+          </label>
+          {forking.ownerName.trim() === '' ? null : (
+            <label>{t('fork.ownerRole', { name: member.name })}
+              <input className="sch-roster-input" data-fork-field="ownerRole" value={forking.ownerRole} placeholder={member.role ?? ''} disabled={busy} onChange={e => { set({ ownerRole: e.currentTarget.value }) }} />
+            </label>
+          )}
+          <div className="sch-roster-sub">{t('fork.hint', { name: member.name })}</div>
+          {forking.error === null ? null : <div className="sch-roster-form-error" role="status">{forking.error}</div>}
+          <div className="sch-roster-form-actions">
+            <button type="button" className="sch-roster-clear" disabled={busy} onClick={() => { setForking(undefined) }}>{t('fork.cancel')}</button>
+            <button type="submit" className="sch-roster-primary" disabled={busy || forking.name.trim() === ''}>{busy ? t('fork.submitting') : t('fork.submit')}</button>
+          </div>
+        </form>
+      )
+    }
     const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? t('restart.note') : error
     const create = () => {
       if (sessionId === undefined || submitting) return
@@ -1290,6 +1356,8 @@ export function createAgentsPage(ctx: {
       // Merge into another live worker: there must be one, and neither may be mid-merge.
       const partners = mergePartners(rows, member, roster?.merging ?? [])
       const canMerge = canRename && partners.length > 0
+      // Any live worker can be forked; the seed rule (a completed round, nothing pending) is the host's.
+      const canFork = canRename
       if (renaming?.id === member.id) {
         return (
           <div key={member.id} className="sch-roster-item">
@@ -1327,8 +1395,10 @@ export function createAgentsPage(ctx: {
             <span className="sch-roster-tail"><span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span><span className="sch-roster-chev">{ICON.chevron}</span></span>
           </span>
         </button>
-        {canMerge ? <button type="button" className="sch-roster-merge" data-slot={(canRename ? 1 : 0) + (canArchive ? 1 : 0)} aria-label={t('merge.aria', { name: member.name })} title={t('merge.action')} disabled={pending.has(member.name)} onClick={() => { setMerging(startMerge(member, partners, statuses, openTo)) }}>{ICON.merge}</button> : null}
+        {canFork ? <button type="button" className="sch-roster-fork" data-slot={(canMerge ? 1 : 0) + (canRename ? 1 : 0) + (canArchive ? 1 : 0)} data-scheduler-fork-action={member.name} aria-label={t('fork.aria', { name: member.name })} title={t('fork.action')} disabled={pending.has(member.name)} onClick={() => { setMerging(undefined); setForking(startFork(member)) }}>{ICON.forkWorker}</button> : null}
+        {canMerge ? <button type="button" className="sch-roster-merge" data-slot={(canRename ? 1 : 0) + (canArchive ? 1 : 0)} aria-label={t('merge.aria', { name: member.name })} title={t('merge.action')} disabled={pending.has(member.name)} onClick={() => { setForking(undefined); setMerging(startMerge(member, partners, statuses, openTo)) }}>{ICON.merge}</button> : null}
         {merging?.id === member.id ? mergeForm(member, partners) : null}
+        {forking?.id === member.id ? forkForm(member) : null}
         {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
         {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
         {!hasTeam ? null : (
@@ -1530,7 +1600,7 @@ export function apply(ctx: any): void {
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
-  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + TEAM_STYLE), 'agent-scheduler: styles')
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + TEAM_STYLE + FORK_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)
@@ -1563,5 +1633,8 @@ export function apply(ctx: any): void {
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
   registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar }))
+  // Under each answer of a worker's own chat: fork it as a worker (DSH's own 「branch」 there makes a
+  // new top-level conversation, not a worker).
+  registerSlot(ctx, 'assistantActions', { id: 'agent-scheduler-fork', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createForkFromChat({ parentOf: host.parentOf, rosterFace, openAgents }))
   registerRecoveryConfig(ctx)
 }
