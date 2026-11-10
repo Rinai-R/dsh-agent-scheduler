@@ -69,22 +69,44 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
       inputRight: 'dsh-client-ui-conversation',
       assistantActions: 'dsh-client-ui-chat',
       bundleConfig: 'dsh-client-ui-plugin-manager',
-      panelList: 'dsh-client-ui-sidebar',
-      mainPanel: 'dsh-client-ui-layout',
+      brandName: 'dsh-client-ui-sidebar',
+      workspaces: 'dsh-client-ui-sidebar',
+      sessionRowAction: 'dsh-client-ui-workspace',
     }
     for (const [slot, pkg] of Object.entries(where)) expect(fetched(pkg), slot).toContain(SLOT[slot as keyof typeof SLOT])
     // The answer strip is a per-Session list the turn tail renders with the answer's messageId.
     const chat = fetched('dsh-client-ui-chat')
     expect(chat).toMatch(/"conversation\.chat\.assistant-actions": \{\s*kind: "list",\s*scope: "session"/u)
     expect(chat).toContain('renderSlot("conversation.chat.assistant-actions", { messageId })')
-    // The left rail lists panels from a root list; the centre area is a root keyed slot.
+    // The header brand name and the browsing region are root single slots; the deck swaps the
+    // second one in place and uses the first for its switch.
     const sidebar = fetched('dsh-client-ui-sidebar')
-    expect(sidebar).toMatch(/"sidebar\.panellist": \{\s*kind: "list",\s*scope: "root"/u)
-    expect(sidebar).toContain('renderSlot("sidebar.panellist"')
-    const layout = fetched('dsh-client-ui-layout')
-    expect(layout).toMatch(/"main": \{\s*kind: "keyed",\s*scope: "root"/u)
-    // Both DSH versions key the centre area by the selected panel; only the expression differs.
-    expect(layout).toMatch(/renderSlot\("main", \{\}, \{ entryKey: [^\n]*"conversation" \}\)/u)
+    expect(sidebar).toMatch(/"sidebar\.brand\.name": \{\s*kind: "single",\s*scope: "root"/u)
+    expect(sidebar).toMatch(/"sidebar\.workspaces": \{\s*kind: "single",\s*scope: "root"/u)
+    expect(sidebar).toContain('renderSlot("sidebar.brand.name"')
+    expect(sidebar).toContain('renderSlot("sidebar.workspaces"')
+    // The stock occupant: a root single with a row-action LIST, where the shell registers its own
+    // pin/archive actions (so a native pin already exists in 工作区 mode).
+    const workspace = fetched('dsh-client-ui-workspace')
+    expect(workspace).toMatch(/inject\("sidebar\.workspaces", \(\) => ctx\.slots\.register\(\{\s*name: "sidebar\.workspaces"/u)
+    expect(workspace).toMatch(/"sidebar\.workspaces\.session\.row\.action": \{\s*kind: "list",\s*scope: "root"/u)
+    expect(workspace).toMatch(/name: "sidebar\.workspaces\.session\.row\.action",\s*id: "pin"/u)
+  })
+
+  it('C14: a single slot renders its first live entry in priority order, so a -1 registration shadows it', () => {
+    // The outlet lives in the renderer package; the registry (sort + first-live-wins) is bundled
+    // into the web frontend, so both are probed.
+    const renderer = fetched('dsh-client-ui-renderer')
+    expect(renderer).toMatch(/spec\.kind === "single"/u)
+    expect(renderer).toMatch(/const entry = host\.entriesOfSlot\(slotKey\)\[0\]/u)
+    const core = fetched('dsh-web-frontend')
+    // Registration sorts entries ascending by priority (default 0): a dynamic -1 wins the cell.
+    expect(core).toMatch(/\.sort\([^;]{0,220}?options\.priority\?\?0\)-(\([a-z]\.options\.priority\?\?0\))/u)
+    // Winning per cell skips abdicated entries and keeps the first remaining one, and for a single
+    // slot every entry shares the same (undefined) cell key, so exactly one renders.
+    expect(core).toMatch(/entriesOfSlot\([a-z]\)\{const [a-z]=this\.records\.get\([a-z]\)/u)
+    expect(core).toContain('this.abdicated.has(')
+    expect(core).toMatch(/r==="keyed"\?[a-z]\.options\.key:r==="list"\?[a-z]\.options\.id:void 0/u)
   })
 
   it('C13: the config-forms surface still serves a namespace form to a bundle page', () => {

@@ -135,6 +135,11 @@ export const pt: Record<keyof typeof zh, string> = {
   'menu.staleBadge': 'Indisponível · escolha outro',
   'rc.loading': 'Carregando configurações…',
   // ── focus deck ──
+  'deck.switch': 'Mudar o conteúdo da barra',
+  'deck.mode.workspace': 'Área de trabalho',
+  'deck.mode.deck': 'Painel',
+  'deck.expand': 'Mostrar workers de {title}',
+  'deck.collapse': 'Ocultar workers de {title}',
   'deck.panel': 'Painel',
   'deck.title': 'Painel',
   'deck.lead': 'Fixe na barra lateral esquerda as sessões que acompanha: quem trabalha e quem espera por você, numa tela.',

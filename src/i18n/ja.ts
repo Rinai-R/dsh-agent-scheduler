@@ -137,6 +137,11 @@ export const ja: Record<keyof typeof zh, string> = {
   'menu.staleBadge': '利用不可 · 選び直す',
   'rc.loading': '設定を読み込み中…',
   // ── focus deck ──
+  'deck.switch': 'サイドバー内容を切り替え',
+  'deck.mode.workspace': 'ワークスペース',
+  'deck.mode.deck': 'デッキ',
+  'deck.expand': '{title} の worker を表示',
+  'deck.collapse': '{title} の worker を隠す',
   'deck.panel': 'デッキ',
   'deck.title': 'デッキ',
   'deck.lead': '左サイドバーに監視したいセッションを固定し、実行中・対応待ちを一画面で。',

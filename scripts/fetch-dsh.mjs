@@ -28,6 +28,9 @@ export const PROBED = [
   // The left rail's panel strip and the centre keyed panel slot (focus deck).
   'dsh-client-ui-sidebar',
   'dsh-client-ui-layout',
+  // One single-slot resolution semantics and the stock workspace tree the deck swaps with.
+  'dsh-client-ui-renderer',
+  'dsh-client-ui-workspace',
   // The config-forms client surface the plugin's settings page and deck gate read.
   'dsh-client-ui-settings',
 ]

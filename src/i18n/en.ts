@@ -141,6 +141,11 @@ export const en: Record<keyof typeof zh, string> = {
 
   'rc.loading': 'Loading settings…',
   // ── focus deck ──
+  'deck.switch': 'Switch sidebar content',
+  'deck.mode.workspace': 'Workspace',
+  'deck.mode.deck': 'Deck',
+  'deck.expand': 'Show {title} workers',
+  'deck.collapse': 'Hide {title} workers',
   'deck.panel': 'Deck',
   'deck.title': 'Deck',
   'deck.lead': 'Pin the Sessions you watch in the left sidebar: one screen for who is running and who waits for you.',

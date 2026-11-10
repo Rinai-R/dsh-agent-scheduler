@@ -139,6 +139,11 @@ export const ru: Record<keyof typeof zh, string> = {
   'menu.staleBadge': 'Недоступно · выберите заново',
   'rc.loading': 'Загрузка настроек…',
   // ── focus deck ──
+  'deck.switch': 'Сменить содержимое панели',
+  'deck.mode.workspace': 'Рабочее пространство',
+  'deck.mode.deck': 'Пульт',
+  'deck.expand': 'Показать воркеров {title}',
+  'deck.collapse': 'Скрыть воркеров {title}',
   'deck.panel': 'Пульт',
   'deck.title': 'Пульт',
   'deck.lead': 'Закрепите в левой панели сессии, за которыми следите: кто работает и кто ждёт вас — на одном экране.',

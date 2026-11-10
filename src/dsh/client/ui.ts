@@ -22,10 +22,12 @@ export const SLOT = {
   assistantActions: 'conversation.chat.assistant-actions',
   /** A bundle's configuration page on the Plugins page, keyed by package name. */
   bundleConfig: 'plugins.bundle.config',
-  /** One entry of the shell's left sidebar panel strip. */
-  panelList: 'sidebar.panellist',
-  /** The shell's centre area, keyed by the selected panel id. */
-  mainPanel: 'main',
+  /** The brand name in the sidebar header: the deck's 工作区 | 指挥台 switch lives here. */
+  brandName: 'sidebar.brand.name',
+  /** The sidebar's browsing region: the stock workspace tree, which the deck swaps in-place. */
+  workspaces: 'sidebar.workspaces',
+  /** The stock session list's row actions (the shell's own pin/archive entries are a list here). */
+  sessionRowAction: 'sidebar.workspaces.session.row.action',
 } as const
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */

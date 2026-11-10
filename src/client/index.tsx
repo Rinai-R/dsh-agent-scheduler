@@ -1667,8 +1667,13 @@ export function apply(ctx: any): void {
   // new top-level conversation, not a worker).
   registerSlot(ctx, 'assistantActions', { id: 'agent-scheduler-fork', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createForkFromChat({ parentOf: host.parentOf, rosterFace, openAgents }))
   registerRecoveryConfig(ctx)
-  // The focus deck: a left-sidebar panel of pinned Sessions, gated by `deck.enabled`.
-  try { registerDeck(ctx, openAgents) } catch (error) { warnOnce('deck', 'the focus deck was not registered', error) }
+  // The focus deck swaps the left sidebar's browsing region in place, gated by `deck.enabled`.
+  // Opening a worker's chat reuses the right-pane placement the Agents page uses.
+  const openWorkerChat = (parent: string, child: string) => {
+    const address = host.chatAddress(parent, child)
+    try { sidebar()?.openResource?.(address, placeChat(sidebar())) } catch (error) { warnOnce('deck.openWorker', 'a worker chat could not be opened from the deck', error) }
+  }
+  try { registerDeck(ctx, openWorkerChat) } catch (error) { warnOnce('deck', 'the focus deck was not registered', error) }
 }
 
 /**

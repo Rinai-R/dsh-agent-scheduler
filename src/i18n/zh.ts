@@ -152,6 +152,11 @@ export const zh = {
   // ── the Plugins page: restart recovery ──
   'rc.loading': '正在读取配置…',
   // ── focus deck ──
+  'deck.switch': '切换侧边栏内容',
+  'deck.mode.workspace': '工作区',
+  'deck.mode.deck': '指挥台',
+  'deck.expand': '展开 {title} 的 worker',
+  'deck.collapse': '收起 {title} 的 worker',
   'deck.panel': '指挥台',
   'deck.title': '指挥台',
   'deck.lead': '在左侧栏固定要盯的会话，一屏看清谁在跑、谁在等你。',

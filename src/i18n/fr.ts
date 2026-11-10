@@ -135,6 +135,11 @@ export const fr: Record<keyof typeof zh, string> = {
   'menu.staleBadge': 'Indisponible · à rechoisir',
   'rc.loading': 'Chargement des paramètres…',
   // ── focus deck ──
+  'deck.switch': 'Changer le contenu de la barre',
+  'deck.mode.workspace': 'Espace de travail',
+  'deck.mode.deck': 'Pupitre',
+  'deck.expand': 'Afficher les workers de {title}',
+  'deck.collapse': 'Masquer les workers de {title}',
   'deck.panel': 'Pupitre',
   'deck.title': 'Pupitre',
   'deck.lead': 'Épinglez dans la barre latérale gauche les sessions que vous surveillez : qui travaille et qui vous attend, sur un écran.',

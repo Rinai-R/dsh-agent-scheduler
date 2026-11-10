@@ -135,6 +135,11 @@ export const de: Record<keyof typeof zh, string> = {
   'menu.staleBadge': 'Nicht verfügbar · neu wählen',
   'rc.loading': 'Einstellungen werden geladen…',
   // ── focus deck ──
+  'deck.switch': 'Seitenleisten-Inhalt wechseln',
+  'deck.mode.workspace': 'Arbeitsbereich',
+  'deck.mode.deck': 'Pult',
+  'deck.expand': 'Worker von {title} zeigen',
+  'deck.collapse': 'Worker von {title} ausblenden',
   'deck.panel': 'Pult',
   'deck.title': 'Pult',
   'deck.lead': 'Hefte in der linken Seitenleiste die Sitzungen an, die du beobachtest: wer arbeitet, wer auf dich wartet, auf einem Bildschirm.',

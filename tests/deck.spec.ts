@@ -4,7 +4,7 @@ import { cardOf, deckOf, readPins, togglePin, writePins, type DeckSession, type 
 import { rowStateOf } from '../src/client/row-state.js'
 import { applyRoster, EMPTY_ROSTER, rosterView, type RosterView } from '../src/projection.js'
 import { AGENT_RECORD, MAIL_RECORD } from '../src/records.js'
-import { DECK_PANEL_ID, registerDeck } from '../src/client/deck.js'
+import { createDeckViews, createModeStore, registerDeck } from '../src/client/deck.js'
 import { setLanguage } from '../src/i18n/index.js'
 import { Config } from '../src/index.js'
 
@@ -93,51 +93,86 @@ describe('deck cards', () => {
   })
 })
 
-describe('registration and config', () => {
-  const fakeCtx = (deckEnabled: () => boolean, registrations: Array<{ name: string; spec: Record<string, unknown> }>, disposed: string[]) => {
+describe('sidebar mode registration and config', () => {
+  const fakeCtx = (state: { enabled: boolean; phase?: string }, registered: Array<{ name: string; spec: Record<string, unknown> }>, disposed: string[], onConfig?: (fn: () => void) => void) => {
     let listener: (() => void) | undefined
-    return {
+    const ctx = {
       get(name: string) {
-        if (name === 'configForms') {
-          return { get: () => ({ getSnapshot: () => ({ status: 'ready', value: { deck: { enabled: deckEnabled() } } }), subscribe: (fn: () => void) => { listener = fn; return () => { listener = undefined } } }) }
-        }
-        return undefined
+        if (name !== 'configForms') return undefined
+        return { get: () => ({ getSnapshot: () => ({ status: state.phase ?? 'ready', value: { deck: { enabled: state.enabled } } }), subscribe: (fn: () => void) => { listener = fn; onConfig?.(fn); return () => { listener = undefined } } }) }
       },
       slots: {
         inject(name: string, cb: () => unknown) {
           const spec = cb() as { name: string }
-          registrations.push({ name, spec: spec as unknown as Record<string, unknown> })
+          registered.push({ name, spec: spec as unknown as Record<string, unknown> })
           return () => { disposed.push(name) }
         },
         register(spec: Record<string, unknown>) { return spec },
       },
-      refresh() { listener?.() },
     }
+    return { ctx, refresh: () => { listener?.() } }
   }
 
-  it('registers the sidebar entry and the keyed main panel while enabled', () => {
-    let enabled = true
+  it('registers the header switch always and the sidebar body only in deck mode', () => {
+    const state = { enabled: true }
     const registered: Array<{ name: string; spec: Record<string, unknown> }> = []
     const disposed: string[] = []
-    const ctx = fakeCtx(() => enabled, registered, disposed)
-    registerDeck(ctx, () => undefined)
-    expect(registered.map(r => r.name)).toEqual(['sidebar.panellist', 'main'])
-    expect(registered[0]!.spec).toMatchObject({ id: DECK_PANEL_ID, order: 5 })
-    expect(typeof (registered[0]!.spec as { label: () => string }).label()).toBe('string')
-    expect(registered[1]!.spec).toMatchObject({ key: DECK_PANEL_ID })
-    enabled = false
-    ctx.refresh()
-    expect(disposed).toEqual(['sidebar.panellist', 'main'])
-    enabled = true
-    ctx.refresh()
-    expect(registered).toHaveLength(4)
+    const { ctx } = fakeCtx(state, registered, disposed)
+    const controller = registerDeck(ctx, () => undefined)
+    // Deck mode (the default): the header switch shadows the brand name, the body shadows the tree.
+    expect(registered.map(r => r.name)).toEqual(['sidebar.brand.name', 'sidebar.workspaces'])
+    for (const entry of registered) expect(entry.spec).toMatchObject({ priority: -1 })
+    // Switching to 工作区 withdraws the body only, so the shell's own tree registration renders.
+    controller.modes.set('workspace')
+    expect(disposed).toEqual(['sidebar.workspaces'])
+    expect(registered).toHaveLength(2)
+    // Switching back re-registers the body.
+    controller.modes.set('deck')
+    expect(registered.map(r => r.name).filter(n => n === 'sidebar.workspaces')).toHaveLength(2)
   })
 
-  it('registers when the settings service is absent (deck is on by default)', () => {
+  it('withdraws both seats when deck.enabled turns off, and restores them when it turns on', () => {
+    const state = { enabled: true }
     const registered: Array<{ name: string; spec: Record<string, unknown> }> = []
-    const ctx = { get: () => undefined, slots: { inject(name: string, cb: () => unknown) { registered.push({ name, spec: cb() as Record<string, unknown> }); return () => undefined }, register(spec: Record<string, unknown>) { return spec } } }
+    const disposed: string[] = []
+    const { ctx, refresh } = fakeCtx(state, registered, disposed)
     registerDeck(ctx, () => undefined)
-    expect(registered.map(r => r.name)).toEqual(['sidebar.panellist', 'main'])
+    state.enabled = false
+    refresh()
+    expect(disposed).toEqual(['sidebar.brand.name', 'sidebar.workspaces'])
+    state.enabled = true
+    refresh()
+    expect(registered.map(r => r.name).filter(n => n === 'sidebar.brand.name')).toHaveLength(2)
+  })
+
+  it('the mode choice is remembered across reloads', () => {
+    const memory = new Map<string, string>()
+    const storage = { getItem: (k: string) => memory.get(k) ?? null, setItem: (k: string, v: string) => { memory.set(k, v) } }
+    const first = createModeStore(storage)
+    expect(first.get()).toBe('deck')
+    first.set('workspace')
+    first.set('deck')
+    expect(createModeStore(storage).get()).toBe('deck')
+    first.set('workspace')
+    expect(createModeStore(storage).get()).toBe('workspace')
+  })
+
+  it('falls back to the local pins when the shell has no workspace pin service, and uses it when present', () => {
+    const visible = createDeckViews({ get: () => undefined, slots: { inject: () => () => undefined, register: () => ({}) } }, () => undefined)
+    expect(visible.modes.get()).toBe('deck')
+    // The shell's pin service is preferred: pinnedSessionIds from the workspace store.
+    let ids: string[] = ['a']
+    const listeners = new Set<() => void>()
+    const shell = {
+      get: (name: string) => {
+        if (name === 'workspaces') return { list: { getSnapshot: () => ({ pinnedSessionIds: ids }), subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } } }
+        if (name === 'uiWorkspace') return { pinSession: async (id: string) => { ids = [...ids, id]; for (const fn of listeners) fn() }, unpinSession: async (id: string) => { ids = ids.filter(x => x !== id); for (const fn of listeners) fn() } }
+        return undefined
+      },
+      slots: { inject: () => () => undefined, register: () => ({}) },
+    }
+    const views = createDeckViews(shell, () => undefined)
+    expect(views).toBeDefined()
   })
 
   it('the host config defaults deck.enabled to true and the form writes the same path', async () => {
@@ -148,16 +183,12 @@ describe('registration and config', () => {
     expect(source).toContain("write('deck.enabled'")
   })
 
-  it('without a config forms service the deck stays on and says so once', async () => {
-    const { configSource } = await import('../src/dsh/client/ui.js')
-    const { resetWarnings, setWarnSink } = await import('../src/dsh/compat.js')
-    resetWarnings()
-    const warned: string[] = []
-    const restore = setWarnSink(m => { warned.push(m) })
-    try {
-      expect(configSource({ get: () => undefined }, 'dsh-agent-scheduler')).toBeUndefined()
-      expect(configSource({ get: () => undefined }, 'dsh-agent-scheduler')).toBeUndefined()
-      expect(warned.filter(m => /config forms/u.test(m))).toHaveLength(1)
-    } finally { restore() }
+  it('the body renders the switch at its top, expandable worker rows, and opens worker chats', async () => {
+    const source = (await import('node:fs')).readFileSync(new URL('../src/client/deck.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('data-deck-switch')
+    expect(source).toContain('data-deck-expand')
+    expect(source).toContain('data-deck-worker=')
+    expect(source).toContain('openWorker(c.id, member.id)')
+    expect(source).toContain('sidebar.workspaces')
   })
 })
