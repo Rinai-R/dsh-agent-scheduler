@@ -22,6 +22,10 @@ export const SLOT = {
   assistantActions: 'conversation.chat.assistant-actions',
   /** A bundle's configuration page on the Plugins page, keyed by package name. */
   bundleConfig: 'plugins.bundle.config',
+  /** One entry of the shell's left sidebar panel strip. */
+  panelList: 'sidebar.panellist',
+  /** The shell's centre area, keyed by the selected panel id. */
+  mainPanel: 'main',
 } as const
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */
@@ -39,6 +43,35 @@ export function registerSlot(ctx: any, slot: keyof typeof SLOT, spec: Record<str
   const name = SLOT[slot]
   ctx.slots.inject(name, () => ctx.slots.register({ name, ...spec }, component))
   return true
+}
+
+/**
+ * Fill a seat whose presence can change at runtime: call the returned disposer to withdraw it.
+ * Unlike {@link registerSlot} this is a live registration, for a panel a setting can turn off.
+ * @param ctx - the browser plugin context.
+ * @param name - the seat's slot name.
+ * @param spec - registration fields besides `name`.
+ * @param component - what it renders.
+ * @returns an idempotent disposer; a no-op on a DSH without slots.
+ */
+export function registerLiveSlot(ctx: any, name: string, spec: Record<string, unknown>, component: unknown): () => void {
+  if (!hasFunction(ctx, 'slots.inject') || !hasFunction(ctx, 'slots.register')) return () => undefined
+  const dispose = ctx.slots.inject(name, () => ctx.slots.register({ name, ...spec }, component))
+  return typeof dispose === 'function' ? dispose as () => void : () => undefined
+}
+
+/**
+ * Read one settings namespace reactively; the page form and the panel gate read the same source.
+ * @param ctx - the browser plugin context.
+ * @param namespace - the host row id.
+ * @returns a tiny store over the form snapshot, or undefined when config forms are unavailable.
+ */
+export function configSource<T>(ctx: any, namespace: string): { get(): { status: string; value?: T }; subscribe(listener: () => void): () => void } | undefined {
+  const forms = (() => { try { return typeof ctx.get === 'function' ? ctx.get('configForms') : undefined } catch { return undefined } })()
+  if (forms === undefined || !hasFunction(forms, 'get')) return undefined
+  const form = forms.get(namespace) as ConfigForm<T>
+  if (form === undefined || !hasFunction(form, 'getSnapshot') || !hasFunction(form, 'subscribe')) return undefined
+  return { get: () => form.getSnapshot(), subscribe: listener => form.subscribe(listener) }
 }
 
 /**

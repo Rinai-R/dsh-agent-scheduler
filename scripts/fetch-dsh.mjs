@@ -25,6 +25,11 @@ export const PROBED = [
   'dsh-app-boot',
   'dsh-client-ui-commands',
   'dsh-client-ui-input-trigger',
+  // The left rail's panel strip and the centre keyed panel slot (focus deck).
+  'dsh-client-ui-sidebar',
+  'dsh-client-ui-layout',
+  // The config-forms client surface the plugin's settings page and deck gate read.
+  'dsh-client-ui-settings',
 ]
 
 const root = resolve(import.meta.dirname, '..')

@@ -15,6 +15,7 @@ import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
+import { registerDeck } from './deck.js'
 import { accessDefaultOf, hasMeta, rowMeta } from './row-meta.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
@@ -23,7 +24,7 @@ import { createForkFromChat, FORK_STYLE, forkCommand, forkRequests, startFork, t
 import { list, t, tn, useLocale } from './i18n.js'
 import {
   chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
-  steadyTabStrips, SUBAGENT_CHAT_KIND, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
+  steadyTabStrips, SUBAGENT_CHAT_KIND, warnOnce, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
 } from '../dsh/client/index.js'
 
 // Moved to the DSH adapter (src/dsh/client); re-exported for callers of this module.
@@ -1677,6 +1678,8 @@ export function apply(ctx: any): void {
   // new top-level conversation, not a worker).
   registerSlot(ctx, 'assistantActions', { id: 'agent-scheduler-fork', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createForkFromChat({ parentOf: host.parentOf, rosterFace, openAgents }))
   registerRecoveryConfig(ctx)
+  // The focus deck: a left-sidebar panel of pinned Sessions, gated by `deck.enabled`.
+  try { registerDeck(ctx, openAgents) } catch (error) { warnOnce('deck', 'the focus deck was not registered', error) }
 }
 
 /**

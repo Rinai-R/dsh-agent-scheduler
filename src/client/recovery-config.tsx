@@ -15,7 +15,7 @@ const PACKAGE = 'dsh-agent-scheduler'
 
 type Mode = 'fail' | 'resume'
 interface Recovery { onInterrupted?: Mode; maxResumes?: number }
-type Form = ConfigForm<{ recovery?: Recovery }>
+type Form = ConfigForm<{ recovery?: Recovery; deck?: { enabled?: boolean } }>
 type Snapshot = ReturnType<Form['getSnapshot']>
 
 const CSS = `
@@ -49,7 +49,7 @@ function RecoveryPage(props: { form: Form }) {
   const write = (path: string, value: unknown) => {
     setSaving(true)
     setFailed(false)
-    void props.form.mutate([{ op: 'set', path: ['recovery', path], value }]).then(ok => { setFailed(!ok) }, () => { setFailed(true) }).finally(() => { setSaving(false) })
+    void props.form.mutate([{ op: 'set', path: path.includes('.') ? path.split('.') : ['recovery', path], value }]).then(ok => { setFailed(!ok) }, () => { setFailed(true) }).finally(() => { setSaving(false) })
   }
   const disabled = saving || !snapshot.writable
   const option = (value: Mode, title: string, text: string) => (
@@ -64,6 +64,10 @@ function RecoveryPage(props: { form: Form }) {
       <h3>{t('rc.title')}</h3>
       {option('fail', t('rc.fail.title'), t('rc.fail.text'))}
       {option('resume', t('rc.resume.title'), t('rc.resume.text'))}
+      <label className="sch-rc-opt" data-on={snapshot.value?.deck?.enabled === false ? 'no' : 'yes'} data-scheduler-deck-config={snapshot.value?.deck?.enabled === false ? 'off' : 'on'}>
+        <input type="checkbox" checked={snapshot.value?.deck?.enabled !== false} disabled={disabled} onChange={event => { write('deck.enabled', event.currentTarget.checked) }} />
+        <span><b>{t('cfg.deck.title')}</b><p>{t('cfg.deck.text')}</p></span>
+      </label>
       <div className="sch-rc-row">
         <span>{t('rc.max.before')}</span>
         <input type="number" min={0} max={10} value={max} disabled={disabled || mode !== 'resume'} onChange={event => { const n = Number(event.target.value); if (Number.isInteger(n) && n >= 0 && n <= 10) write('maxResumes', n) }} />

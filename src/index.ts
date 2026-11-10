@@ -19,6 +19,8 @@ export const inject = HOST_SERVICES
  */
 export interface Config {
   recovery: Volatile<RecoveryPolicy>
+  /** The focus deck panel in the left sidebar (see src/client/deck.tsx). */
+  deck: Volatile<{ enabled: boolean }>
 }
 
 export const Config: z<Config> = z.object({
@@ -28,6 +30,10 @@ export const Config: z<Config> = z.object({
     maxResumes: z.natural().max(10).default(DEFAULT_RECOVERY.maxResumes)
       .description('With resume: how many times one request is resumed before it fails.'),
   }).default({}).volatile(),
+  deck: z.object({
+    enabled: z.boolean().default(true)
+      .description('Show the Deck panel in the left sidebar: pinned Sessions as live cards, plus the ones with running workers or a waiting inbox.'),
+  }).default({ enabled: true }).volatile(),
 }) as unknown as z<Config>
 
 /**

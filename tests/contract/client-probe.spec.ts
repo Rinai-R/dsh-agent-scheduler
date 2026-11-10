@@ -69,12 +69,31 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
       inputRight: 'dsh-client-ui-conversation',
       assistantActions: 'dsh-client-ui-chat',
       bundleConfig: 'dsh-client-ui-plugin-manager',
+      panelList: 'dsh-client-ui-sidebar',
+      mainPanel: 'dsh-client-ui-layout',
     }
     for (const [slot, pkg] of Object.entries(where)) expect(fetched(pkg), slot).toContain(SLOT[slot as keyof typeof SLOT])
     // The answer strip is a per-Session list the turn tail renders with the answer's messageId.
     const chat = fetched('dsh-client-ui-chat')
     expect(chat).toMatch(/"conversation\.chat\.assistant-actions": \{\s*kind: "list",\s*scope: "session"/u)
     expect(chat).toContain('renderSlot("conversation.chat.assistant-actions", { messageId })')
+    // The left rail lists panels from a root list; the centre area is a root keyed slot.
+    const sidebar = fetched('dsh-client-ui-sidebar')
+    expect(sidebar).toMatch(/"sidebar\.panellist": \{\s*kind: "list",\s*scope: "root"/u)
+    expect(sidebar).toContain('renderSlot("sidebar.panellist"')
+    const layout = fetched('dsh-client-ui-layout')
+    expect(layout).toMatch(/"main": \{\s*kind: "keyed",\s*scope: "root"/u)
+    // Both DSH versions key the centre area by the selected panel; only the expression differs.
+    expect(layout).toMatch(/renderSlot\("main", \{\}, \{ entryKey: [^\n]*"conversation" \}\)/u)
+  })
+
+  it('C13: the config-forms surface still serves a namespace form to a bundle page', () => {
+    const code = fetched('dsh-client-ui-settings')
+    expect(code).toContain('configForms')
+    expect(code).toMatch(/whileServed\(/u)
+    const pluginManager = fetched('dsh-client-ui-plugin-manager')
+    expect(pluginManager).toMatch(/"plugins\.bundle\.config": \{\s*kind: "keyed",\s*scope: "root"/u)
+    expect(pluginManager).toContain('renderSlot("plugins.bundle.config", { view: "page" }')
   })
 
   it('U1-U4: every DOM attribute the plugin reads or styles is still rendered', () => {
