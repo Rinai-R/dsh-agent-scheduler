@@ -123,7 +123,13 @@ describe('the fork shell is refused a write, and a write cannot be smuggled in',
     setSandboxMode(lead.session, 'danger-full-access')
     lead.followup(user('route this'))
     await until(lead, 'Its conclusion')
-    const { events } = await stored(ctx, SessionId(forksOf(lead)[0]!))
+    const forkId = forksOf(lead)[0]!
+    // The stored log is flushed asynchronously: wait for the fork's turn to be on disk.
+    const events = await vi.waitFor(async () => {
+      const { events } = await stored(ctx, SessionId(forkId))
+      expect(events.some(e => e.type === 'turn/end')).toBe(true)
+      return events
+    }, { timeout: 20_000 })
     const pin = events.findIndex(e => e.type === 'sandbox/mode' && (e.data as { mode: string }).mode === 'read-only')
     const firstStep = events.findIndex(e => e.type === 'step/start')
     expect(pin).toBeGreaterThanOrEqual(0)
