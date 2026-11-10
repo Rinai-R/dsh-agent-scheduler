@@ -6,11 +6,11 @@
   "author": "Rinai-R",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Rinai-R/dsh-agent-scheduler.git"
+    "url": "git+https://github.com/dsh-labs/dsh-agent-scheduler.git"
   },
-  "homepage": "https://github.com/Rinai-R/dsh-agent-scheduler#readme",
+  "homepage": "https://github.com/dsh-labs/dsh-agent-scheduler#readme",
   "bugs": {
-    "url": "https://github.com/Rinai-R/dsh-agent-scheduler/issues"
+    "url": "https://github.com/dsh-labs/dsh-agent-scheduler/issues"
   },
   "keywords": [
     "dsh",
