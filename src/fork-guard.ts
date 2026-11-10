@@ -45,13 +45,53 @@ export const forkRefusal = (name: string, tool: string): string =>
   + 'If it cannot be handed over, say so in your conclusion instead of doing it yourself.'
 
 /**
+ * Shell commands that change something remotely, which the read-only sandbox does not stop: it
+ * governs file effects only (DSH's sandbox has no network or credential policy), and the shell
+ * runs with the user's network and credentials (gh, ssh keys, git remotes). This is a best-effort
+ * refusal of the obvious forms, not a boundary: a shell can reach the same effect another way.
+ * A fork's remaining remote-write risk is documented in docs/guide.md.
+ */
+const REMOTE_WRITE: readonly RegExp[] = [
+  /\bgit\b[^\n;|&]*\s(push|send-email)\b/u,
+  /\bgh\s+(pr|issue)\s+(merge|create|close|reopen|edit|comment|review|ready|delete|lock|unlock|transfer|pin|unpin|develop)\b/u,
+  /\bgh\s+(release|repo|gist|label|secret|variable|ruleset|cache|project)\s+(create|edit|delete|upload|fork|rename|archive|unarchive|sync|set|remove|clone|add|copy|close|link|unlink|item-add|item-create|item-edit|item-delete|field-create|field-delete)\b/u,
+  /\bgh\s+(workflow\s+(run|enable|disable)|run\s+(rerun|cancel|delete)|auth\s+(login|logout|refresh|token|setup-git)|alias\s+set|extension\s+(install|upgrade|remove))\b/u,
+  /\bgh\s+api\b[^\n;|&]*(\s(-X|--method)\s*['"]?(POST|PUT|PATCH|DELETE)\b|\s(-f|-F|--field|--raw-field|--input)\b)/iu,
+  /\b(curl)\b[^\n;|&]*(\s(-X|--request)\s*['"]?(POST|PUT|PATCH|DELETE)\b|\s(-d|--data[\w-]*|-F|--form[\w-]*|-T|--upload-file|--json)\b)/iu,
+  /\bwget\b[^\n;|&]*\s--(post-data|post-file|method|body-data|body-file)\b/u,
+]
+
+/**
+ * Whether a fork's shell call is one of the obvious remote writes.
+ * @param tool - the tool name.
+ * @param args - its arguments.
+ * @returns the matched command text, or undefined.
+ */
+export function remoteWriteOf(tool: string, args: unknown): string | undefined {
+  if (tool !== 'bash' && tool !== 'pwsh') return undefined
+  const command = (args as { command?: unknown } | null | undefined)?.command
+  if (typeof command !== 'string') return undefined
+  return REMOTE_WRITE.some(pattern => pattern.test(command)) ? command : undefined
+}
+
+/** The refusal for a remote write from a fork's shell. */
+export const remoteWriteRefusal = (name: string): string =>
+  `${name} is a fork: its shell is for looking only, and this command changes something remotely (a push, a merge, a comment, an API write, an upload), which a fork never does. `
+  + 'Hand it to a worker with agent_create or agent_send, or say in your conclusion that it needs one.'
+
+/**
  * A tool guard for the scheduler's forks.
  * @param forkName - the roster name of `agent` when it is a fork of a scheduling session, else undefined.
  * @returns a guard: a refusal reason for a fork calling a tool outside {@link FORK_TOOLS}, else undefined.
  */
-export function forkGuard(forkName: (agent: Agent) => string | undefined): (exec: { readonly name: string; readonly agent?: Agent | undefined }) => string | undefined {
+export function forkGuard(forkName: (agent: Agent) => string | undefined): (exec: { readonly name: string; readonly agent?: Agent | undefined; readonly arguments?: unknown }) => string | undefined {
   return (exec) => {
-    if (exec.agent === undefined || FORK_TOOLS.has(exec.name)) return undefined
+    if (exec.agent === undefined) return undefined
+    if (FORK_TOOLS.has(exec.name)) {
+      if (remoteWriteOf(exec.name, exec.arguments) === undefined) return undefined
+      const name = forkName(exec.agent)
+      return name === undefined ? undefined : remoteWriteRefusal(name)
+    }
     const name = forkName(exec.agent)
     return name === undefined ? undefined : forkRefusal(name, exec.name)
   }

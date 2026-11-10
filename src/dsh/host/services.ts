@@ -128,7 +128,7 @@ export function registerTool(ctx: Context, tool: ToolDefinition): void {
  * @param guard - a refusal reason (the runtime prefixes it with "Error: "), or undefined to allow.
  * @returns false when this DSH has no guards.
  */
-export function installGuard(ctx: Context, guard: (exec: { readonly name: string; readonly agent?: Agent | undefined }) => string | undefined): boolean {
+export function installGuard(ctx: Context, guard: (exec: { readonly name: string; readonly agent?: Agent | undefined; readonly arguments?: unknown }) => string | undefined): boolean {
   if (!features.record('tools.guard', hasFunction(ctx, 'tools.guard'))) return false
   ctx.effect(() => ctx.tools.guard(guard), 'agent-scheduler: fork guard')
   return true

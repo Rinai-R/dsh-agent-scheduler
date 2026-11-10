@@ -103,4 +103,102 @@ describe('the fork shell is refused a write, and a write cannot be smuggled in',
     expect(lastFork).toContain('fork-1 is a fork: forks only route, so edit is not available to you')
     expect(lastFork).toContain('the shell you do have is read-only and cannot write')
   })
+
+  it('a DSH subagent_fork child of a worker or of the lead is not a routing fork: its sandbox is left alone', async () => {
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'CHILD'))
+    install(ctx, { defaultOn: false })
+    // What DSH's own subagent_fork tool does: an activation with provider "fork", started by the
+    // lead itself (scheduling off) — not by the scheduler.
+    const childId = 'plain-fork-child'
+    const subagents = (ctx as unknown as { subagents: { startActivation(a: unknown): Promise<unknown> } }).subagents
+    await subagents.startActivation({ provider: 'fork', label: 'plain', childId: SessionId(childId), signal: new AbortController().signal, delivery: 'parent', request: { parent: lead, prompt: [{ type: 'text', text: 'write a file' }] } })
+    await vi.waitFor(async () => { expect((await stored(ctx, SessionId(childId))).events.some(e => e.type === 'user/message')).toBe(true) }, { timeout: 20_000 })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect((await sandboxEvents(ctx, childId)).filter(e => e.data.mode === 'read-only')).toEqual([])
+  })
+
+  it('the read-only mode is folded before the fork\'s first step/start (lead on danger-full-access)', async () => {
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
+    install(ctx)
+    setSandboxMode(lead.session, 'danger-full-access')
+    lead.followup(user('route this'))
+    await until(lead, 'Its conclusion')
+    const { events } = await stored(ctx, SessionId(forksOf(lead)[0]!))
+    const pin = events.findIndex(e => e.type === 'sandbox/mode' && (e.data as { mode: string }).mode === 'read-only')
+    const firstStep = events.findIndex(e => e.type === 'step/start')
+    expect(pin).toBeGreaterThanOrEqual(0)
+    expect(firstStep).toBeGreaterThan(pin)
+    // No other sandbox mode after the pin.
+    expect(events.slice(pin + 1).filter(e => e.type === 'sandbox/mode')).toEqual([])
+  })
+
+  it('workers, split-seeded workers and created-from workers are never pinned read-only', async () => {
+    const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'W'))
+    const scheduler = install(ctx, { defaultOn: false })
+    setSandboxMode(lead.session, 'workspace-write')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    await scheduler.createWorker(lead, { name: 'hub', role: 'r', cwd: mkdtempSync(join(tmpdir(), 'hub-')), task: 'warm up' })
+    await until(lead, '[reply to r-1 from hub]')
+    await scheduler.split(lead, { owner: 'hub', ownerName: 'hub-a', ownerRole: 'a', name: 'hub-b', role: 'b', cwd: mkdtempSync(join(tmpdir(), 'hub-b-')), task: 'b work' })
+    await until(lead, '[reply to r-2 from hub-b]')
+    await scheduler.createWorker(lead, { name: 'hub-c', role: 'c', from: 'hub-a', cwd: mkdtempSync(join(tmpdir(), 'hub-c-')), task: 'c work' })
+    await until(lead, '[reply to r-3 from hub-c]')
+    const ledger = scheduler.ledgerOf(lead)
+    for (const name of ['hub-a', 'hub-b', 'hub-c']) {
+      const modes = (await sandboxEvents(ctx, ledger.find(name)!.id)).map(e => e.data.mode)
+      expect(modes, name).not.toContain('read-only')
+    }
+  })
+
+  it('refuses the obvious remote writes from a fork shell (best effort, not a boundary), and lets reads through', async () => {
+    const { remoteWriteOf, forkGuard } = await import('../src/fork-guard.js')
+    const writes = [
+      'git push origin HEAD', 'cd repo && git push -f', 'git -C x push --tags',
+      'gh pr merge 41 --merge', 'gh pr create --title x', 'gh pr comment 3 -b hi', 'gh issue close 4',
+      'gh api -X POST repos/o/r/issues', 'gh api repos/o/r/issues -f title=x', 'gh api --method DELETE repos/o/r',
+      'gh release create v1', 'gh repo delete o/r', 'gh workflow run ci', 'gh auth token',
+      'curl -X POST https://x', 'curl -d a=1 https://x', 'curl --json {} https://x', 'curl -T f https://x',
+      'wget --post-data=a https://x',
+    ]
+    for (const command of writes) expect(remoteWriteOf('bash', { command }), command).toBe(command)
+    const reads = ['git log --oneline -5', 'git status', 'git diff HEAD~1', 'gh pr view 41', 'gh pr list', 'gh pr diff 41', 'gh api repos/o/r/pulls', 'curl -s https://x', 'rg push src', 'cat push.md', 'ls -la']
+    for (const command of reads) expect(remoteWriteOf('bash', { command }), command).toBeUndefined()
+    // Other tools are not inspected; only the shell is.
+    expect(remoteWriteOf('read', { command: 'git push' })).toBeUndefined()
+    // The guard refuses a fork's remote write with a readable reason, and leaves non-forks alone.
+    const guard = forkGuard(agent => (agent as { fork?: string }).fork)
+    expect(guard({ name: 'bash', agent: { fork: 'fork-1' } as never, arguments: { command: 'gh pr merge 1 --merge' } })).toMatch(/changes something remotely/u)
+    expect(guard({ name: 'bash', agent: { fork: 'fork-1' } as never, arguments: { command: 'git log -1' } })).toBeUndefined()
+    expect(guard({ name: 'bash', agent: {} as never, arguments: { command: 'git push' } })).toBeUndefined()
+    // Not a boundary: indirection still gets through (documented in docs/guide.md).
+    expect(remoteWriteOf('bash', { command: 'sh -c "$(echo Z2l0IHB1c2g= | base64 -d)"' })).toBeUndefined()
+  })
+
+  it('a fork woken again after a lead restart is still read-only before its next step, with no second pin', async () => {
+    const { ctx } = await setup(o => textResponse(o.sessionId === 'main' ? 'MAIN' : 'FORK'))
+    const opts = { provider: 'mock', model: 'lead-model' }
+    const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
+    const scheduler = install(ctx)
+    setSandboxMode(h1.agent.session, 'danger-full-access')
+    h1.agent.followup(user('before restart'))
+    await until(h1.agent, 'Its conclusion')
+    const forkId = forksOf(h1.agent)[0]!
+    await h1.dispose()
+    scheduler.forget('main')
+    const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
+    await ctx.subagents.sendMessage(h2.agent, SessionId(forkId), [{ type: 'text', text: 'again' }], { signal: new AbortController().signal })
+    await until(h2.agent, 'Its conclusion', 2)
+    const { events } = await stored(ctx, SessionId(forkId))
+    const modes = events.filter(e => e.type === 'sandbox/mode').map(e => (e.data as { mode: string }).mode)
+    // Whatever delegation copied first, the last mode before every step is read-only.
+    const steps = events.map((e, i) => [e, i] as const).filter(([e]) => e.type === 'step/start').map(([, i]) => i)
+    expect(steps.length).toBeGreaterThanOrEqual(2)
+    for (const at of steps) {
+      const last = events.slice(0, at).filter(e => e.type === 'sandbox/mode').at(-1)
+      expect((last?.data as { mode?: string } | undefined)?.mode).toBe('read-only')
+    }
+    expect(modes.filter(m => m === 'read-only').length).toBeGreaterThanOrEqual(1)
+  })
 })
