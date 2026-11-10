@@ -3,6 +3,7 @@
  * Sessions need attention. Pure, so the panel's rules are testable without a browser.
  * @module dsh-agent-scheduler/client/deck-model
  */
+import { rowStateOf } from './row-state.js'
 
 /** One Session as the shell's session list carries it (`ctx.sessions.list`). */
 export interface DeckSession {
@@ -49,7 +50,7 @@ export interface DeckCard {
 
 /** The slice of the roster view the deck reads from a Session summary. */
 interface DeckRoster {
-  readonly members?: readonly { readonly kind: string; readonly state: string }[]
+  readonly members?: readonly { readonly id: string; readonly kind: string; readonly state: string }[]
   readonly inbox?: readonly unknown[]
   readonly openRequests?: readonly unknown[]
 }
@@ -67,11 +68,15 @@ const rosterOf = (session: DeckSession): DeckRoster | undefined => {
  * @param pinned - whether the user pinned it.
  * @returns the card.
  */
-export function cardOf(session: DeckSession, status: DeckStatus | undefined, pinned: boolean): DeckCard {
+export function cardOf(session: DeckSession, statuses: ReadonlyMap<string, DeckStatus> | undefined, pinned: boolean): DeckCard {
+  const status = statuses?.get(session.id)
   const roster = rosterOf(session)
   const members = roster?.members ?? []
-  const runningWorkers = members.filter(m => m.kind === 'worker' && m.state === 'running').length
-  const waitingWorkers = members.filter(m => m.kind === 'worker' && m.state === 'waiting').length
+  // The Agents page's own rule (src/client/row-state.ts), so the two can never disagree: a roster
+  // row is only `started` while it lives, and running/waiting comes from the live Session status.
+  const states = members.map(member => rowStateOf(member, statuses))
+  const runningWorkers = members.filter((m, i) => m.kind === 'worker' && states[i] === 'running').length
+  const waitingWorkers = members.filter((m, i) => m.kind === 'worker' && states[i] === 'waiting').length
   const waiting = status?.pendingInteraction !== undefined
   const lead: LeadState = waiting ? 'waiting' : status?.running === true || session.running === true ? 'running' : 'idle'
   const inbox = roster?.inbox?.length ?? 0
@@ -81,7 +86,8 @@ export function cardOf(session: DeckSession, status: DeckStatus | undefined, pin
     lead,
     runningWorkers,
     inbox,
-    approvals: waiting ? 1 : 0,
+    // The user's approvals can wait on the lead and on any live worker.
+    approvals: (waiting ? 1 : 0) + waitingWorkers,
     lastActivity: session.updatedAt ?? 0,
     pinned,
     attention: waiting || inbox > 0 || (roster?.openRequests?.length ?? 0) > 0 || waitingWorkers > 0 || runningWorkers > 0,
@@ -103,12 +109,12 @@ export function deckOf(
   const byId = new Map(sessions.filter(s => s.parentId === undefined).map(s => [s.id, s]))
   const pinnedCards = pinned.flatMap(id => {
     const session = byId.get(id)
-    return session === undefined ? [] : [cardOf(session, statuses?.get(id), true)]
+    return session === undefined ? [] : [cardOf(session, statuses, true)]
   })
   const shown = new Set(pinnedCards.map(card => card.id))
   const attention = sessions
     .filter(s => s.parentId === undefined && !shown.has(s.id))
-    .map(s => cardOf(s, statuses?.get(s.id), false))
+    .map(s => cardOf(s, statuses, false))
     .filter(card => card.attention)
     .sort((a, b) => b.lastActivity - a.lastActivity)
   return { pinned: pinnedCards, attention }

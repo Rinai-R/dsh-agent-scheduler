@@ -1,44 +1,83 @@
-/** The focus deck: card derivation, pin persistence, and the sidebar panel registration gate. */
+/** The focus deck: card derivation from real records, pin persistence, and the panel gate. */
 import { afterEach, describe, expect, it } from 'vitest'
-import { cardOf, deckOf, readPins, togglePin, writePins, type DeckSession } from '../src/client/deck-model.js'
+import { cardOf, deckOf, readPins, togglePin, writePins, type DeckSession, type DeckStatus } from '../src/client/deck-model.js'
+import { rowStateOf } from '../src/client/row-state.js'
+import { applyRoster, EMPTY_ROSTER, rosterView, type RosterView } from '../src/projection.js'
+import { AGENT_RECORD, MAIL_RECORD } from '../src/records.js'
 import { DECK_PANEL_ID, registerDeck } from '../src/client/deck.js'
 import { setLanguage } from '../src/i18n/index.js'
 import { Config } from '../src/index.js'
 
 afterEach(() => { setLanguage('zh') })
 
-const session = (id: string, over: Partial<DeckSession> = {}): DeckSession => ({ id, displayTitle: id, updatedAt: 1_000, ...over })
-const withRoster = (id: string, roster: unknown, over: Partial<DeckSession> = {}) => session(id, { projectionValues: { agentScheduler: roster }, ...over })
+// ---------------------------------------------------------------- fixtures from real records
+
+let seq = 0
+const record = (type: string, data: object) => ({ type, ignorable: true, data: { version: 1, ...data }, seq: seq++, time: 1_000 + seq })
+const workerRecord = (id: string, name = id) => record(AGENT_RECORD, { action: 'created', id, name, role: 'does things' })
+const mailRecord = (id = 'm-1', from = 'w1') => record(MAIL_RECORD, { action: 'queued', id, from, kind: 'report', text: 'done', request: 'r-1' })
+/** Fold real plugin records the way the host projection does; no hand-written roster state. */
+const fold = (...events: readonly object[]): RosterView => rosterView((events as never[]).reduce(applyRoster, EMPTY_ROSTER))
+const view = (...events: readonly object[]): RosterView => fold(...events)
+const session = (id: string, roster: RosterView | undefined, over: Partial<DeckSession> = {}): DeckSession =>
+  ({ id, displayTitle: id, updatedAt: 1_000, ...(roster === undefined ? {} : { projectionValues: { agentScheduler: roster } }), ...over })
+const status = (running: boolean, pendingInteraction?: unknown): DeckStatus => ({ running, ...(pendingInteraction === undefined ? {} : { pendingInteraction }) })
+const of = (...pairs: Array<[string, DeckStatus]>) => new Map<string, DeckStatus>(pairs)
 
 describe('deck cards', () => {
-  it('summarizes the lead, its running workers, the inbox and approvals', () => {
-    const roster = {
-      members: [{ kind: 'worker', state: 'running' }, { kind: 'worker', state: 'running' }, { kind: 'worker', state: 'idle' }, { kind: 'fork', state: 'done' }],
-      inbox: [{ id: 'm-1' }, { id: 'm-2' }],
-      openRequests: [],
-    }
-    const card = cardOf(withRoster('s-1', roster), { running: true }, true)
-    expect(card).toMatchObject({ id: 's-1', lead: 'running', runningWorkers: 2, inbox: 2, approvals: 0, pinned: true })
-    // A pending interaction marks the lead waiting (and as an approval), even while it runs.
-    const waiting = cardOf(withRoster('s-2', roster), { running: true, pendingInteraction: { kind: 'approval' } }, false)
-    expect(waiting).toMatchObject({ lead: 'waiting', approvals: 1 })
-    // Nothing on the roster, no status: idle.
-    expect(cardOf(session('s-3'), undefined, false)).toMatchObject({ lead: 'idle', runningWorkers: 0, inbox: 0, approvals: 0, attention: false })
+  it('counts a worker as running only through the live status, using the Agents page rule', () => {
+    const roster = view(workerRecord('w1'), workerRecord('w2', 'second'))
+    // Recorded lifecycle alone is `started`, never `running`: the deck must read the status map.
+    expect(cardOf(session('s-1', roster), undefined, false)).toMatchObject({ runningWorkers: 0, approvals: 0 })
+    const running = cardOf(session('s-1', roster), of(['w1', status(true)], ['w2', status(false)]), false)
+    expect(running).toMatchObject({ runningWorkers: 1, lead: 'idle' })
+    expect(running.attention).toBe(true)
+    // A worker waiting on approval/question: waiting, an approval, zero running.
+    const waiting = cardOf(session('s-1', roster), of(['w1', status(true, { kind: 'approval' })]), false)
+    expect(waiting).toMatchObject({ runningWorkers: 0, approvals: 1 })
+    expect(waiting.attention).toBe(true)
+    // Terminal workers are never counted, whatever the status says.
+    const archived = view(workerRecord('w1'), record(AGENT_RECORD, { action: 'archived', id: 'w1', name: 'w1' }))
+    expect(cardOf(session('s-2', archived), of(['w1', status(true)]), false)).toMatchObject({ runningWorkers: 0, approvals: 0 })
+  })
+
+  it('counts approvals on the lead and on live workers', () => {
+    const roster = view(workerRecord('w1'), workerRecord('w2', 'second'))
+    expect(cardOf(session('s-1', roster), of(['s-1', status(true, { kind: 'permission' })]), false).approvals).toBe(1)
+    expect(cardOf(session('s-1', roster), of(['s-1', status(true, { kind: 'permission' })], ['w1', status(true, { kind: 'approval' })]), false).approvals).toBe(2)
+    expect(cardOf(session('s-1', roster), of(['w1', status(true, { kind: 'approval' })], ['w2', status(true, { kind: 'question' })]), false)).toMatchObject({ approvals: 2, lead: 'idle' })
+  })
+
+  it('reports the same numbers the Agents page derives', () => {
+    const roster = view(workerRecord('w1'), workerRecord('w2', 'second'), mailRecord())
+    const statuses = of(['w1', status(true)], ['w2', status(true, { kind: 'approval' })])
+    const card = cardOf(session('s-1', roster), statuses, false)
+    // The Agents page's own derivation: rowStateOf per member, mail length, pending lead.
+    const states = roster.members.map(m => rowStateOf(m, statuses))
+    const pageRunning = roster.members.filter((m, i) => states[i] === 'running').length
+    const pageWaiting = roster.members.filter((m, i) => states[i] === 'waiting').length
+    expect(card.runningWorkers).toBe(pageRunning)
+    expect(card.approvals).toBe(pageWaiting) // no lead prompt in this fixture
+    expect(card.inbox).toBe(roster.inbox?.length)
+    expect(card.lead).toBe('idle')
   })
 
   it('lists pinned Sessions in pin order, then unpinned ones that need attention', () => {
+    const busy = view(workerRecord('w1'))
     const rows = [
-      withRoster('a', { members: [{ kind: 'worker', state: 'running' }], inbox: [] }, { updatedAt: 5_000 }),
-      withRoster('b', { members: [], inbox: [{ id: 'm' }] }, { updatedAt: 9_000 }),
-      session('c', { updatedAt: 7_000 }),
-      session('sub', { parentId: 'a', updatedAt: 99_000 }),
+      session('a', busy, { updatedAt: 5_000 }),
+      session('b', view(workerRecord('w2'), mailRecord()), { updatedAt: 9_000 }),
+      session('c', undefined, { updatedAt: 7_000 }),
+      session('sub', busy, { parentId: 'a', updatedAt: 99_000 }),
     ]
-    const deck = deckOf(rows, new Map([['b', { pendingInteraction: { kind: 'approval' } }]]), ['b', 'c', 'missing'])
+    const statuses = of(['w1', status(true)], ['b', status(false, { kind: 'approval' })])
+    const deck = deckOf(rows, statuses, ['b', 'c', 'missing'])
     expect(deck.pinned.map(c => c.id)).toEqual(['b', 'c'])
-    // `a` runs a worker; `b`/`c` are pinned so not repeated; a subagent child is never a card.
+    // `a` has a live running worker (the regression: its roster state alone is `started`).
     expect(deck.attention.map(c => c.id)).toEqual(['a'])
-    // An unpinned idle Session is not in the attention list.
-    expect(deckOf([session('quiet')], new Map(), []).attention).toEqual([])
+    expect(deck.attention[0]).toMatchObject({ runningWorkers: 1 })
+    // A pinned Session is not repeated; a subagent child is never a card; idle unpinned stays out.
+    expect(deckOf([session('quiet', undefined)], new Map(), []).attention).toEqual([])
   })
 
   it('keeps pins in the browser profile and toggles them in order', () => {
@@ -49,7 +88,6 @@ describe('deck cards', () => {
     writePins(storage, pinned)
     expect(readPins(storage)).toEqual(['a', 'b'])
     expect(togglePin(['a', 'b'], 'a')).toEqual(['b'])
-    // Corrupt storage is empty, never a crash.
     memory.set('dsh-agent-scheduler/deck/pinned', '{"not":"an array"}')
     expect(readPins(storage)).toEqual([])
   })
@@ -87,7 +125,6 @@ describe('registration and config', () => {
     expect(registered[0]!.spec).toMatchObject({ id: DECK_PANEL_ID, order: 5 })
     expect(typeof (registered[0]!.spec as { label: () => string }).label()).toBe('string')
     expect(registered[1]!.spec).toMatchObject({ key: DECK_PANEL_ID })
-    // The toggle withdraws both, and turning it back on registers them again.
     enabled = false
     ctx.refresh()
     expect(disposed).toEqual(['sidebar.panellist', 'main'])

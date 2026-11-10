@@ -16,6 +16,8 @@ import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
 import { registerDeck } from './deck.js'
+import { rowStateOf } from './row-state.js'
+import type { RowState } from './row-state.js'
 import { accessDefaultOf, hasMeta, rowMeta } from './row-meta.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
@@ -75,7 +77,6 @@ interface Roster {
 /** One Session's live status as the client root hook reports it. */
 
 /** What the roster draws for one member: lifecycle record, refined by live status. */
-type RowState = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'queued' | 'archived'
 
 /** Input card state machine: starts at the input record, updated by the fork's state records. */
 export const inputDefinition = {
@@ -355,20 +356,8 @@ export function statusLine(state: Pick<State, 'fork' | 'name' | 'detail'>): { le
 
 const stateLabel = (state: RowState): string => t(`state.${state}`)
 
-/**
- * Refine one member's lifecycle record with the live status the client hook reports.
- * @param member - a roster row.
- * @param statuses - the root Session-status map.
- * @returns what to draw.
- */
-export function rowStateOf(member: Member, statuses: Statuses | undefined): RowState {
-  if (member.state === 'archived' || member.state === 'failed' || member.state === 'queued' || member.state === 'done') {
-    return member.state as RowState
-  }
-  const status = statuses?.get(member.id)
-  if (status?.pendingInteraction !== undefined) return 'waiting'
-  return status?.running === true ? 'running' : 'idle'
-}
+// One rule for the Agents page and the focus deck (src/client/row-state.ts).
+export { rowStateOf, type RowState } from './row-state.js'
 
 /**
  * The command line that marks a member's latest report read.
