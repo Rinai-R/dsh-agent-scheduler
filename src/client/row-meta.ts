@@ -7,6 +7,19 @@
 import { t } from './i18n.js'
 import { modeLabel } from './access-picker.js'
 
+/** The permission projection of the Session a roster is drawn in (`{ currentValue }`). */
+export interface PermissionView {
+  readonly currentValue?: unknown
+}
+
+/**
+ * The lead's own access mode for one Session, from its own permission projection.
+ * @param view - that Session's `permissions` projection view, when it has one.
+ * @returns the preset name, or undefined when the Session is on a custom combination.
+ */
+export const accessDefaultOf = (view: PermissionView | undefined): string | undefined =>
+  typeof view?.currentValue === 'string' ? view.currentValue : undefined
+
 /** What a row's meta line needs to know. */
 export interface RowMetaInput {
   readonly member: { readonly kind: 'fork' | 'worker'; readonly state: string; readonly accessPreset?: string | undefined }

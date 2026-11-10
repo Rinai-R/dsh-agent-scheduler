@@ -1,6 +1,6 @@
 /** A quiet agent row: one meta line at most, the card owns the highlight, and the meta rules. */
 import { afterEach, describe, expect, it } from 'vitest'
-import { hasMeta, rowMeta } from '../src/client/row-meta.js'
+import { accessDefaultOf, hasMeta, rowMeta } from '../src/client/row-meta.js'
 import { setLanguage, LANGS } from '../src/i18n/index.js'
 import { ownFile } from './contract/probe.js'
 
@@ -39,6 +39,36 @@ describe('the meta line only says what differs from the default', () => {
   })
 })
 
+describe('each roster compares against its own main Session\'s mode', () => {
+  it('two main Sessions on different modes keep their default workers quiet, and each shows a deliberately different one', () => {
+    // Session A is on workspace-write; Session B is on read-only. Both host a worker that inherited
+    // its own lead's mode, plus one set to danger-full-access.
+    const aDefault = accessDefaultOf({ currentValue: 'workspace-write' })
+    const bDefault = accessDefaultOf({ currentValue: 'read-only' })
+    const inheritedA = worker({ accessPreset: 'workspace-write' })
+    const inheritedB = worker({ accessPreset: 'read-only' })
+    const changed = worker({ accessPreset: 'danger-full-access' })
+    expect(rowMeta({ member: inheritedA, accessDefault: aDefault })).toEqual({})
+    expect(rowMeta({ member: inheritedB, accessDefault: bDefault })).toEqual({})
+    expect(rowMeta({ member: changed, accessDefault: aDefault }).access).toBe('完全权限')
+    expect(rowMeta({ member: changed, accessDefault: bDefault }).access).toBe('完全权限')
+  })
+
+  it('changing one lead\'s mode moves only that Session\'s rows', () => {
+    const inheritedA = worker({ accessPreset: 'workspace-write' })
+    const inheritedB = worker({ accessPreset: 'read-only' })
+    // A switches to read-only: its inherited worker no longer matches, so it gains the line.
+    const aAfter = accessDefaultOf({ currentValue: 'read-only' })
+    expect(rowMeta({ member: inheritedA, accessDefault: aAfter }).access).toBe('工作区内修改')
+    // B did not change: still silent.
+    expect(rowMeta({ member: inheritedB, accessDefault: accessDefaultOf({ currentValue: 'read-only' }) })).toEqual({})
+    // A custom combination yields no default, so the worker's own mode is named.
+    expect(accessDefaultOf({ currentValue: 'custom' })).toBe('custom')
+    expect(rowMeta({ member: inheritedA, accessDefault: accessDefaultOf({ currentValue: 'custom' }) }).access).toBe('工作区内修改')
+    expect(accessDefaultOf(undefined)).toBeUndefined()
+  })
+})
+
 describe('the row card owns the highlight and the meta line', () => {
   const css = ownFile('src/client/index.tsx')
   const team = ownFile('src/client/team.tsx')
@@ -74,6 +104,22 @@ describe('the row card owns the highlight and the meta line', () => {
     expect(css).toMatch(/\.sch-roster-archive,\.sch-roster-rename\{[^}]*top:26px/u)
     expect(css).toMatch(/\.sch-roster-merge\{[^}]*top:26px/u)
     expect(ownFile('src/client/fork.tsx')).toMatch(/\.sch-roster-fork\{[^}]*top:26px/u)
+  })
+
+  it('takes the lead\'s mode from this Session\'s permission projection, not from the shared roster view', () => {
+    expect(css).toContain("props.useProjection?.(PERMISSIONS_KEY)")
+    expect(css).toContain("const PERMISSIONS_KEY = 'permissions'")
+    expect(css).toContain('accessDefaultOf(permissions)')
+    expect(css).not.toContain('roster?.accessDefault')
+    expect(css).not.toMatch(/readonly accessDefault\?: string/u)
+    // The host fold is one shared view and must not carry a per-Session fact.
+    expect(ownFile('src/index.ts')).not.toContain('accessDefault')
+  })
+
+  it('the permission projection key is the one DSH registers', async () => {
+    const { installed, probesAvailable } = await import('./contract/probe.js')
+    if (!probesAvailable()) return
+    expect(installed('dsh-permission-presets')).toMatch(/key:\s*"permissions"/u)
   })
 
   it('keeps the team list expandable from the meta line and the access in the chat', () => {

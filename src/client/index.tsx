@@ -15,7 +15,7 @@ import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
-import { hasMeta, rowMeta } from './row-meta.js'
+import { accessDefaultOf, hasMeta, rowMeta } from './row-meta.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
 import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
@@ -36,6 +36,8 @@ const REQUEST_KIND = 'scheduler-request'
 
 /** Projection key registered by the host half. */
 const ROSTER = 'agentScheduler'
+/** DSH's permission projection: `{ currentValue }` for the Session it is read in. */
+const PERMISSIONS_KEY = 'permissions'
 /** Tab-system identity of the Agents page; also the keyed body's key. */
 const AGENTS_ID = 'dsh-agent-scheduler/agents'
 /** Page kind, opened by name because the type has no resource patterns. */
@@ -68,8 +70,6 @@ interface Roster {
   readonly teams?: Readonly<Record<string, TeamView>>
   /** Access modes the host offers; absent when it has no permission presets. */
   readonly accessModes?: readonly { readonly name: string; readonly sandbox: string }[]
-  /** The lead's own access mode: a worker row on it shows no access line. */
-  readonly accessDefault?: string
 }
 /** One Session's live status as the client root hook reports it. */
 
@@ -1177,6 +1177,12 @@ export function createAgentsPage(ctx: {
   }) {
     useLocale()
     const roster = rosterOf(props)
+    // The lead's own access mode comes from THIS Session's permission projection, the same state
+    // the footer picker reads: the roster view is one shared fold and cannot know which main
+    // Session it is drawn for, and sampling the process's first conversation got another
+    // Session's mode. Reading the projection keeps the rows live when the lead switches.
+    const permissions = props.useProjection?.(PERMISSIONS_KEY) as { readonly currentValue?: unknown } | undefined
+    const accessDefault = accessDefaultOf(permissions)
     const statuses = props.useSessionStatus?.((value: Statuses) => value)
     const tab = props.useTabInfo?.()
     // What this browser read on screen (see active-seen.ts) counts here too.
@@ -1374,7 +1380,7 @@ export function createAgentsPage(ctx: {
       const nameOf = (id: string) => rows.find(m => m.id === id)?.name ?? id
       // Team count and access mode live on one quiet meta line, each only when it differs from
       // the default: a worker with neither shows the description alone, like any other row.
-      const meta = rowMeta({ member, teamMembers: team?.members.length, accessDefault: roster?.accessDefault })
+      const meta = rowMeta({ member, teamMembers: team?.members.length, accessDefault })
       const usual = subline(member, pendingRequests)
       const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : usual
       // The subtitle is cut to one line: its tooltip has it whole, and during a merge also what it replaced

@@ -39,12 +39,6 @@ export const Config: z<Config> = z.object({
 export function apply(ctx: Context, config: Config): void {
   installForkFrom(ctx)
   const access = accessPort(ctx)
-  // The lead's own access mode, so a worker row on it draws no access line.
-  const leadAccess = (): string | undefined => {
-    const agents = typeof (ctx as { get?: (name: string) => unknown }).get === 'function' ? (ctx as { get: (name: string) => { list?: () => Array<{ session: { header: { parentSession?: string } } }> } | undefined }).get('agents') : undefined
-    const main = agents?.list?.().find(agent => agent.session.header.parentSession === undefined)
-    return main === undefined || !access.available ? undefined : access.current(main.session)
-  }
   ctx.effect(() => setRecoveryPolicy(() => config.recovery.get() as RecoveryPolicy), 'agent-scheduler: recovery policy')
   registerProjection(ctx, {
     key: SCHEDULER_PROJECTION,
@@ -60,7 +54,10 @@ export function apply(ctx: Context, config: Config): void {
     view: rosterViewSchema,
     init: initRoster,
     apply: applyRoster,
-    toView: state => ({ ...rosterView(state), accessModes: access.modes().map((m: { name: string; sandbox: string }) => ({ name: m.name, sandbox: m.sandbox })), ...(leadAccess() === undefined ? {} : { accessDefault: leadAccess() }) }),
+    // Only facts of this roster's own state: the lead's access mode is NOT here, because one
+    // shared fold cannot know which main Session it is being viewed from (the browser compares
+    // against the permission projection of the Session it renders).
+    toView: state => ({ ...rosterView(state), accessModes: access.modes().map((m: { name: string; sandbox: string }) => ({ name: m.name, sandbox: m.sandbox })) }),
   })
 }
 
