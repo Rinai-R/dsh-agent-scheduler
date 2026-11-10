@@ -1,0 +1,58 @@
+{
+ "workspace": {
+  "mode": "workspace",
+  "pressed": "false",
+  "label": "切换到指挥台",
+  "color": "rgb(137, 141, 137)",
+  "background": "rgba(0, 0, 0, 0)",
+  "rowBackground": "rgba(0, 0, 0, 0)",
+  "svgColor": "rgb(137, 141, 137)",
+  "paint": [],
+  "glyph": "<svg width=\"16\" height=\"16\" data-icon=\"dsw-icon-apps-add-outline-regular\" aria-hidden=\"tru",
+  "box": {
+   "x": 207,
+   "y": 22,
+   "w": 28,
+   "h": 28
+  },
+  "effectiveBackground": "rgb(16, 17, 16)",
+  "contrast": 5.62
+ },
+ "deck": {
+  "mode": "deck",
+  "pressed": "true",
+  "label": "切换到工作区",
+  "color": "rgb(245, 245, 240)",
+  "background": "rgba(255, 245, 0, 0.18)",
+  "rowBackground": "rgba(0, 0, 0, 0)",
+  "svgColor": "rgb(245, 245, 240)",
+  "paint": [],
+  "glyph": "<svg width=\"16\" height=\"16\" data-icon=\"dsw-icon-workspace-tree-outline-regular\" aria-hidde",
+  "box": {
+   "x": 207,
+   "y": 22,
+   "w": 28,
+   "h": 28
+  },
+  "effectiveBackground": "rgb(59, 58, 13)",
+  "contrast": 10.68
+ },
+ "empty": {
+  "text": "指挥台还是空的 导入会话 新会话",
+  "actions": [
+   "导入会话",
+   "新会话"
+  ],
+  "headerButtons": [
+   "搜索指挥台",
+   "导入会话",
+   "新会话"
+  ],
+  "switches": 1
+ },
+ "sidebarFill": "rgb(16, 17, 16)",
+ "svgPaint": [
+  "use fill=rgb(0, 0, 0) stroke=none"
+ ],
+ "dark": true
+}

@@ -159,9 +159,17 @@ Agents button shows ✉N. The inbox is a plugin record, so a restart keeps it; t
 
 ### The Deck
 
-「Deck」 (指挥台) in the left sidebar shows your pinned sessions as cards, then under **All sessions** every other session that needs you: its lead is waiting for you, a worker is running or waiting on an approval or question, its inbox has messages, or a request is still open. A card shows the lead's state, running workers, inbox messages and approvals (on the lead and on its workers), counted the same way as the Agents page. **Open** opens the session; **Agents** opens it with its Agents page; ☆/★ pins or unpins it. Worker and fork sessions never become cards of their own.
+The small switch beside the DeepSeek Harness wordmark at the top of the left sidebar swaps the workspace tree for the Deck (指挥台), and back. The conversation stays in the centre and worker chats stay in the right pane. The choice is remembered. On the collapsed rail the brand row is hidden, so switching needs the sidebar expanded; the rail keeps whichever view you chose last, with the shell's own 新会话 button and a search icon that expands the sidebar.
 
-Pins are kept in this browser only (`localStorage`, key `dsh-agent-scheduler/deck/pinned`, a list of session ids and nothing else): another browser, another device or cleared site data starts with no pins, and a pinned session that no longer exists is dropped quietly, leaving the 「pin a session」 hint. Turn the Deck off on the plugin's settings page (**Deck**, or `deck.enabled: false`); the sidebar entry and the panel go away without a reload.
+The Deck lists only the sessions you put there:
+
+- **Import**: the import icon in the Deck header (or 「导入会话」 on an empty Deck) opens a picker of the main sessions not yet in the Deck, most recent first, with search and multi-select. Archived sessions and worker, fork or sub-agent sessions are never offered. On DSH 0.2.2 and later you can also choose 「加入指挥台」 from a session's ⋯ menu in the workspace tree.
+- **New session**: the 新会话 icon in the Deck header runs the shell's own new-session action (same workspace choice as the sidebar's 新会话 button), and the new session joins the Deck.
+- **Remove**: hover a row and click ×, or choose 「从指挥台移除」 in the workspace tree's menu. This only takes the session out of the Deck; it is never archived or deleted.
+
+Rows are ordered by most recent activity. A pin glyph marks sessions pinned in the workspace tree, but pins do not decide what is in the Deck. Each row has one state dot (running, waiting for you, idle), 「N在跑」 when workers are running and 「N待批」 when approvals wait on the lead or its workers, counted the same way as the Agents page. The session open in the centre is highlighted like the tree's selected row. Hover a row with workers to show its chevron; expanded, each worker shows its state, and clicking one opens its chat in the right pane. Search filters the rows by title.
+
+The Deck's list lives in this browser only (`localStorage`, key `dsh-agent-scheduler/deck/members`, a list of session ids and nothing else): another browser, another device or cleared site data starts with an empty Deck. Turn the Deck off on the plugin's settings page (**Deck**, or `deck.enabled: false`) and the switch, the Deck and the menu item go away without a reload; the sidebar is then exactly stock.
 
 ### Models
 

@@ -25,6 +25,10 @@ export interface Primitives {
   IconChevronRightOutlineRegular?: (props: { size?: number }) => unknown
   IconPinFillRegular?: (props: { size?: number }) => unknown
   IconCloseOutlineRegular?: (props: { size?: number }) => unknown
+  IconAppsAddOutlineRegular?: (props: { size?: number }) => unknown
+  IconNewChatOutlineRegular?: (props: { size?: number }) => unknown
+  IconPlusOutlineRegular?: (props: { size?: number }) => unknown
+  IconCloseFillRegular?: (props: { size?: number }) => unknown
 }
 
 /** Shared module id of the shell's UI primitives in the client module loader. */
@@ -83,6 +87,71 @@ export function brandOccupied(ctx: any, ours: unknown): boolean {
 export function watchSlot(ctx: any, key: string, listener: () => void): () => void {
   try {
     const off = typeof ctx?.slots?.subscribe === 'function' ? ctx.slots.subscribe(key, listener) : undefined
+    return typeof off === 'function' ? off as () => void : () => undefined
+  } catch {
+    return () => undefined
+  }
+}
+
+/**
+ * The stock workspace browser's own wording, so the deck's controls read exactly like it
+ * (`workspace` locale namespace of dsh-client-ui-workspace).
+ * @param ctx - the browser plugin context.
+ * @param key - a key of that namespace, e.g. `actions.newSession`.
+ * @param fallback - our own string when the namespace is unavailable.
+ * @returns the stock text.
+ */
+export function stockText(ctx: any, key: 'actions.newSession' | 'search.placeholder' | 'session.new' | 'session.untitled' | 'search', fallback: string): string {
+  try {
+    const t = ctx?.locale?.bind?.('workspace') as ((key: string) => string) | undefined
+    const text = t?.(key)
+    return typeof text === 'string' && text !== '' && text !== key ? text : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Start a new Session exactly like the stock 新会话 button: the shell resolves the workspace
+ * (the current Session's, else the most recent) and opens it in the centre.
+ * @param ctx - the browser plugin context.
+ * @returns whether the shell accepted the request.
+ */
+export function startStockSession(ctx: any): boolean {
+  const ui = (() => { try { return ctx.get?.('uiWorkspace') } catch { return undefined } })()
+  if (!features.record('workspace.startSession', typeof ui?.startSession === 'function', 'uiWorkspace.startSession')) return false
+  ui.startSession()
+  return true
+}
+
+/**
+ * The Session open in the centre, as the stock tree computes it: the list row the main view
+ * retains.
+ * @param snapshot - the session list snapshot.
+ * @returns its id, if any.
+ */
+export function mainViewSessionId(snapshot: { byId?: Record<string, { retainedBy?: Record<string, number | undefined> } | undefined> } | null | undefined): string | undefined {
+  for (const [id, row] of Object.entries(snapshot?.byId ?? {})) if ((row?.retainedBy?.mainView ?? 0) > 0) return id
+  return undefined
+}
+
+/** A context-menu item on the stock session row menu. */
+export interface SessionMenuItem { readonly id: string; readonly label: string; readonly run: () => void }
+
+/**
+ * Add an item to the stock session row menu (the ⋯ menu of 工作区 rows).
+ * @param ctx - the browser plugin context.
+ * @param id - the item id (unique among session menu providers).
+ * @param order - its position (the stock pin item is 100, rename 200, fork 300).
+ * @param observe - stores whose changes re-resolve the item.
+ * @param resolve - the items for one Session.
+ * @returns a disposer.
+ */
+export function registerSessionMenu(ctx: any, id: string, order: number, observe: readonly { subscribe(listener: () => void): () => void; getSnapshot(): unknown }[], resolve: (sessionId: string) => SessionMenuItem[]): () => void {
+  const menus = (() => { try { return ctx.get?.('contextMenus') } catch { return undefined } })()
+  if (!features.record('contextMenus', typeof menus?.register === 'function', 'contextMenus.register')) return () => undefined
+  try {
+    const off = menus.register({ id, target: 'session', order, observe: () => [...observe], resolve: (target: { sessionId: string }) => resolve(target.sessionId) })
     return typeof off === 'function' ? off as () => void : () => undefined
   } catch {
     return () => undefined

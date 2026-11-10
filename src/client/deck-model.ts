@@ -15,6 +15,8 @@ export interface DeckSession {
   readonly updatedAt?: number | undefined
   readonly parentId?: string | undefined
   readonly origin?: string | undefined
+  /** Who holds the row: the stock tree's open Session is the one with `mainView > 0`. */
+  readonly retainedBy?: Readonly<Record<string, number | undefined>> | undefined
   /** Every client-visible projection, at the summary level: our roster is `agentScheduler`. */
   readonly projectionValues?: Readonly<Record<string, unknown>> | undefined
 }
@@ -58,7 +60,9 @@ export interface DeckCard {
   readonly approvals: number
   /** Epoch ms of the Session's last durable activity, 0 when unknown. */
   readonly lastActivity: number
-  /** Whether this card is pinned (a pinned card is never repeated in 「全部会话」). */
+  /** A draft the user has not sent anything to yet (the stock tree labels it 「新会话」). */
+  readonly blank: boolean
+  /** Whether the shell pins this Session (the pin glyph only). */
   readonly pinned: boolean
   /** Anything on this Session that waits for the user. */
   readonly attention: boolean
@@ -101,6 +105,7 @@ export function cardOf(session: DeckSession, statuses: ReadonlyMap<string, DeckS
   return {
     id: session.id,
     title: session.displayTitle ?? session.title ?? session.id,
+    blank: session.blank === true,
     lead,
     state: approvals > 0 ? 'waiting' : lead === 'running' || runningWorkers > 0 ? 'running' : 'idle',
     workers,
@@ -115,62 +120,90 @@ export function cardOf(session: DeckSession, statuses: ReadonlyMap<string, DeckS
   }
 }
 
-/**
- * The deck's two lists.
- * @param sessions - every listed Session, in the shell's order.
- * @param statuses - live status by Session id.
- * @param pinned - the pinned Session ids, in the user's order.
- * @returns the pinned cards (most recent first), then unpinned Sessions needing attention.
- */
-export function deckOf(
-  sessions: readonly DeckSession[],
-  statuses: ReadonlyMap<string, DeckStatus> | undefined,
-  pinned: readonly string[],
-): { pinned: DeckCard[]; attention: DeckCard[] } {
-  const byId = new Map(sessions.filter(s => s.parentId === undefined).map(s => [s.id, s]))
-  const pinnedCards = pinned.flatMap(id => {
-    const session = byId.get(id)
-    return session === undefined ? [] : [cardOf(session, statuses, true)]
-  }).sort((a, b) => b.lastActivity - a.lastActivity)
-  const shown = new Set(pinnedCards.map(card => card.id))
-  const attention = sessions
-    .filter(s => s.parentId === undefined && !shown.has(s.id))
-    .map(s => cardOf(s, statuses, false))
-    .filter(card => card.attention)
-    .sort((a, b) => b.lastActivity - a.lastActivity)
-  return { pinned: pinnedCards, attention }
+/** What the deck needs from the shell's workspace store. */
+export interface DeckShell {
+  /** Shell pins: only decide the pin glyph, never membership. */
+  readonly pinned?: readonly string[] | undefined
+  /** Archived Sessions, hidden like the stock tree hides them. */
+  readonly archived?: readonly string[] | undefined
 }
 
-// ------------------------------------------------------------------ pins
+/** A main Session the stock tree would show: top-level and not archived. */
+const listable = (session: DeckSession, archived: ReadonlySet<string>): boolean => session.parentId === undefined && !archived.has(session.id)
 
-const KEY = 'dsh-agent-scheduler/deck/pinned'
+/**
+ * The deck's rows: the Sessions the user imported, most recently updated first.
+ * @param sessions - every listed Session.
+ * @param statuses - live status by Session id.
+ * @param members - the deck's membership (imported ids).
+ * @param shell - shell pins (glyph only) and the archived set.
+ * @returns one card per imported, listable Session.
+ */
+export function deckRows(
+  sessions: readonly DeckSession[],
+  statuses: ReadonlyMap<string, DeckStatus> | undefined,
+  members: readonly string[],
+  shell: DeckShell = {},
+): DeckCard[] {
+  const archived = new Set(shell.archived ?? [])
+  const pinned = new Set(shell.pinned ?? [])
+  const wanted = new Set(members)
+  return sessions
+    .filter(s => wanted.has(s.id) && listable(s, archived))
+    .map(s => cardOf(s, statuses, pinned.has(s.id)))
+    // A fresh draft (just created from the deck) first, then by most recent activity.
+    .sort((a, b) => Number(b.blank) - Number(a.blank) || b.lastActivity - a.lastActivity)
+}
 
-/** Pins live in this browser profile: a view preference, not Session data (see the PR notes). */
-export function readPins(storage: Pick<Storage, 'getItem'> | undefined): string[] {
+/**
+ * What the import picker offers: listable main Sessions not yet in the deck, never a draft,
+ * most recently updated first.
+ * @param sessions - every listed Session.
+ * @param members - the deck's membership.
+ * @param shell - the archived set.
+ * @returns the candidates.
+ */
+export function importable(sessions: readonly DeckSession[], members: readonly string[], shell: DeckShell = {}): DeckSession[] {
+  const archived = new Set(shell.archived ?? [])
+  const taken = new Set(members)
+  return sessions
+    .filter(s => !taken.has(s.id) && s.blank !== true && listable(s, archived))
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+}
+
+// ------------------------------------------------------------------ membership
+
+/** The deck's membership (imported Session ids), in this browser profile. */
+export const MEMBERS_KEY = 'dsh-agent-scheduler/deck/members'
+const KEY = MEMBERS_KEY
+
+/**
+ * Read the membership; a missing or corrupt value is an empty deck, never a crash.
+ * @param storage - this browser profile's storage.
+ * @returns imported Session ids, in import order.
+ */
+export function readMembers(storage: Pick<Storage, 'getItem'> | undefined): string[] {
   if (storage === undefined) return []
   try {
     const raw = storage.getItem(KEY)
     if (raw === null) return []
     const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []
+    return Array.isArray(parsed) ? [...new Set(parsed.filter((id): id is string => typeof id === 'string'))] : []
   } catch {
     return []
   }
 }
 
 /**
- * Persist one pin choice.
- * @param storage - where pins live.
- * @param pinned - the new list.
+ * Persist the membership.
+ * @param storage - this browser profile's storage.
+ * @param members - the new list.
  */
-export function writePins(storage: Pick<Storage, 'setItem'> | undefined, pinned: readonly string[]): void {
-  try { storage?.setItem(KEY, JSON.stringify(pinned)) } catch { /* a full or private storage keeps the toggle for this page only */ }
+export function writeMembers(storage: Pick<Storage, 'setItem'> | undefined, members: readonly string[]): void {
+  try { storage?.setItem(KEY, JSON.stringify(members)) } catch { /* a full or private storage keeps the change for this page only */ }
 }
 
-/**
- * Toggle one id at the end (pin) or out (unpin).
- * @param pinned - current order.
- * @param id - the Session.
- * @returns the next order.
- */
-export const togglePin = (pinned: readonly string[], id: string): string[] => pinned.includes(id) ? pinned.filter(x => x !== id) : [...pinned, id]
+/** Add ids at the end, keeping order and dropping duplicates. */
+export const addMembers = (members: readonly string[], ids: readonly string[]): string[] => [...new Set([...members, ...ids])]
+/** Remove one id from the deck (never archives or deletes the Session). */
+export const removeMember = (members: readonly string[], id: string): string[] => members.filter(x => x !== id)

@@ -132,6 +132,22 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
     for (const name of ['BrandWordmark:', 'IconSearchOutlineRegular:', 'IconChevronRightOutlineRegular:', 'IconPinFillRegular:']) expect(core, name).toContain(name)
   })
 
+  it('C16: the deck reuses the stock tree: new-session action, open-Session rule, wording, session menu, icons', () => {
+    const workspace = fetched('dsh-client-ui-workspace')
+    // 新会话 is uiWorkspace.startSession; with no workspace it resolves current, else most recent.
+    expect(workspace).toContain('uiWorkspace.startSession(workspaceId, options)')
+    // The open Session is the row the main view retains (the stock tree's selected row).
+    expect(workspace).toContain('(session.retainedBy.mainView ?? 0) > 0')
+    // The stock wording the deck borrows lives in the `workspace` locale namespace.
+    expect(workspace).toContain('ctx.locale.bind("workspace")')
+    for (const key of ['"actions.newSession":', '"search.placeholder":', '"session.untitled":']) expect(workspace, key).toContain(key)
+    // Session row menu: next registers items through ctx.contextMenus (target "session"); pinned
+    // still renders a slot list, where the deck's menu item is skipped (feature-probed).
+    expect(workspace).toMatch(/ctx\.contextMenus\.register\(\{\s*id: `session\.\$\{id\}`,\s*target: "session"|renderSlot\("sidebar\.workspaces\.session\.menu\.item"/u)
+    const core = fetched('dsh-web-frontend')
+    for (const name of ['IconAppsAddOutlineRegular:', 'IconWorkspaceTreeOutlineRegular:', 'IconNewChatOutlineRegular:', 'IconPlusOutlineRegular:', 'IconCloseOutlineRegular:']) expect(core, name).toContain(name)
+  })
+
   it('C13: the config-forms surface still serves a namespace form to a bundle page', () => {
     const code = fetched('dsh-client-ui-settings')
     expect(code).toContain('configForms')
