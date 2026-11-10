@@ -98,6 +98,22 @@ export function onAgents(ctx: Context, hooks: AgentHooks): void {
 }
 
 /**
+ * Subscribe to a subagent activation starting: the child Agent exists, and its first step has not
+ * been assembled yet, so a durable Session event appended here is read by that first step.
+ * @param ctx - the rule's context.
+ * @param listener - called with the child Session id and its provider.
+ * @returns whether this DSH has the lifecycle event.
+ */
+export function onSubagentStart(ctx: Context, listener: (childId: string, provider: string) => void): boolean {
+  const events = ctx as unknown as { on?: (name: string, callback: (info: { id?: unknown; provider?: unknown }) => void) => void }
+  if (typeof events.on !== 'function') return false
+  events.on('subagent/start', info => {
+    if (typeof info?.id === 'string' && typeof info.provider === 'string') listener(info.id, info.provider)
+  })
+  return true
+}
+
+/**
  * @param ctx - the rule's context.
  * @param tool - a definition from {@link defineTool}.
  */

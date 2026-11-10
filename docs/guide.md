@@ -307,9 +307,12 @@ ignored: forks always use the lead's model.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
   lead request misses the prompt cache once.
 - Forks only route. A tool guard refuses a fork every tool except reading (`read`, `glob`, `grep`,
-  web and session search) and the `agent_*`, `role_set` and `report` tools, so a fork cannot run
-  commands, edit files, commit, push or start subagents; the refusal tells it to hand the work to a
-  worker or say in its conclusion that it could not.
+  web and session search), a **read-only shell** (`bash`/`pwsh`) and the `agent_*`, `role_set` and
+  `report` tools. The shell is safe because a fork's own Session is pinned to the `read-only`
+  sandbox when it is created — whatever mode the lead is on, and even after the lead widens later —
+  so `git log`, `git status`, `ls`, `cat` and `rg` work while edits, commits, pushes, installs and
+  other writes are denied by the sandbox. It cannot start subagents; refused tools tell it to hand
+  the work to a worker or say in its conclusion that it could not.
 - A fork inherits only the lead's completed turns at fork time, not the round in progress.
 - The lead does not see your raw words; it sees them quoted in each conclusion.
 - A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an

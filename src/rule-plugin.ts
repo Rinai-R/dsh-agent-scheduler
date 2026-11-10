@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
-  accessPort, claimOnce, eventsOf, historyPort, installWorkerTeams, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
+  accessPort, claimOnce, eventsOf, historyPort, installWorkerTeams, onSubagentStart, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
   registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
 } from './dsh/host/index.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
@@ -369,6 +369,8 @@ export function apply(ctx: Context, config: Config): void {
     created: (agent, resumed) => {
       restoreMemberModel(scheduler, agent)
       scheduler.adoptMemberAccess(agent)
+      // A routing fork gets a read-only shell: pin its own Session before its first step.
+      scheduler.adoptForkSandbox(agent)
       // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
       // After creation resolves: the runtime only delivers to children of a published parent.
       if (!resumed || !isMainSession(agent)) return
@@ -379,6 +381,9 @@ export function apply(ctx: Context, config: Config): void {
     },
     disposed: (agent) => { if (isMainSession(agent)) scheduler.forget(agent.id); else if (scheduler.queued().length > 0) void scheduler.drain() },
   })
+  // The child Agent exists at subagent/start, before its first step: that is where a fork's
+  // read-only sandbox is pinned even when the agent/created hook is not delivered (tests, other hosts).
+  onSubagentStart(ctx, childId => { scheduler.pinForkSession(childId) })
   for (const tool of schedulerTools(scheduler, ctx.agents as never, { validateModel: modelValidator(ctx) })) registerTool(ctx, tool)
   // Forks route only: every working tool is refused at dispatch (src/fork-guard.ts).
   installGuard(ctx, forkGuard(agent => scheduler.forkNameOf(agent)))

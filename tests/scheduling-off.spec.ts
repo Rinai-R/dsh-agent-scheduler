@@ -101,7 +101,8 @@ describe('scheduling off', () => {
     scheduler.setMode(lead, false)
     const fork = { id: forksOf(lead)[0]!, session: { header: { parentSession: lead.id } } } as never
     const guard = forkGuard(agent => scheduler.forkNameOf(agent))
-    expect(guard({ name: 'bash', agent: fork })).toContain('fork-1 is a fork')
+    expect(guard({ name: 'edit', agent: fork })).toContain('fork-1 is a fork')
+    expect(guard({ name: 'bash', agent: fork })).toBeUndefined()
     expect(guard({ name: 'bash', agent: lead })).toBeUndefined()
     // Its next wake still carries the fork notice (shared with the lead's on-mode section).
     lead.followup(user('plain words for the lead'))

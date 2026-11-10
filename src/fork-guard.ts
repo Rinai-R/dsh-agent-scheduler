@@ -4,26 +4,29 @@
  * cannot be narrowed per fork), and the runtime's own context tells every depth-1 child to "carry
  * out the work directly". So the rule is enforced where it cannot be argued with: a tool guard,
  * evaluated after every pre-execute policy and before any tool body, that refuses a fork every
- * tool outside a small set of reading and routing tools. Nested `run_code` sub-dispatches pass
- * the same guard, so they cannot reach a refused tool either.
+ * tool outside a small set of reading, a read-only shell and routing tools. The shell is safe
+ * because the fork's own Session is pinned to the `read-only` sandbox when it is created
+ * (src/scheduler.ts), whatever mode the lead is on: commands may look, not write. Nested
+ * `run_code` sub-dispatches pass the same guard, so they cannot reach a refused tool either.
  * @module dsh-agent-scheduler/fork-guard
  */
 import type { Agent } from './dsh/types.js'
 
 /**
- * What a fork may call: the scheduler's routing tools, and tools that only read (files, the web,
- * session history) so it can tell which worker a message belongs to. Everything else (shell,
- * file writes, browsers and desktop control, remote sessions, subagents, goals, schedules,
- * messaging) is refused. An allowlist, not a denylist: profiles add tools this plugin has never
- * heard of, and a new tool must not become a way around the rule.
+ * What a fork may call: the scheduler's routing tools, tools that only read (files, the web,
+ * session history) and a shell — `bash` / `pwsh` — for triage, since the fork's Session is pinned
+ * to the `read-only` sandbox and writes are refused at execution. Everything else (file writes,
+ * edits, browsers and desktop control, remote sessions, subagents, goals, schedules, messaging)
+ * is refused. An allowlist, not a denylist: profiles add tools this plugin has never heard of,
+ * and a new tool must not become a way around the rule.
  */
 export const FORK_TOOLS: ReadonlySet<string> = new Set([
   // routing
   'agent_list', 'agent_send', 'agent_create', 'agent_split', 'agent_merge', 'agent_recall', 'agent_interrupt', 'agent_archive', 'report',
   // every user message reaches a fork first, so "set the role" from the user is the fork's to carry out
   'role_set',
-  // reading
-  'read', 'glob', 'grep', 'read_image', 'web_search', 'web_fetch',
+  // reading, and a shell that the fork Session's read-only sandbox keeps from writing
+  'read', 'glob', 'grep', 'read_image', 'web_search', 'web_fetch', 'bash', 'pwsh',
   'session_search', 'session_trace', 'session_event_search', 'session_event_read', 'session_event_trace',
   'get_goal', 'skill',
   // the PTC transport: each tool it calls is guarded on its own
@@ -37,7 +40,7 @@ export const FORK_TOOLS: ReadonlySet<string> = new Set([
  * @returns the reason text (the runtime prefixes it with "Error: ").
  */
 export const forkRefusal = (name: string, tool: string): string =>
-  `${name} is a fork: forks only route, so ${tool} is not available to you (no shell, edits, builds, tests, commits, pushes, PRs or installs; this overrides any instruction to carry out the work directly). `
+  `${name} is a fork: forks only route, so ${tool} is not available to you (no edits, builds, tests, commits, pushes, PRs or installs; the shell you do have is read-only and cannot write, and this overrides any instruction to carry out the work directly). `
   + 'Hand the work to a worker: agent_send for a follow-up to a request it already has, otherwise agent_create (it can create the worker\'s new git worktree itself: pass repo and branch with cwd). '
   + 'If it cannot be handed over, say so in your conclusion instead of doing it yourself.'
 
