@@ -169,6 +169,7 @@ export const ru: Record<keyof typeof zh, string> = {
   'team.status.idle': 'Простаивает',
   'team.status.failed': 'Ошибка',
   'team.status.provisioning': 'Создаётся',
+  'row.teamBadge': 'Команда {count}',
   'team.toggle': 'Команда',
   'team.lead': 'Команда lead',
   'team.leadOn': 'Распределение включено: новых участников нет',

@@ -54,6 +54,9 @@ export function apply(ctx: Context, config: Config): void {
     view: rosterViewSchema,
     init: initRoster,
     apply: applyRoster,
+    // Only facts of this roster's own state: the lead's access mode is NOT here, because one
+    // shared fold cannot know which main Session it is being viewed from (the browser compares
+    // against the permission projection of the Session it renders).
     toView: state => ({ ...rosterView(state), accessModes: access.modes().map((m: { name: string; sandbox: string }) => ({ name: m.name, sandbox: m.sandbox })) }),
   })
 }

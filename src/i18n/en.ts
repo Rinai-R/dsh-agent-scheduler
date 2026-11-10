@@ -173,6 +173,7 @@ export const en: Record<keyof typeof zh, string> = {
   'team.status.idle': 'Idle',
   'team.status.failed': 'Failed',
   'team.status.provisioning': 'Creating',
+  'row.teamBadge': 'Team {count}',
   'team.toggle': 'Team',
   'team.lead': 'Lead\'s team',
   'team.leadOn': 'Scheduling is on: no new members',
