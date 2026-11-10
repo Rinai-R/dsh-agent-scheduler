@@ -157,6 +157,12 @@ to open its sender's chat. A member with something waiting shows ✉ on its row,
 Agents button shows ✉N. The inbox is a plugin record, so a restart keeps it; the lead's
 `agent_list` lists a summary of each (sender, request, time, the first 120 characters).
 
+### The Deck
+
+「Deck」 (指挥台) in the left sidebar shows your pinned sessions as cards, then under **All sessions** every other session that needs you: its lead is waiting for you, a worker is running or waiting on an approval or question, its inbox has messages, or a request is still open. A card shows the lead's state, running workers, inbox messages and approvals (on the lead and on its workers), counted the same way as the Agents page. **Open** opens the session; **Agents** opens it with its Agents page; ☆/★ pins or unpins it. Worker and fork sessions never become cards of their own.
+
+Pins are kept in this browser only (`localStorage`, key `dsh-agent-scheduler/deck/pinned`, a list of session ids and nothing else): another browser, another device or cleared site data starts with no pins, and a pinned session that no longer exists is dropped quietly, leaving the 「pin a session」 hint. Turn the Deck off on the plugin's settings page (**Deck**, or `deck.enabled: false`); the sidebar entry and the panel go away without a reload.
+
 ### Models
 
 **Forks always use the lead's model.** A fork replays the lead's history, so sharing the model also

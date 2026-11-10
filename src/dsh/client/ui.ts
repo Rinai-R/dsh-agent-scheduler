@@ -6,7 +6,7 @@
  * warning, on a DSH that does not offer it.
  * @module dsh-agent-scheduler/dsh/client/ui
  */
-import { features, hasFunction } from '../compat.js'
+import { features, hasFunction, warnOnce } from '../compat.js'
 
 /** The UI seats the plugin fills. */
 export const SLOT = {
@@ -55,7 +55,7 @@ export function registerSlot(ctx: any, slot: keyof typeof SLOT, spec: Record<str
  * @returns an idempotent disposer; a no-op on a DSH without slots.
  */
 export function registerLiveSlot(ctx: any, name: string, spec: Record<string, unknown>, component: unknown): () => void {
-  if (!hasFunction(ctx, 'slots.inject') || !hasFunction(ctx, 'slots.register')) return () => undefined
+  if (!features.record('slots', hasFunction(ctx, 'slots.inject') && hasFunction(ctx, 'slots.register'), 'slots')) return () => undefined
   const dispose = ctx.slots.inject(name, () => ctx.slots.register({ name, ...spec }, component))
   return typeof dispose === 'function' ? dispose as () => void : () => undefined
 }
@@ -68,9 +68,15 @@ export function registerLiveSlot(ctx: any, name: string, spec: Record<string, un
  */
 export function configSource<T>(ctx: any, namespace: string): { get(): { status: string; value?: T }; subscribe(listener: () => void): () => void } | undefined {
   const forms = (() => { try { return typeof ctx.get === 'function' ? ctx.get('configForms') : undefined } catch { return undefined } })()
-  if (forms === undefined || !hasFunction(forms, 'get')) return undefined
+  if (forms === undefined || !hasFunction(forms, 'get')) {
+    warnOnce('configForms', `this DSH has no config forms service; settings for ${namespace} keep their defaults`)
+    return undefined
+  }
   const form = forms.get(namespace) as ConfigForm<T>
-  if (form === undefined || !hasFunction(form, 'getSnapshot') || !hasFunction(form, 'subscribe')) return undefined
+  if (form === undefined || !hasFunction(form, 'getSnapshot') || !hasFunction(form, 'subscribe')) {
+    warnOnce('configForms.form', `the config form for ${namespace} has a shape this plugin does not know; its settings keep their defaults`)
+    return undefined
+  }
   return { get: () => form.getSnapshot(), subscribe: listener => form.subscribe(listener) }
 }
 

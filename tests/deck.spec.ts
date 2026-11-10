@@ -147,4 +147,17 @@ describe('registration and config', () => {
     expect(source).toContain('data-scheduler-deck-config')
     expect(source).toContain("write('deck.enabled'")
   })
+
+  it('without a config forms service the deck stays on and says so once', async () => {
+    const { configSource } = await import('../src/dsh/client/ui.js')
+    const { resetWarnings, setWarnSink } = await import('../src/dsh/compat.js')
+    resetWarnings()
+    const warned: string[] = []
+    const restore = setWarnSink(m => { warned.push(m) })
+    try {
+      expect(configSource({ get: () => undefined }, 'dsh-agent-scheduler')).toBeUndefined()
+      expect(configSource({ get: () => undefined }, 'dsh-agent-scheduler')).toBeUndefined()
+      expect(warned.filter(m => /config forms/u.test(m))).toHaveLength(1)
+    } finally { restore() }
+  })
 })
