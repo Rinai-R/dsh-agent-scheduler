@@ -155,7 +155,7 @@ export function takeFork(parent: string): string | undefined {
 
 /** Styles for the fork form and the chat action. */
 export const FORK_STYLE = `
-.sch-roster-fork{position:absolute;right:106px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-fork{position:absolute;right:106px;top:26px;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-fork[data-slot="2"]{right:76px}
 .sch-roster-fork[data-slot="1"]{right:46px}
 .sch-roster-fork[data-slot="0"]{right:16px}

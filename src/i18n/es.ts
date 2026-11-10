@@ -165,6 +165,7 @@ export const es: Record<keyof typeof zh, string> = {
   'team.status.idle': 'Inactivo',
   'team.status.failed': 'Falló',
   'team.status.provisioning': 'Creando',
+  'row.teamBadge': 'Equipo {count}',
   'team.toggle': 'Equipo',
   'team.lead': 'Equipo del lead',
   'team.leadOn': 'Reparto activado: no se añaden miembros',
