@@ -17,6 +17,7 @@ Agent Scheduler is an open source plugin for DeepSeek Harness (dsh). It turns th
 - **Long-lived workers:** One per repository or module, with its own session, directory and model.
 - **Split and merge:** A busy worker splits on a conflicting task, and the halves merge back later.
 - **Agents page:** Live state, unread dots, and a lead inbox you can reorder.
+- **Deck:** A left-sidebar panel of pinned sessions and the ones with running workers or something waiting.
 - **Worker teams:** With Agent Teams on, each worker can lead a team of its own.
 - **8 languages:** The interface follows dsh's language setting.
 
