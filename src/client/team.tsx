@@ -83,7 +83,7 @@ export const TEAM_STYLE = `
 .sch-team-task-id{color:var(--dsw-alias-label-tertiary)}
 .sch-team-task-subject{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sch-team-task-owner{color:var(--dsw-alias-label-tertiary)}
-.sch-roster-item[data-team] :is(.sch-roster-archive,.sch-roster-rename){top:27px}
-.sch-roster-team-toggle{display:block;margin:-4px 0 2px 36px;border:0;background:none;padding:0 4px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;white-space:nowrap}
+.sch-roster-team-toggle{border:0;background:none;padding:0;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:16px;cursor:pointer;white-space:nowrap;border-radius:4px}
 .sch-roster-team-toggle:hover{color:var(--dsw-alias-label-primary)}
+.sch-roster-team-toggle:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
 `

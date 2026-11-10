@@ -167,6 +167,7 @@ export const ja: Record<keyof typeof zh, string> = {
   'team.status.idle': '待機中',
   'team.status.failed': '失敗',
   'team.status.provisioning': '作成中',
+  'row.teamBadge': 'チーム {count}',
   'team.toggle': 'チーム',
   'team.lead': 'lead のチーム',
   'team.leadOn': '振り分けがオン：新しいメンバーは追加できません',

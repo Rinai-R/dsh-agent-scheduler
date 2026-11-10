@@ -15,6 +15,7 @@ import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
 import { INBOX_STYLE, InboxSection } from './inbox.js'
 import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
+import { hasMeta, rowMeta } from './row-meta.js'
 import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
 import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
@@ -67,6 +68,8 @@ interface Roster {
   readonly teams?: Readonly<Record<string, TeamView>>
   /** Access modes the host offers; absent when it has no permission presets. */
   readonly accessModes?: readonly { readonly name: string; readonly sandbox: string }[]
+  /** The lead's own access mode: a worker row on it shows no access line. */
+  readonly accessDefault?: string
 }
 /** One Session's live status as the client root hook reports it. */
 
@@ -250,9 +253,7 @@ const STYLE = `
 .sch-roster-collapse{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;background:none;padding:0;border-radius:8px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-collapse:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .sch-roster-section{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:12px 18px 4px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);letter-spacing:.02em}
-.sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(min(8em,100%),1fr) minmax(0,max-content);align-items:center;column-gap:10px;margin:1px 8px;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary);transition:background .12s}
-.sch-roster-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.sch-roster-row[data-selected=yes]{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}
+.sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(min(8em,100%),1fr) minmax(0,max-content);align-items:center;column-gap:10px;margin:0;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}
 .sch-roster-row[data-row=archived] .sch-roster-name{color:var(--dsw-alias-label-tertiary)}
 .sch-roster-row[data-compact=yes]{padding:3px 10px}
 .sch-roster-row[data-compact=yes] .sch-roster-name{font-weight:400}
@@ -264,24 +265,30 @@ const STYLE = `
 .sch-roster-state{min-width:3.2em;text-align:right;color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
 .sch-roster-tail{flex:none;display:inline-flex;align-items:center;gap:6px}
 .sch-roster-chev{color:var(--dsw-alias-label-caption);opacity:0;transition:opacity .12s}
-.sch-roster-row:hover .sch-roster-chev,.sch-roster-row[data-selected=yes] .sch-roster-chev{opacity:1}
-.sch-roster-item{position:relative}
+.sch-roster-item:hover .sch-roster-chev,.sch-roster-item[data-selected=yes] .sch-roster-chev{opacity:1}
+/* The card is the highlight box: one box per row, so a selected row's background covers the
+   row, its meta line and anything folded open under it, with the same inset on every side. */
+.sch-roster-item{position:relative;margin:1px 8px;border-radius:10px;transition:background .12s}
+.sch-roster-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.sch-roster-item[data-selected=yes]{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}
 .sch-roster-item[data-pending=yes]{opacity:.5}
-.sch-roster-item .sch-roster-row{box-sizing:border-box;width:calc(100% - 16px);max-width:calc(100% - 16px)}
-.sch-roster-archive,.sch-roster-rename{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-item > .sch-roster-row{box-sizing:border-box;width:100%}
+.sch-roster-archive,.sch-roster-rename{position:absolute;right:16px;top:26px;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-item:hover :is(.sch-roster-archive,.sch-roster-rename),:is(.sch-roster-archive,.sch-roster-rename):focus-visible{display:inline-flex}
 .sch-roster-item:has(.sch-roster-archive,.sch-roster-rename):hover .sch-roster-end{visibility:hidden}
 :is(.sch-roster-archive,.sch-roster-rename):hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-head-actions{flex:none;display:flex;align-items:center;gap:2px}
 .sch-roster-rename{right:46px}
-.sch-roster-merge{position:absolute;right:76px;top:50%;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.sch-roster-merge{position:absolute;right:76px;top:26px;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .sch-roster-merge[data-slot="1"]{right:46px}
 .sch-roster-merge[data-slot="0"]{right:16px}
 .sch-roster-item:hover .sch-roster-merge,.sch-roster-merge:focus-visible{display:inline-flex}
 .sch-roster-merge:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .sch-roster-item:has(.sch-roster-merge):hover .sch-roster-end{visibility:hidden}
 .sch-roster-item > .sch-roster-form{margin:2px 12px 8px}
-.sch-roster-access{display:flex;align-items:center;margin:-2px 12px 6px 34px;color:var(--dsw-alias-label-tertiary)}
+/* One quiet meta line under the row: team count and a non-default access mode only. */
+.sch-roster-meta{display:flex;align-items:center;gap:10px;margin:0 12px 6px 27px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:16px;min-width:0}
+.sch-roster-access-note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sch-merge-keep{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-merge-keep label{display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary)}
 select.sch-roster-input{padding:0 4px}
@@ -305,7 +312,7 @@ textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:ver
 .sch-roster-below[data-review=reported]{color:var(--dsw-alias-label-primary)}
 .sch-roster-below[data-review]::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
 .sch-roster-below[data-review=approval]::before{background:var(--dsw-alias-state-warn-primary)}
-.sch-roster-item[data-flash] .sch-roster-row{animation:sch-flash 1.4s ease-out}
+.sch-roster-item[data-flash]{animation:sch-flash 1.4s ease-out}
 @keyframes sch-flash{0%,35%{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}100%{background:transparent}}
 .sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
 .sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
@@ -1365,7 +1372,10 @@ export function createAgentsPage(ctx: {
       const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
       const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
       const nameOf = (id: string) => rows.find(m => m.id === id)?.name ?? id
-      const usual = hasTeam ? `${subline(member, pendingRequests)}${subline(member, pendingRequests) === '' ? '' : ' · '}${teamSummary(team)}` : subline(member, pendingRequests)
+      // Team count and access mode live on one quiet meta line, each only when it differs from
+      // the default: a worker with neither shows the description alone, like any other row.
+      const meta = rowMeta({ member, teamMembers: team?.members.length, accessDefault: roster?.accessDefault })
+      const usual = subline(member, pendingRequests)
       const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : usual
       // The subtitle is cut to one line: its tooltip has it whole, and during a merge also what it replaced
       // (the absorbed side's handoff request, or the survivor's own work).
@@ -1400,7 +1410,7 @@ export function createAgentsPage(ctx: {
         )
       }
       return (
-        <div key={member.id} className="sch-roster-item" {...(hasTeam ? { 'data-team': '' } : {})} data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
+        <div key={member.id} className="sch-roster-item" data-selected={member.id === selected ? 'yes' : 'no'} data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
         <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={rowTitle(member)}>
           <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
           <span className="sch-roster-main">
@@ -1420,20 +1430,15 @@ export function createAgentsPage(ctx: {
         {forking?.id === member.id ? forkForm(member) : null}
         {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
         {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
-        {!hasTeam ? null : (
-          <button type="button" className="sch-roster-team-toggle" data-scheduler-team-toggle={member.name} aria-expanded={teamsOpen.has(member.id)} aria-label={t(teamsOpen.has(member.id) ? 'team.collapse' : 'team.expand', { name: member.name })} onClick={() => { setTeamsOpen(s => { const n = new Set(s); if (n.has(member.id)) n.delete(member.id); else n.add(member.id); return n }) }}>
-            {teamsOpen.has(member.id) ? '▾' : '▸'} {t('team.toggle')}
-          </button>
-        )}
-        {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
-        {member.kind !== 'worker' || member.state === 'archived' || (roster?.accessModes ?? []).length === 0 ? null : (
-          <div className="sch-roster-access" data-scheduler-row-access={member.name}>
-            <AccessPicker name={member.name} preset={member.accessPreset} modes={roster!.accessModes!} choose={preset => {
-              if (props.sessionId === undefined) return
-              run(props.sessionId, `/agent-access ${member.name} ${preset}`).then(error => { setFailure(error) }, (reason: unknown) => { setFailure(reason instanceof Error ? reason.message : String(reason)) })
-            }} />
+        {!hasMeta(meta) ? null : (
+          <div className="sch-roster-meta">
+            {hasTeam ? <button type="button" className="sch-roster-team-toggle" data-scheduler-team-toggle={member.name} aria-expanded={teamsOpen.has(member.id)} aria-label={t(teamsOpen.has(member.id) ? 'team.collapse' : 'team.expand', { name: member.name })} onClick={() => { setTeamsOpen(s => { const n = new Set(s); if (n.has(member.id)) n.delete(member.id); else n.add(member.id); return n }) }}>
+              {teamsOpen.has(member.id) ? '▾' : '▸'} {meta.team ?? teamSummary(team!)}
+            </button> : null}
+            {meta.access === undefined ? null : <span className="sch-roster-access-note" data-scheduler-row-access={member.name}>{meta.access}</span>}
           </div>
         )}
+        {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
         </div>
       )
     }

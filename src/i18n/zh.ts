@@ -185,6 +185,7 @@ export const zh = {
   'team.status.idle': '空闲',
   'team.status.failed': '失败',
   'team.status.provisioning': '创建中',
+  'row.teamBadge': '团队 {count}',
   'team.toggle': '团队',
   'team.lead': 'lead 的团队',
   'team.leadOn': '调度开着：不能新建成员',
