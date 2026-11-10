@@ -109,6 +109,29 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
     expect(core).toMatch(/r==="keyed"\?[a-z]\.options\.key:r==="list"\?[a-z]\.options\.id:void 0/u)
   })
 
+  it('C15: the brand row: official wordmark occupant, local-build fallback only without one, shared primitives', () => {
+    const brand = fetched('dsh-client-ui-brand-official')
+    // The official package fills both brand seats; the name is the wordmark without its mark.
+    expect(brand).toContain('require("@deepseek-ai/dsh-client-ui-primitives")')
+    expect(brand).toMatch(/BrandWordmark, \{ includeMark: false \}/u)
+    expect(brand).toMatch(/register\(\{ name: "sidebar\.brand\.name" \}, OfficialBrandName\)/u)
+    const sidebar = fetched('dsh-client-ui-sidebar')
+    // The local-build path is the slot FALLBACK: an occupant replaces it, which is why the deck only
+    // occupies the seat beside an official occupant.
+    expect(sidebar).toMatch(/renderSlot\("sidebar\.brand\.name", \{\}, \{ fallback: buildVersion === void 0/u)
+    // The brand row is a new-session button around an aria-hidden identity. Next ignores clicks
+    // inside [data-copy-version]; pinned calls openNewSession directly, so the toggle must stop
+    // propagation itself (it does both).
+    expect(sidebar).toMatch(/className: SidebarRoot_module_css_default\.brandIdentity,\s*"aria-hidden": "true"/u)
+    expect(sidebar).toMatch(/if \(event\.target\.closest\("\[data-copy-version\]"\) !== null\) return;\s*openNewSession\(\)|onClick: openNewSession,\s*children: identity/u)
+    // The workspace browser receives { wide, expandSidebar } like the stock tree.
+    expect(sidebar).toMatch(/renderSlot\("sidebar\.workspaces", \{\s*wide,\s*expandSidebar/u)
+    // The primitives are a shared loader module, with the wordmark and the icons the deck uses.
+    const core = fetched('dsh-web-frontend')
+    expect(core).toContain('"@deepseek-ai/dsh-client-ui-primitives":')
+    for (const name of ['BrandWordmark:', 'IconSearchOutlineRegular:', 'IconChevronRightOutlineRegular:', 'IconPinFillRegular:']) expect(core, name).toContain(name)
+  })
+
   it('C13: the config-forms surface still serves a namespace form to a bundle page', () => {
     const code = fetched('dsh-client-ui-settings')
     expect(code).toContain('configForms')

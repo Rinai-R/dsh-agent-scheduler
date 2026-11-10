@@ -1,0 +1,75 @@
+{
+ "stock": {
+  "mark": {
+   "x": 16,
+   "y": 27.17,
+   "w": 24,
+   "h": 17.66
+  },
+  "wordmark": {
+   "x": 45,
+   "y": 24,
+   "w": 156,
+   "h": 24
+  },
+  "wordmarkViewBox": "26 0 156 24",
+  "nameSlot": {
+   "x": 45,
+   "y": 24,
+   "w": 156,
+   "h": 24
+  },
+  "row": {
+   "x": 8,
+   "y": 6,
+   "w": 264,
+   "h": 60
+  },
+  "toggle": null,
+  "deckSwitch": false,
+  "deckBody": false,
+  "treeHeader": "工作区"
+ },
+ "ours": {
+  "mark": {
+   "x": 16,
+   "y": 27.17,
+   "w": 24,
+   "h": 17.66
+  },
+  "wordmark": {
+   "x": 45,
+   "y": 24,
+   "w": 156,
+   "h": 24
+  },
+  "wordmarkViewBox": "26 0 156 24",
+  "nameSlot": {
+   "x": 45,
+   "y": 24,
+   "w": 190,
+   "h": 24
+  },
+  "row": {
+   "x": 8,
+   "y": 6,
+   "w": 264,
+   "h": 60
+  },
+  "toggle": {
+   "x": 207,
+   "y": 22,
+   "w": 28,
+   "h": 28
+  },
+  "toggleAttrs": {
+   "role": "button",
+   "label": "切换到指挥台",
+   "pressed": "false",
+   "title": "切换到指挥台"
+  },
+  "deckBody": false,
+  "treeHeader": "工作区",
+  "treeRows": 3
+ }
+}

@@ -31,6 +31,8 @@ export const PROBED = [
   // One single-slot resolution semantics and the stock workspace tree the deck swaps with.
   'dsh-client-ui-renderer',
   'dsh-client-ui-workspace',
+  // The official occupant of the brand row the deck toggle sits beside.
+  'dsh-client-ui-brand-official',
   // The config-forms client surface the plugin's settings page and deck gate read.
   'dsh-client-ui-settings',
 ]

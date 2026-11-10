@@ -2,7 +2,8 @@
 import { build } from 'esbuild'
 import { mkdirSync, writeFileSync } from 'node:fs'
 
-const external = ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis']
+// The UI primitives are shared by the client module loader (see src/dsh/client/brand.ts).
+const external = ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-ui-primitives']
 const out = await build({
   entryPoints: ['src/client/index.tsx'], bundle: true, write: false, format: 'cjs', platform: 'browser',
   target: 'es2022', jsx: 'automatic', external, minify: false, charset: 'utf8',

@@ -4,7 +4,8 @@ import { cardOf, deckOf, readPins, togglePin, writePins, type DeckSession, type 
 import { rowStateOf } from '../src/client/row-state.js'
 import { applyRoster, EMPTY_ROSTER, rosterView, type RosterView } from '../src/projection.js'
 import { AGENT_RECORD, MAIL_RECORD } from '../src/records.js'
-import { createDeckViews, createModeStore, registerDeck } from '../src/client/deck.js'
+import { createModeStore, matching, registerDeck, shortAgo } from '../src/client/deck.js'
+import { providePrimitives } from '../src/dsh/client/index.js'
 import { setLanguage } from '../src/i18n/index.js'
 import { Config } from '../src/index.js'
 
@@ -94,85 +95,94 @@ describe('deck cards', () => {
 })
 
 describe('sidebar mode registration and config', () => {
-  const fakeCtx = (state: { enabled: boolean; phase?: string }, registered: Array<{ name: string; spec: Record<string, unknown> }>, disposed: string[], onConfig?: (fn: () => void) => void) => {
-    let listener: (() => void) | undefined
+  /** A slot registry fake: occupants per slot, the official brand optionally present. */
+  const fakeCtx = (state: { enabled: boolean; official: boolean }) => {
+    const live = new Map<string, Array<{ component: unknown; spec: Record<string, unknown> }>>()
+    const watchers = new Map<string, Set<() => void>>()
+    const log: string[] = []
+    let configListener: (() => void) | undefined
+    const notify = (name: string) => { for (const fn of watchers.get(name) ?? []) fn() }
+    const add = (name: string, entry: { component: unknown; spec: Record<string, unknown> }) => {
+      live.set(name, [...(live.get(name) ?? []), entry]); log.push(`+${name}`); notify(name)
+      return () => { live.set(name, (live.get(name) ?? []).filter(e => e !== entry)); log.push(`-${name}`); notify(name) }
+    }
+    if (state.official) add('sidebar.brand.name', { component: 'OfficialBrandName', spec: {} })
+    log.length = 0
     const ctx = {
       get(name: string) {
         if (name !== 'configForms') return undefined
-        return { get: () => ({ getSnapshot: () => ({ status: state.phase ?? 'ready', value: { deck: { enabled: state.enabled } } }), subscribe: (fn: () => void) => { listener = fn; onConfig?.(fn); return () => { listener = undefined } } }) }
+        return { get: () => ({ getSnapshot: () => ({ status: 'ready', value: { deck: { enabled: state.enabled } } }), subscribe: (fn: () => void) => { configListener = fn; return () => { configListener = undefined } } }) }
       },
       slots: {
-        inject(name: string, cb: () => unknown) {
-          const spec = cb() as { name: string }
-          registered.push({ name, spec: spec as unknown as Record<string, unknown> })
-          return () => { disposed.push(name) }
-        },
-        register(spec: Record<string, unknown>) { return spec },
+        inject(name: string, cb: () => { component: unknown; spec: Record<string, unknown> }) { return add(name, cb()) },
+        register(spec: Record<string, unknown>, component: unknown) { return { spec, component } },
+        entries(name: string) { return live.get(name) ?? [] },
+        subscribe(name: string, fn: () => void) { const set = watchers.get(name) ?? new Set(); set.add(fn); watchers.set(name, set); return () => { set.delete(fn) } },
       },
     }
-    return { ctx, refresh: () => { listener?.() } }
+    return { ctx, live, log, refresh: () => { configListener?.() } }
+  }
+  const memoryStorage = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) } } }
+  // The primitives module is loaded through the client loader's require; give the test one.
+  const withPrimitives = (fn: () => void) => {
+    providePrimitives({ BrandWordmark: () => null })
+    try { fn() } finally { providePrimitives(undefined) }
   }
 
-  it('registers the header switch always and the sidebar body only in deck mode', () => {
-    const state = { enabled: true }
-    const registered: Array<{ name: string; spec: Record<string, unknown> }> = []
-    const disposed: string[] = []
-    const { ctx } = fakeCtx(state, registered, disposed)
-    const controller = registerDeck(ctx, () => undefined)
-    // Deck mode (the default): the header switch shadows the brand name, the body shadows the tree.
-    expect(registered.map(r => r.name)).toEqual(['sidebar.brand.name', 'sidebar.workspaces'])
-    for (const entry of registered) expect(entry.spec).toMatchObject({ priority: -1 })
-    // Switching to 工作区 withdraws the body only, so the shell's own tree registration renders.
-    controller.modes.set('workspace')
-    expect(disposed).toEqual(['sidebar.workspaces'])
-    expect(registered).toHaveLength(2)
-    // Switching back re-registers the body.
-    controller.modes.set('deck')
-    expect(registered.map(r => r.name).filter(n => n === 'sidebar.workspaces')).toHaveLength(2)
-  })
+  it('starts in 工作区: the brand toggle sits beside the official wordmark and the tree stays stock', () => withPrimitives(() => {
+    const { ctx, live, log } = fakeCtx({ enabled: true, official: true })
+    const modes = createModeStore(memoryStorage())
+    registerDeck(ctx, () => undefined, modes)
+    expect(modes.get()).toBe('workspace')
+    // The brand seat gets the deck's name entry (priority -1 shadows the official one, which stays).
+    expect(log).toEqual(['+sidebar.brand.name'])
+    expect(live.get('sidebar.brand.name')!.map(e => e.spec.priority)).toEqual([undefined, -1])
+    expect(live.get('sidebar.workspaces') ?? []).toEqual([])
+  }))
 
-  it('withdraws both seats when deck.enabled turns off, and restores them when it turns on', () => {
-    const state = { enabled: true }
-    const registered: Array<{ name: string; spec: Record<string, unknown> }> = []
-    const disposed: string[] = []
-    const { ctx, refresh } = fakeCtx(state, registered, disposed)
-    registerDeck(ctx, () => undefined)
+  it('toggling registers the body at priority -1 in deck mode and withdraws it in 工作区 mode', () => withPrimitives(() => {
+    const { ctx, live, log } = fakeCtx({ enabled: true, official: true })
+    const modes = createModeStore(memoryStorage())
+    registerDeck(ctx, () => undefined, modes)
+    modes.toggle()
+    expect(modes.get()).toBe('deck')
+    expect(live.get('sidebar.workspaces')!.map(e => e.spec.priority)).toEqual([-1])
+    modes.toggle()
+    expect(live.get('sidebar.workspaces')).toEqual([])
+    expect(log).toEqual(['+sidebar.brand.name', '+sidebar.workspaces', '-sidebar.workspaces'])
+  }))
+
+  it('leaves the brand seat empty without an official occupant, so the local-build fallback stays', () => withPrimitives(() => {
+    const { ctx, live } = fakeCtx({ enabled: true, official: false })
+    registerDeck(ctx, () => undefined, createModeStore(memoryStorage()))
+    expect(live.get('sidebar.brand.name') ?? []).toEqual([])
+    // The body's own header toggle still switches modes there.
+  }))
+
+  it('config off: nothing is registered, not even the brand seat, and on restores both', () => withPrimitives(() => {
+    const state = { enabled: true, official: true }
+    const { ctx, live, refresh } = fakeCtx(state)
+    const modes = createModeStore(memoryStorage())
+    registerDeck(ctx, () => undefined, modes)
+    modes.set('deck')
     state.enabled = false
     refresh()
-    expect(disposed).toEqual(['sidebar.brand.name', 'sidebar.workspaces'])
+    expect(live.get('sidebar.brand.name')!.map(e => e.component)).toEqual(['OfficialBrandName'])
+    expect(live.get('sidebar.workspaces')).toEqual([])
     state.enabled = true
     refresh()
-    expect(registered.map(r => r.name).filter(n => n === 'sidebar.brand.name')).toHaveLength(2)
-  })
+    expect(live.get('sidebar.brand.name')).toHaveLength(2)
+    expect(live.get('sidebar.workspaces')).toHaveLength(1)
+  }))
 
   it('the mode choice is remembered across reloads', () => {
-    const memory = new Map<string, string>()
-    const storage = { getItem: (k: string) => memory.get(k) ?? null, setItem: (k: string, v: string) => { memory.set(k, v) } }
+    const storage = memoryStorage()
     const first = createModeStore(storage)
-    expect(first.get()).toBe('deck')
-    first.set('workspace')
-    first.set('deck')
+    expect(first.get()).toBe('workspace')
+    first.toggle()
     expect(createModeStore(storage).get()).toBe('deck')
-    first.set('workspace')
+    first.toggle()
     expect(createModeStore(storage).get()).toBe('workspace')
-  })
-
-  it('falls back to the local pins when the shell has no workspace pin service, and uses it when present', () => {
-    const visible = createDeckViews({ get: () => undefined, slots: { inject: () => () => undefined, register: () => ({}) } }, () => undefined)
-    expect(visible.modes.get()).toBe('deck')
-    // The shell's pin service is preferred: pinnedSessionIds from the workspace store.
-    let ids: string[] = ['a']
-    const listeners = new Set<() => void>()
-    const shell = {
-      get: (name: string) => {
-        if (name === 'workspaces') return { list: { getSnapshot: () => ({ pinnedSessionIds: ids }), subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } } }
-        if (name === 'uiWorkspace') return { pinSession: async (id: string) => { ids = [...ids, id]; for (const fn of listeners) fn() }, unpinSession: async (id: string) => { ids = ids.filter(x => x !== id); for (const fn of listeners) fn() } }
-        return undefined
-      },
-      slots: { inject: () => () => undefined, register: () => ({}) },
-    }
-    const views = createDeckViews(shell, () => undefined)
-    expect(views).toBeDefined()
   })
 
   it('the host config defaults deck.enabled to true and the form writes the same path', async () => {
@@ -182,13 +192,43 @@ describe('sidebar mode registration and config', () => {
     expect(source).toContain('data-scheduler-deck-config')
     expect(source).toContain("write('deck.enabled'")
   })
+})
 
-  it('the body renders the switch at its top, expandable worker rows, and opens worker chats', async () => {
-    const source = (await import('node:fs')).readFileSync(new URL('../src/client/deck.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('data-deck-switch')
-    expect(source).toContain('data-deck-expand')
-    expect(source).toContain('data-deck-worker=')
-    expect(source).toContain('openWorker(c.id, member.id)')
-    expect(source).toContain('sidebar.workspaces')
+describe('deck rows', () => {
+  it('filters by title and prints the stock compact time', () => {
+    const roster = view(workerRecord('w1'))
+    const cards = deckOf([session('修复关闭窗口时标签页', roster), session('调研 OMP 近期活跃会话', undefined)], undefined, ['修复关闭窗口时标签页', '调研 OMP 近期活跃会话'])
+    expect(matching(cards.pinned, 'omp').map(c => c.id)).toEqual(['调研 OMP 近期活跃会话'])
+    expect(matching(cards.pinned, '').length).toBe(2)
+    const now = 10 * 86_400_000
+    expect(shortAgo(now - 30_000, now)).toBe('刚刚')
+    expect(shortAgo(now - 2 * 60_000, now)).toBe('2分钟')
+    expect(shortAgo(now - 2 * 3_600_000, now)).toBe('2小时')
+    expect(shortAgo(now - 86_400_000, now)).toBe('1天')
+  })
+
+  it('one dot per Session: waiting beats running beats idle; workers listed for the tree', () => {
+    const roster = view(workerRecord('w1', 'scheduler-dots'), workerRecord('w2', 'scheduler-integrator'))
+    const running = cardOf(session('a', roster), of(['w1', status(true)]), true)
+    expect(running).toMatchObject({ state: 'running', runningWorkers: 1, approvals: 0 })
+    expect(running.workers.map(w => [w.name, w.state])).toEqual([['scheduler-dots', 'running'], ['scheduler-integrator', 'idle']])
+    expect(cardOf(session('a', roster), of(['w2', status(true, { kind: 'approval' })]), false)).toMatchObject({ state: 'waiting', approvals: 1 })
+    expect(cardOf(session('b', undefined), undefined, true)).toMatchObject({ state: 'idle', workers: [] })
+    // Archived workers are not part of the tree.
+    const archived = view(workerRecord('w1'), record(AGENT_RECORD, { action: 'archived', id: 'w1', name: 'w1' }))
+    expect(cardOf(session('c', archived), undefined, true).workers).toEqual([])
+  })
+
+  it('pinned Sessions come first by recency; 需要你 holds unpinned ones with workers, inbox or approvals only', () => {
+    const rows = [
+      session('old', undefined, { updatedAt: 1_000 }),
+      session('new', undefined, { updatedAt: 9_000 }),
+      session('approval', undefined, { updatedAt: 5_000 }),
+      session('quiet', undefined, { updatedAt: 8_000 }),
+      session('open-request-only', view(workerRecord('w9')), { updatedAt: 7_000 }),
+    ]
+    const deck = deckOf(rows, of(['approval', status(true, { kind: 'approval' })]), ['old', 'new'])
+    expect(deck.pinned.map(c => c.id)).toEqual(['new', 'old'])
+    expect(deck.attention.map(c => c.id)).toEqual(['approval'])
   })
 })

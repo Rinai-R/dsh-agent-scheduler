@@ -11,7 +11,7 @@ export type Feature =
   // host, optional
   | 'sessionTitle' | 'modelSelection' | 'llm.resolve' | 'settings.locale' | 'agentTeams.workerLead' | 'sessionQuery.filterEvents' 
   // client
-  | 'conversation.events' | 'slots' | 'sidebar.tabs' | 'sidebar.layout' | 'sidebar.gestures' | 'tabs.keepMounted'
+  | 'conversation.events' | 'slots' | 'primitives' | 'sidebar.tabs' | 'sidebar.layout' | 'sidebar.gestures' | 'tabs.keepMounted'
   | 'sessions.subagentAddress' | 'sessions.projections' | 'remote.commands' | 'remote.modelCatalog' | 'modelDirectories.catalog' | 'dom.stripTabs' | 'locale'
 
 /** Thrown when the host answers in a shape this plugin does not know. */

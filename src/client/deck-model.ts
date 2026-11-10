@@ -29,11 +29,27 @@ export interface DeckStatus {
 /** How a lead looks right now. */
 export type LeadState = 'running' | 'waiting' | 'idle'
 
+/** One worker line under an expanded deck row. */
+export interface DeckWorker {
+  readonly id: string
+  readonly name: string
+  /** {@link rowStateOf}: running / waiting / idle while live; terminal states as recorded. */
+  readonly state: ReturnType<typeof rowStateOf>
+  readonly text: string
+}
+
 /** One card of the deck. */
 export interface DeckCard {
   readonly id: string
   readonly title: string
   readonly lead: LeadState
+  /**
+   * The row's one state dot: waiting when the lead or any live worker waits for the user, else
+   * running when the lead or any worker runs, else idle.
+   */
+  readonly state: LeadState
+  /** The Session's workers that are not archived, for the expanded tree. */
+  readonly workers: readonly DeckWorker[]
   /** Live workers on the roster. */
   readonly runningWorkers: number
   /** Messages waiting in the lead's inbox. */
@@ -50,7 +66,7 @@ export interface DeckCard {
 
 /** The slice of the roster view the deck reads from a Session summary. */
 interface DeckRoster {
-  readonly members?: readonly { readonly id: string; readonly kind: string; readonly state: string }[]
+  readonly members?: readonly { readonly id: string; readonly kind: string; readonly state: string; readonly name?: string; readonly text?: string }[]
   readonly inbox?: readonly unknown[]
   readonly openRequests?: readonly unknown[]
 }
@@ -80,17 +96,22 @@ export function cardOf(session: DeckSession, statuses: ReadonlyMap<string, DeckS
   const waiting = status?.pendingInteraction !== undefined
   const lead: LeadState = waiting ? 'waiting' : status?.running === true || session.running === true ? 'running' : 'idle'
   const inbox = roster?.inbox?.length ?? 0
+  const approvals = (waiting ? 1 : 0) + waitingWorkers
+  const workers = members.flatMap((m, i): DeckWorker[] => m.kind !== 'worker' || m.state === 'archived' ? [] : [{ id: m.id, name: m.name ?? m.id, state: states[i]!, text: m.text ?? '' }])
   return {
     id: session.id,
     title: session.displayTitle ?? session.title ?? session.id,
     lead,
+    state: approvals > 0 ? 'waiting' : lead === 'running' || runningWorkers > 0 ? 'running' : 'idle',
+    workers,
     runningWorkers,
     inbox,
     // The user's approvals can wait on the lead and on any live worker.
-    approvals: (waiting ? 1 : 0) + waitingWorkers,
+    approvals,
     lastActivity: session.updatedAt ?? 0,
     pinned,
-    attention: waiting || inbox > 0 || (roster?.openRequests?.length ?? 0) > 0 || waitingWorkers > 0 || runningWorkers > 0,
+    // 「需要你」: running workers, inbox mail, or an approval/question waiting for the user.
+    attention: runningWorkers > 0 || inbox > 0 || approvals > 0,
   }
 }
 
@@ -99,7 +120,7 @@ export function cardOf(session: DeckSession, statuses: ReadonlyMap<string, DeckS
  * @param sessions - every listed Session, in the shell's order.
  * @param statuses - live status by Session id.
  * @param pinned - the pinned Session ids, in the user's order.
- * @returns the pinned cards first (in pin order), then unpinned Sessions needing attention.
+ * @returns the pinned cards (most recent first), then unpinned Sessions needing attention.
  */
 export function deckOf(
   sessions: readonly DeckSession[],
@@ -110,7 +131,7 @@ export function deckOf(
   const pinnedCards = pinned.flatMap(id => {
     const session = byId.get(id)
     return session === undefined ? [] : [cardOf(session, statuses, true)]
-  })
+  }).sort((a, b) => b.lastActivity - a.lastActivity)
   const shown = new Set(pinnedCards.map(card => card.id))
   const attention = sessions
     .filter(s => s.parentId === undefined && !shown.has(s.id))
