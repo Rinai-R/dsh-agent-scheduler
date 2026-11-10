@@ -8,7 +8,7 @@
 
 ## Motivation
 
-[dsh-agent-scheduler](https://github.com/Rinai-R/dsh-agent-scheduler) runs long-lived **workers**. Each worker is a continuable direct child of the main session, has its own conversation and its own git worktree, and is given requests by the lead. Users want every worker to be able to act as a team lead: spawn teammates, share a task board, and message them, while the worker still reports a single summary back to its own lead.
+[dsh-agent-scheduler](https://github.com/dsh-labs/dsh-agent-scheduler) runs long-lived **workers**. Each worker is a continuable direct child of the main session, has its own conversation and its own git worktree, and is given requests by the lead. Users want every worker to be able to act as a team lead: spawn teammates, share a task board, and message them, while the worker still reports a single summary back to its own lead.
 
 Today this is blocked by:
 

@@ -1,16 +1,16 @@
 {
   "name": "dsh-agent-scheduler",
-  "version": "0.1.0-rc.8",
+  "version": "0.1.0-rc.9",
   "description": "DeepSeek Harness plugin: a lead agent that forks one analyst per input, long-lived worker agents, and a right-sidebar roster.",
   "license": "MIT",
   "author": "Rinai-R",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Rinai-R/dsh-agent-scheduler.git"
+    "url": "git+https://github.com/dsh-labs/dsh-agent-scheduler.git"
   },
-  "homepage": "https://github.com/Rinai-R/dsh-agent-scheduler#readme",
+  "homepage": "https://github.com/dsh-labs/dsh-agent-scheduler#readme",
   "bugs": {
-    "url": "https://github.com/Rinai-R/dsh-agent-scheduler/issues"
+    "url": "https://github.com/dsh-labs/dsh-agent-scheduler/issues"
   },
   "keywords": [
     "dsh",
@@ -43,6 +43,7 @@
     "@deepseek-ai/dsh-fs-local": "0.2.1-rc.5",
     "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
     "@deepseek-ai/dsh-permission-presets": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-rc.5",

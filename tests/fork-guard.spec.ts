@@ -15,10 +15,14 @@ import { FORK_NOTICE } from '../src/scheduler.js'
 afterEach(teardown)
 
 const OK = { type: 'object', additionalProperties: true, properties: {} } as const
-const WORKING = ['bash', 'edit', 'write', 'subagent']
+// Everything here is refused for a fork except the shell: bash/pwsh are allowlisted, and their
+// write protection comes from the fork Session being pinned to the read-only sandbox.
+const WORKING = ['edit', 'write', 'subagent', 'ask_user_question', 'schedule_create', 'job_list']
+/** Stand-ins registered for both the allowed shell and the refused tools. */
+const STAND_INS = ['bash', ...WORKING]
 /** Stand-ins for the host's working tools: each records that its body ran. */
 function workingTools(ran: string[]) {
-  return WORKING.map(name => defineTool({
+  return STAND_INS.map(name => defineTool({
     name, description: `${name} stand-in`, parameters: { command: { type: 'string' } },
     output: { schema: OK, render: (_: unknown, v: unknown) => [{ type: 'text' as const, text: JSON.stringify(v) }] },
     execute: async () => { ran.push(name); return { ok: name } },
@@ -28,7 +32,7 @@ const called = (o: GenerateOptions, tool: string) => o.messages.some(m => m.role
 const isWorker = (o: GenerateOptions) => body(o).includes('You are worker')
 
 describe('fork guard', () => {
-  it('refuses a fork bash, edit, write and subagent; it still routes; the lead and workers keep every tool', async () => {
+  it('refuses a fork every working tool but its read-only shell; it still routes; the lead and workers keep every tool', async () => {
     const ran: string[] = []
     let leadBash = false
     const { ctx, lead, adapter } = await setup(o => {
@@ -37,6 +41,9 @@ describe('fork guard', () => {
         return textResponse('LEAD')
       }
       if (isWorker(o)) return called(o, 'bash') ? textResponse('WORKER DONE') : toolCallResponse('w1', 'bash', { command: 'npm run build' })
+      // The fork triages with the shell (allowed), then tries every refused tool.
+      // The lead's own bash call is in the inherited log; look for this call's command instead.
+      if (!JSON.stringify(o.messages).includes('git log --oneline -5')) return toolCallResponse('f-bash', 'bash', { command: 'git log --oneline -5' })
       for (const tool of WORKING) if (!JSON.stringify(o.messages).includes(`"f-${tool}"`)) return toolCallResponse(`f-${tool}`, tool, { command: 'git push' })
       if (!called(o, 'agent_create')) return listThen(o, 'f-create', 'agent_create', { name: 'builder', role: 'builds', task: 'run the build' })
       return textResponse('FORK CONCLUSION: handed to builder')
@@ -50,12 +57,14 @@ describe('fork guard', () => {
     lead.followup(user('continue the fix and push it'))
     await until(lead, '[reply to r-1 from builder')
     const forkId = forksOf(lead)[0]!
-    // No working tool body ran for the fork; the worker's bash did.
-    expect(ran).toEqual(['bash', 'bash'])
+    // The fork's shell body ran; no refused tool body did; the worker's bash is in the same list.
+    await vi.waitFor(() => { expect(ran.filter(name => name === 'bash')).toHaveLength(3) })
+    expect(ran.filter(name => name !== 'bash')).toEqual([])
     expect(scheduler.ledgerOf(lead).find('builder')).toBeDefined()
     const forkReqs = adapter.requests.filter(r => r.sessionId === forkId)
     const lastFork = JSON.stringify(forkReqs.at(-1)!.messages)
     for (const tool of WORKING) expect(lastFork).toContain(`fork-1 is a fork: forks only route, so ${tool} is not available to you`)
+    expect(lastFork).not.toContain('so bash is not available')
     expect(leadSaw(lead, 'FORK CONCLUSION: handed to builder')).toBe(1)
     expect(leadSaw(lead, 'WORKER DONE')).toBe(1)
   })
@@ -73,7 +82,9 @@ describe('fork guard', () => {
     const fork = { id: forkId, session: { header: { parentSession: lead.id } } } as never
     expect(scheduler.forkNameOf(fork)).toBe('fork-1')
     const guard = forkGuard(agent => scheduler.forkNameOf(agent))
-    expect(guard({ name: 'bash', agent: fork })).toContain('fork-1 is a fork')
+    for (const tool of ['edit', 'agent_model', 'agent_access', 'schedule_create', 'job_kill']) expect(guard({ name: tool, agent: fork })).toContain(`so ${tool} is not available`)
+    expect(guard({ name: 'bash', agent: fork })).toBeUndefined()
+    expect(guard({ name: 'pwsh', agent: fork })).toBeUndefined()
     expect(guard({ name: 'agent_send', agent: fork })).toBeUndefined()
     // The lead and ordinary agents are never refused.
     expect(guard({ name: 'bash', agent: lead })).toBeUndefined()
@@ -85,12 +96,14 @@ describe('fork guard', () => {
   })
 
   it('allows only reading and routing tools', () => {
-    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'agent_interrupt', 'agent_archive', 'role_set', 'report', 'read', 'grep', 'glob', 'web_fetch']) expect(FORK_TOOLS.has(tool)).toBe(true)
-    for (const tool of ['bash', 'edit', 'write', 'subagent', 'subagent_fork', 'workflow', 'send_message', 'remote_send_message', 'create_goal', 'schedule_create', 'cua_driver_native__click', 'some_new_tool']) expect(FORK_TOOLS.has(tool)).toBe(false)
+    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'agent_split', 'agent_merge', 'agent_recall', 'agent_interrupt', 'agent_archive', 'role_set', 'report', 'read', 'grep', 'glob', 'read_image', 'web_fetch', 'bash', 'pwsh', 'session_search', 'get_goal', 'skill', 'run_code']) expect(FORK_TOOLS.has(tool)).toBe(true)
+    for (const tool of ['edit', 'write', 'apply_patch', 'str_replace_editor', 'subagent', 'subagent_fork', 'workflow', 'send_message', 'list_agents', 'remote_send_message', 'create_goal', 'schedule_create', 'job_list', 'ask_user_question', 'agent_model', 'agent_access', 'present', 'todo_write', 'cua_driver_native__click', 'some_new_tool']) expect(FORK_TOOLS.has(tool)).toBe(false)
   })
 
   it('the fork notice forbids work outright and overrides the runtime\'s "carry out the work directly"', () => {
     expect(FORK_NOTICE).toContain('Never do the work yourself')
+    expect(FORK_NOTICE).toContain('read-only shell')
+    expect(FORK_NOTICE).toContain('file access denied under read-only mode')
     expect(FORK_NOTICE).toContain('it does not apply to you')
     expect(FORK_NOTICE).toContain('say in your conclusion what could not be handed over')
     expect(FORK_NOTICE).not.toContain('git worktree add')

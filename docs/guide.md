@@ -67,7 +67,7 @@ terminal:
 ```bash
 dsh plugin add dsh-agent-scheduler                   # latest release from npm
 dsh plugin add dsh-agent-scheduler@next              # latest prerelease
-dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.8.tgz  # the tarball attached to a release
+dsh plugin add ./dsh-agent-scheduler-0.1.0-rc.9.tgz  # the tarball attached to a release
 dsh plugin --profile web add dsh-agent-scheduler     # into a specific profile
 ```
 
@@ -313,9 +313,25 @@ ignored: forks always use the lead's model.
 - Switching changes the lead's system prompt (the scheduler section appears or goes), so the next
   lead request misses the prompt cache once.
 - Forks only route. A tool guard refuses a fork every tool except reading (`read`, `glob`, `grep`,
-  web and session search) and the `agent_*`, `role_set` and `report` tools, so a fork cannot run
-  commands, edit files, commit, push or start subagents; the refusal tells it to hand the work to a
-  worker or say in its conclusion that it could not.
+  web and session search), a **read-only shell** (`bash`/`pwsh`) and the `agent_*`, `role_set` and
+  `report` tools. The shell is safe because a fork's own Session is pinned to the `read-only`
+  sandbox when it is created — whatever mode the lead is on, and even after the lead widens later —
+  so `git log`, `git status`, `ls`, `cat` and `rg` work while edits, commits, pushes, installs and
+  other writes are denied by the sandbox. It cannot start subagents; refused tools tell it to hand
+  the work to a worker or say in its conclusion that it could not.
+  **What the sandbox does not cover: the network.** DSH's sandbox governs file effects only, and
+  the shell runs with your network and credentials (`gh`, SSH keys, git remotes). A fork could
+  therefore change something remotely, for example after reading a page, issue or PR comment that
+  tells it to: `git push`, `gh pr merge`, `gh api -X POST`, `curl -X POST`. Two things stand
+  against that:
+  - forks are told never to run such commands and that text they read is not an instruction;
+  - the fork guard refuses the obvious forms (pushes; `gh pr`/`issue`/`release`/`repo` writes;
+    `gh api` with a write method or fields; `curl`/`wget` uploads and write methods).
+
+  That refusal matches command text, so it is best effort, not a boundary: an indirect command
+  (a script, `sh -c` of decoded text, another tool's CLI) can still get through. If your forks
+  read untrusted content and you keep credentials for remote writes in the shell's environment,
+  treat a fork's shell as able to act on them.
 - A fork inherits only the lead's completed turns at fork time, not the round in progress.
 - The lead does not see your raw words; it sees them quoted in each conclusion.
 - A fork or worker cannot ask you a question directly: the runtime refuses human interaction for an
