@@ -6,6 +6,7 @@ import { pluginRecordOf, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { expect, vi } from 'vitest'
 import { preStep, Scheduler, type SchedulerDeps } from '../../src/scheduler.js'
 import { historyPort } from '../../src/dsh/host/session-query.js'
+import { onSubagentStart } from '../../src/dsh/host/services.js'
 import { schedulerTools, sectionFor } from '../../src/tools.js'
 import { forkGuard } from '../../src/fork-guard.js'
 import { inputOf } from '../../src/records.js'
@@ -32,7 +33,9 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
     if (source === 'resume' && agent.session.header.parentSession === undefined) setTimeout(() => { void scheduler.recover(agent) }, 0)
     return undefined
   })
-  ctx.on('agent/created', ({ agent }) => { restoreMemberModel(scheduler, agent); return undefined })
+  ctx.on('agent/created', ({ agent }) => { restoreMemberModel(scheduler, agent); scheduler.adoptForkSandbox(agent); return undefined })
+  // As the rule does: the activation hook pins a fork's read-only sandbox before its first step.
+  onSubagentStart(ctx, childId => { scheduler.pinForkSession(childId) })
   ctx.on('agent/disposed', () => { if (scheduler.queued().length > 0) void scheduler.drain() })
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.tools.register(tool)
   ctx.tools.guard(forkGuard(agent => scheduler.forkNameOf(agent)))
