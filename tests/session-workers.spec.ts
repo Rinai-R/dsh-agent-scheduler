@@ -14,7 +14,7 @@ import { gate, setup, stored, teardown } from './support/harness.js'
 import { textResponse, toolCallResponse } from './support/mock-adapter.js'
 import { body, install, uninstall, until, user } from './support/scheduler.js'
 import { testController } from './support/session-controller.js'
-import { MemoryQueueStore, MessageQueue } from '../src/queue.js'
+import { MemoryQueueStore, MessageQueue, type QueueTimeouts } from '../src/queue.js'
 import { appendRecord, queueHost, routerOf, isMainSession } from '../src/dsh/host/index.js'
 import { runAgentsCommand } from '../src/rule-plugin.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema } from '../src/projection.js'
@@ -24,7 +24,7 @@ afterEach(teardown)
 const isWorker = (name: string) => (o: GenerateOptions) => body(o).includes(`You are worker \\"${name}\\"`)
 
 /** A router (`lead`, created in a workspace directory) with the v2 scheduler mounted. */
-async function v2(respond: (o: GenerateOptions) => string | Promise<string> | ReturnType<typeof toolCallResponse>, opts: { failFork?: boolean; store?: MemoryQueueStore } = {}) {
+async function v2(respond: (o: GenerateOptions) => string | Promise<string> | ReturnType<typeof toolCallResponse>, opts: { failFork?: boolean; store?: MemoryQueueStore; timeouts?: Partial<QueueTimeouts> } = {}) {
   const workspace = mkdtempSync(join(tmpdir(), 'router-ws-'))
   const { ctx, adapter } = await setup(async o => {
     const r = await respond(o)
@@ -34,7 +34,7 @@ async function v2(respond: (o: GenerateOptions) => string | Promise<string> | Re
   const lead = (await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('router'), meta: { cwd: workspace }, agentOptions: { provider: 'mock', model: 'lead-model' } } as never)).agent
   const controller = testController(ctx, { workspace, ...(opts.failFork === undefined ? {} : { failFork: opts.failFork }) })
   const store = opts.store ?? new MemoryQueueStore()
-  const queue = new MessageQueue(store, queueHost(ctx, controller.port, async id => stored(ctx, SessionId(id))))
+  const queue = new MessageQueue(store, queueHost(ctx, controller.port, async id => stored(ctx, SessionId(id))), undefined, opts.timeouts === undefined ? {} : { timeouts: opts.timeouts })
   const scheduler = install(ctx, { defaultOn: false, sessionWorkers: controller.port, queue })
   return { ctx, lead, adapter, workspace, controller, queue, store, scheduler }
 }
@@ -355,3 +355,58 @@ describe('projection v12 → v13', () => {
 
 void createUserMessage
 void (null as unknown as Agent)
+
+describe('agent_send never blocks on delivery (r-176)', () => {
+  const fast = { storeMs: 200, activateMs: 200, sendMs: 200, roundsMs: 500, maxAttempts: 2, retryMs: 50 }
+  const sendTool = async (ctx: Context, lead: Agent, scheduler: { rosterVersion(l: unknown): string; ledgerOf(a: Agent): unknown }, to: string, message: string) =>
+    ctx.tools.get('agent_send', lead)!.execute({ to, message, rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) }, { agent: lead, callId: `c-${Math.random()}` } as never) as Promise<{ request: string; note: string }>
+
+  it('the tool returns at once while the worker\'s activation hangs; the request then fails with the reason and the lead is told', async () => {
+    const { ctx, lead, scheduler, controller } = await v2(o => o.sessionId === 'router' ? 'LEAD' : 'WORKER', { timeouts: fast })
+    const made = await scheduler.createWorker(lead, { name: 'hub', role: 'r' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(made.id))?.status).toBe('idle') })
+    await controller.release(made.id)
+    // From now on bringing the worker back never finishes (a stuck activation).
+    controller.port.resolve = () => new Promise(() => undefined)
+    const started = Date.now()
+    const out = await sendTool(ctx, lead, scheduler as never, 'hub', 'continue Q0')
+    expect(Date.now() - started).toBeLessThan(150)
+    expect(out.request).toMatch(/^r-\d+$/u)
+    await until(lead, `[request ${out.request} to hub failed`)
+    expect(scheduler.ledgerOf(lead).state.requests.find(r => r.id === out.request)?.state).toBe('failed')
+    expect(JSON.stringify(lead.session.snapshotEvents())).toMatch(/not delivered after 2 attempts: activating session [^"]* did not finish/u)
+  })
+
+  it('a send to a worker whose previous turn ended in error is delivered and answered (the errored request was failed and freed its slot)', async () => {
+    let fail = true
+    const { ctx, lead, scheduler } = await v2(o => {
+      if (o.sessionId === 'router') return 'LEAD'
+      if (fail && body(o).includes('first try')) { fail = false; throw new Error('provider refused the request') }
+      return 'SECOND ANSWER'
+    }, { timeouts: fast })
+    const made = await scheduler.createWorker(lead, { name: 'hub', role: 'r', task: 'first try' })
+    await until(lead, '[request r-1 to hub failed')
+    expect(scheduler.ledgerOf(lead).state.requests.find(r => r.id === 'r-1')?.state).toBe('failed')
+    const started = Date.now()
+    const out = await sendTool(ctx, lead, scheduler as never, 'hub', 'retry after the error')
+    expect(Date.now() - started).toBeLessThan(150)
+    await until(lead, `[reply to ${out.request} from hub]`)
+    void made
+  })
+
+  it('a send to a cold worker returns before it is brought back, and is answered', async () => {
+    const { ctx, lead, scheduler, controller } = await v2(o => o.sessionId === 'router' ? 'LEAD' : 'COLD ANSWER', { timeouts: { ...fast, activateMs: 5_000 } })
+    const made = await scheduler.createWorker(lead, { name: 'hub', role: 'r' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(made.id))?.status).toBe('idle') })
+    await controller.release(made.id)
+    const resolve = controller.port.resolve
+    let release!: () => void
+    const gateOpen = new Promise<void>(r => { release = r })
+    controller.port.resolve = async id => { await gateOpen; return resolve(id) }
+    const started = Date.now()
+    const out = await sendTool(ctx, lead, scheduler as never, 'hub', 'wake up')
+    expect(Date.now() - started).toBeLessThan(150)
+    release()
+    await until(lead, `[reply to ${out.request} from hub]`)
+  })
+})
