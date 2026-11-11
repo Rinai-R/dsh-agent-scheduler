@@ -34,10 +34,12 @@ export function teamGuard(roles: TeamRoles): (exec: { readonly name: string; rea
     if (exec.name !== TEAM_TOOLS.spawn) return undefined
     if (roles.isMain(agent)) {
       return roles.isOn(agent)
-        ? 'Scheduling is on: the lead does not form teams; workers do. Create or split a worker with agent_create / agent_split and let it form its team. Your existing teammates keep messages, tasks and interrupts.'
+        ? 'Scheduling is on: the lead does not form teams; workers do. Create a worker with agent_create and let it form its team. Your existing teammates keep messages, tasks and interrupts.'
         : undefined
     }
     if (roles.isWorker(agent)) return undefined
+    // A top-level Session (a session worker, or any ordinary chat) leads its own team natively.
+    if (agent.session.header.parentSession === undefined) return undefined
     return 'Teams do not nest: a teammate cannot create teammates of its own. Ask your Team Lead (send_message to "lead").'
   }
 }

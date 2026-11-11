@@ -303,6 +303,10 @@ export const ja: Record<keyof typeof zh, string> = {
   'fork.submitting': 'Fork 中…',
   'fork.cancel': 'キャンセル',
 
+  'cmd.agents.convertUsage': '使い方：/agents convert <worker>：旧式（サブエージェント）の worker をセッション worker に変換',
+  'cmd.agents.converted': '{name} をセッション worker に変換しました。会話を引き継いでおり、サイドバーから開いて直接話せます。',
+  'cmd.agents.convertedFresh': '{name} をセッション worker に変換しました（元のセッションを複製できなかったため、引き継ぎ要約から始まります）。',
+  'cmd.agents.oldWorker': '{name} は旧式の worker で、手元の作業を終えるだけです。先に /agents convert {name} を実行するか、新しい worker を作ってください。',
   'cmd.agents.usage': '使い方：/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': '使い方：/agents rename <name> <new-name>',
   'cmd.agents.needsValue': '{flag} には値が必要です',

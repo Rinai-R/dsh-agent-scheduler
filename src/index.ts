@@ -54,8 +54,9 @@ export function apply(ctx: Context, config: Config): void {
     // 8: the lead's inbox.
     // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges. 11: where merged workers' history is.
     // 12: each worker's access mode, and workers the user forked.
+    // 13: workers as top-level Sessions behind the queue (v2): `session`, `worktrees`, `convertedTo`, request `qid`.
     // Older cached state is dropped and refolded.
-    stateVersion: 12,
+    stateVersion: 13,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,

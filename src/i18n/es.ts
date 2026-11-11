@@ -301,6 +301,10 @@ export const es: Record<keyof typeof zh, string> = {
   'fork.submitting': 'Bifurcando…',
   'fork.cancel': 'Cancelar',
 
+  'cmd.agents.convertUsage': 'Uso: /agents convert <worker>: convierte un worker antiguo (subagente) en un worker de sesión',
+  'cmd.agents.converted': '{name} es ahora un worker de sesión: conserva su conversación y puedes abrirlo desde la barra lateral y hablarle directamente.',
+  'cmd.agents.convertedFresh': '{name} es ahora un worker de sesión (su sesión no se pudo copiar; la nueva empieza con un resumen de traspaso).',
+  'cmd.agents.oldWorker': '{name} es un worker antiguo que solo termina lo que tiene; ejecuta antes /agents convert {name} o crea un worker nuevo.',
   'cmd.agents.usage': 'Uso: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': 'Uso: /agents rename <name> <new-name>',
   'cmd.agents.needsValue': '{flag} necesita un valor',

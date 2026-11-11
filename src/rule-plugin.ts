@@ -10,8 +10,10 @@ import z from '@deepseek-ai/schemastery'
 import type { CommandInvocation, CommandResult } from './dsh/types.js'
 import {
   accessPort, claimOnce, eventsOf, historyPort, installWorkerTeams, onSubagentStart, teamPort, followHostLocale, hostLog, isUserInput, hostVersion, installGuard, logReader, missingRequired, modelValidator, onAgents, promptSection, registerCommand,
-  registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE,
+  registerTool, RULE_SERVICES, setWarnSink, titles as titleService, DSH_RANGE, queueHost, sessionWorkerPort, watchQueueStore, isSessionWorker,
 } from './dsh/host/index.js'
+import { MessageQueue, PendingQueueStore } from './queue.js'
+import { provideQueue } from './dsh/host/queue-service.js'
 import { appendWorkerModel, workerModelOf, type ForkModelSelection } from './records.js'
 import { isMainSession, preStep, Scheduler, textOf } from './scheduler.js'
 import { parseModel, schedulerTools, sectionFor } from './tools.js'
@@ -245,7 +247,7 @@ export function parseFork(raw: string): { owner: string; name: string; role?: st
   }
 }
 
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor' | 'forkWorker'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor' | 'forkWorker' | 'convert'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -270,6 +272,12 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       if (typeof parsed === 'string') return { kind: 'error', text: parsed }
       const done = await scheduler.forkWorker(invocation.agent, parsed)
       return { kind: 'success', text: t(done.renamed ? 'cmd.agents.forkedSplit' : 'cmd.agents.forked', { name: done.name, owner: done.owner }) }
+    }
+    if (verb === 'convert') {
+      const [target, ...extra] = words(rest)
+      if (target === undefined || extra.length > 0) return { kind: 'error', text: t('cmd.agents.convertUsage') }
+      const done = await scheduler.convert(invocation.agent, target)
+      return { kind: 'success', text: t(done.forked ? 'cmd.agents.converted' : 'cmd.agents.convertedFresh', { name: done.name }) }
     }
     if (verb === 'merge') {
       const parsed = parseMerge(rest)
@@ -340,7 +348,21 @@ export function apply(ctx: Context, config: Config): void {
   }
   const names = titleService(ctx, log)
   const access = accessPort(ctx)
+  // v2: workers are top-level Sessions behind a persistent queue (design §2–§4).
+  const sessionWorkers = sessionWorkerPort(ctx)
+  const store = new PendingQueueStore()
+  const reader = logReader(ctx)
+  const queue = new MessageQueue(store, queueHost(ctx, sessionWorkers, id => reader(id as never)), undefined, { log })
+  watchQueueStore(ctx, opened => {
+    store.set(opened)
+    // The store opened (at startup, after a restart): settle, redeliver and reply what was left.
+    if (opened !== undefined) void queue.recover().catch((error: unknown) => { log('queue recovery failed', error) })
+  }, log)
+  // Other plugins (a Feishu or GitHub router later) produce into the same queue (design §8; experimental).
+  ctx.effect(() => provideQueue(ctx, queue), 'agent-scheduler: queue service')
   const scheduler = new Scheduler({
+    sessionWorkers,
+    queue,
     subagents: ctx.subagents,
     agents: ctx.agents as never,
     readLog: logReader(ctx),
@@ -356,7 +378,7 @@ export function apply(ctx: Context, config: Config): void {
       if (session !== undefined) names.rename(session, title)
     },
   })
-  ctx.effect(() => () => { scheduler.dispose() }, 'agent-scheduler: queue')
+  ctx.effect(() => () => { scheduler.dispose(); scheduler.disconnectQueue() }, 'agent-scheduler: queue')
   onAgents(ctx, {
     inserted: (agent, message) => {
       // Session titles come from user messages; the input rule removes them, so name the session
@@ -373,8 +395,11 @@ export function apply(ctx: Context, config: Config): void {
       scheduler.adoptForkSandbox(agent)
       // A main Session coming back after a restart settles what the restart cut off (src/recovery.ts).
       // After creation resolves: the runtime only delivers to children of a published parent.
+      // A session worker or router coming back: the queue delivers and replies what waited for it.
+      if (isSessionWorker(agent)) { setTimeout(() => { scheduler.settleSession(agent.id) }, 0); return }
       if (!resumed || !isMainSession(agent)) return
       setTimeout(() => {
+        void scheduler.recoverQueue().catch((error: unknown) => { log('queue recovery failed', error) })
         if (ctx.agents.get(agent.id) !== agent || scheduler.ledgerOf(agent).state.members.length === 0) return
         void scheduler.recover(agent).catch((error: unknown) => { log('restart recovery failed', error) })
       }, 0)

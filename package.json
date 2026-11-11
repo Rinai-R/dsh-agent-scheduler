@@ -51,6 +51,9 @@
     "@deepseek-ai/dsh-session-query": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session-query-sqlite": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session-title": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-storage": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-storage-json": "0.2.1-rc.5",
     "@deepseek-ai/dsh-subagent": "0.2.1-rc.5",
     "@deepseek-ai/dsh-subagent-fork-in-process": "0.2.1-rc.5",
     "@deepseek-ai/dsh-subagent-spawn-in-process": "0.2.1-rc.5",
@@ -127,5 +130,6 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "dependencies": {}
 }

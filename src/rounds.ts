@@ -22,6 +22,8 @@ export interface Round {
   readonly answer: string
   /** The summary it gave `report`, when it called it. */
   readonly report?: string | undefined
+  /** Whether it also took a message the user typed in that session (then its answer is mixed). */
+  readonly userInput?: true | undefined
   /** Why it ended when not normally (`aborted`, `error`, …); then it answers nothing. */
   readonly stopped?: string | undefined
   /** The cancellation cause of an `aborted` round (`user`, `parent`, `disposed`, …). */
@@ -55,16 +57,19 @@ function reportOf(events: readonly SessionEvent[]): string | undefined {
 
 function roundOf(events: readonly SessionEvent[], end: SessionEvent): Round {
   const claimed = new Set<string>()
+  let userInput = false
   for (const event of events) {
     const message = userMessageOf(event)
-    if (message !== undefined) claimed.add(message.id)
+    if (message === undefined) continue
+    claimed.add(message.id)
+    if (message.sourceKind === 'user') userInput = true
   }
   const report = reportOf(events)
   const closing = report ?? closingText(events)
   const { kind: reason, cause } = turnEndOf(end)
   const answer = closing.trim() === '' ? '(no closing message)' : closing
   return {
-    endSeq: end.seq, claimed, answer,
+    endSeq: end.seq, claimed, answer, ...(userInput ? { userInput: true as const } : {}),
     ...(report === undefined ? {} : { report }),
     ...(reason === 'completed' ? {} : { stopped: reason }),
     ...(cause === undefined ? {} : { cause }),

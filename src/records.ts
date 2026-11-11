@@ -197,6 +197,12 @@ export interface AgentRecord {
   readonly at?: string
   /** On `created`: `user` when the user made it from the Agents page or a command (`/agents fork`). */
   readonly via?: 'user'
+  /** On `created`: a top-level Session of its own (scheduler v2), not a subagent of the main Session. */
+  readonly session?: true
+  /** On `created`: worktrees it was given (informational; it may work in others). */
+  readonly worktrees?: readonly string[]
+  /** On `archived`: the session worker it was converted into (`/agents convert`). */
+  readonly convertedTo?: string
 }
 
 /** One piece of delegated work, or what became of it. */
@@ -210,6 +216,8 @@ export interface RequestRecord {
   readonly to?: string
   /** Inbox id of the delivered message: how a round is matched to the requests it answers. */
   readonly messageId?: string
+  /** A session worker's request: its id in the persistent queue (src/queue.ts). */
+  readonly qid?: string
   readonly text?: string
   readonly answer?: string
   /** `handoff`: a merge's request for the worker's handoff; its answer goes to the survivor. */

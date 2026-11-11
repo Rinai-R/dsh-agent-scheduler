@@ -23,6 +23,12 @@ export interface RosterMember {
   readonly id: string
   readonly name: string
   readonly kind: 'fork' | 'worker'
+  /** Worker: a top-level Session of its own behind the queue (v2); absent: a subagent of the main Session (v1). */
+  readonly session?: true | undefined
+  /** Session worker: worktrees it was given (informational). */
+  readonly worktrees?: readonly string[] | undefined
+  /** A v1 worker converted into a session worker (its new id). */
+  readonly convertedTo?: string | undefined
   readonly state: MemberState
   /** Fork: the user's words. Worker: its role. */
   readonly text: string
@@ -88,6 +94,8 @@ export interface RosterRequest {
   readonly state: 'sent' | 'answered' | 'failed'
   /** Inbox id of the delivered message. */
   readonly messageId?: string | undefined
+  /** Its id in the persistent queue, for a session worker. */
+  readonly qid?: string | undefined
   readonly answer?: string | undefined
   readonly deliveredTo?: string | undefined
   /** `handoff`: a merge asked for this worker's handoff. */
@@ -299,6 +307,9 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         createdFor: agent.action === 'created' ? agent.for : existing?.createdFor,
         createdAt: agent.action === 'created' ? agent.at : existing?.createdAt,
         createdVia: agent.action === 'created' ? (agent.via === 'user' ? 'user' as const : undefined) : existing?.createdVia,
+        session: agent.action === 'created' ? (agent.session === true ? true as const : undefined) : existing?.session,
+        worktrees: agent.action === 'created' ? agent.worktrees : existing?.worktrees,
+        convertedTo: agent.convertedTo ?? existing?.convertedTo,
         settledThrough: existing?.settledThrough,
         ...(agent.action === 'failed'
           ? { reportedAt: event.time, reportFailed: true as const }
@@ -330,6 +341,7 @@ export function applyRoster(state: Roster, event: SessionEvent): Roster {
         // A second `sent` for a known request only adds the delivered message id.
         state: request.action === 'sent' ? (r?.state ?? 'sent') : request.action,
         messageId: request.messageId ?? r?.messageId,
+        qid: request.qid ?? r?.qid,
         answer: request.answer ?? request.detail ?? r?.answer,
         deliveredTo: request.deliveredTo ?? r?.deliveredTo,
         kind: request.kind ?? r?.kind,
@@ -494,9 +506,11 @@ function checkMember(m: unknown, view: boolean): void {
   if (!isRecord(m) || !isString(m.id) || !isString(m.name) || !isString(m.text)) fail('member')
   if (m.kind !== 'fork' && m.kind !== 'worker') fail('member kind')
   if (!['queued', 'started', 'done', 'failed', 'archived'].includes(m.state as string)) fail('member state')
-  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt', 'mergedInto', 'createdVia', 'accessPreset', 'accessBy']) if (!optionalString(m[key])) fail(`member ${key}`)
+  for (const key of ['role', 'cwd', 'model', 'from', 'area', 'detail', 'createdBy', 'createdFor', 'createdAt', 'mergedInto', 'createdVia', 'accessPreset', 'accessBy', 'convertedTo']) if (!optionalString(m[key])) fail(`member ${key}`)
   if (m.pickedModel !== undefined) checkForkModel(m.pickedModel)
   if (m.formerNames !== undefined && !(Array.isArray(m.formerNames) && m.formerNames.every(isString))) fail('member formerNames')
+  if (m.worktrees !== undefined && !(Array.isArray(m.worktrees) && m.worktrees.every(isString))) fail('member worktrees')
+  if (m.session !== undefined && m.session !== true) fail('member session')
   if (!view && m.settledThrough !== undefined && typeof m.settledThrough !== 'number') fail('member settledThrough')
   if (m.reportedAt !== undefined && typeof m.reportedAt !== 'number') fail('member reportedAt')
   if (m.reportFailed !== undefined && m.reportFailed !== true) fail('member reportFailed')

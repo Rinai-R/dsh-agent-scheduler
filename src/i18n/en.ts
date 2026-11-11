@@ -331,6 +331,10 @@ export const en: Record<keyof typeof zh, string> = {
   'fork.submitting': 'Forking…',
   'fork.cancel': 'Cancel',
 
+  'cmd.agents.convertUsage': 'Usage: /agents convert <worker>: turn an old (subagent) worker into a session worker',
+  'cmd.agents.converted': 'Converted {name} into a session worker: it carries its conversation, and you can open it from the sidebar and talk to it directly.',
+  'cmd.agents.convertedFresh': 'Converted {name} into a session worker (its session could not be copied; the new one starts from a handoff summary).',
+  'cmd.agents.oldWorker': '{name} is an old-style worker that only finishes what it has; run /agents convert {name} first, or create a new worker.',
   'cmd.agents.usage': 'Usage: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': 'Usage: /agents rename <name> <new-name>',
   'cmd.agents.needsValue': '{flag} needs a value',

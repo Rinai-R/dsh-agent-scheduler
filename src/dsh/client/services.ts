@@ -65,6 +65,8 @@ export interface ClientHost {
   chatAddress(parent: string, child: string): string
   /** Open a child's chat as a workspace view: the fallback when there is no right sidebar. */
   openSession(parent: string, child: string): void
+  /** Open a top-level Session (a session worker) in the centre, as the left sidebar does. */
+  openTopLevel(sessionId: string): void
 }
 
 type Result = { ok: true; value: unknown } | { ok: false; error: { code?: string; message?: string } }
@@ -128,6 +130,10 @@ export function clientHost(ctx: any): ClientHost {
     },
     openSession(parent, child) {
       ctx.uiWorkspace?.openSession?.({ parentSessionId: parent, childSessionId: child, mode: 'continuable' })
+    },
+    openTopLevel(sessionId) {
+      // asar:dsh-client-ui-workspace/lib/client.js:1473 `openSession(target)` replaces the main view.
+      ctx.uiWorkspace?.openSession?.(sessionId)
     },
   }
 }
