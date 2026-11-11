@@ -15,11 +15,13 @@ Agent Scheduler is an open source plugin for DeepSeek Harness (dsh). It turns th
 
 - **A fork per message:** With scheduling on, the lead is never blocked; each message gets its own fork.
 - **Long-lived workers:** One per repository or module, with its own session, directory and model.
-- **Split and merge:** A busy worker splits on a conflicting task, and the halves merge back later.
+- **Workers are sessions:** Each worker is a top-level session in the router's workspace, with a persistent queue in front of it; you can open it and talk to it directly.
 - **Agents page:** Live state, unread dots, and a lead inbox you can reorder.
 - **Deck:** A left-sidebar panel of pinned sessions and the ones with running workers or something waiting.
 - **Worker teams:** With Agent Teams on, each worker can lead a team of its own.
 - **8 languages:** The interface follows dsh's language setting.
+
+> **Workers share one write area.** A worker's session is created in the router's workspace, and DSH's `workspace-write` sandbox lets it write anywhere under that workspace (its session's working directory), not only in the worktree it was given. Workers are not isolated from one another: two workers on the same workspace can edit each other's files. Give each worker its own worktree, and keep repositories you do not want touched outside the router's workspace.
 
 ## Getting Started
 

@@ -31,14 +31,48 @@ export function isLive(agent: Agent, agents: AgentLookup): boolean {
   return state === undefined || state === FIBER_ACTIVE
 }
 
-/** The main Session of a tree has no parent. */
-export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
+// ------------------------------------------------------------------ session workers
+
+/** The record a top-level worker Session carries: the router (main Session) it belongs to. */
+export const OWNER_RECORD = 'plugin:dsh-agent-scheduler/owner'
+/** Which router a top-level Session works for; `null` when it is none (checked once per Session). */
+const routers = new WeakMap<object, string | null>()
 
 /**
- * @param agent - the main agent or one of its children.
- * @returns the main Session's id (a child's parent: every member is a direct child).
+ * The router a top-level worker Session belongs to. Only this plugin appends the owner record, and
+ * it says so through {@link markRouter}, so a Session read once without one stays a router.
+ * @param agent - any agent.
+ * @returns the router's Session id, or undefined.
  */
-export const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? agent.id
+export function routerOf(agent: Agent): string | undefined {
+  if (agent.session.header.parentSession !== undefined) return undefined
+  if (typeof agent.session.snapshotEvents !== 'function') return undefined
+  const known = routers.get(agent.session)
+  if (known !== undefined) return known ?? undefined
+  let found: string | null = null
+  for (const event of agent.session.snapshotEvents()) {
+    if (String(event.type) !== OWNER_RECORD) continue
+    const router = (event.data as { router?: unknown }).router
+    if (typeof router === 'string') found = router
+  }
+  routers.set(agent.session, found)
+  return found ?? undefined
+}
+
+/** Remember that a Session now works for `router` (its owner record was just appended). */
+export function markRouter(agent: Agent, router: string): void { routers.set(agent.session, router) }
+
+/** A main Session (a router): no parent, and not a worker Session of a router. */
+export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined && routerOf(agent) === undefined
+
+/** A worker that is a top-level Session of its own (scheduler v2). */
+export const isSessionWorker = (agent: Agent): boolean => routerOf(agent) !== undefined
+
+/**
+ * @param agent - the main agent, one of its children, or one of its top-level worker Sessions.
+ * @returns the main Session's id.
+ */
+export const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? routerOf(agent) ?? agent.id
 
 /**
  * @param agent - any agent.

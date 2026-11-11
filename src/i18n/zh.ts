@@ -343,6 +343,10 @@ export const zh = {
   'fork.submitting': 'Fork 中…',
   'fork.cancel': '取消',
 
+  'cmd.agents.convertUsage': '用法：/agents convert <worker>：把旧式（子智能体）worker 转成独立会话 worker',
+  'cmd.agents.converted': '已把 {name} 转成独立会话 worker：带着它的对话，之后从左栏也能直接打开它聊。',
+  'cmd.agents.convertedFresh': '已把 {name} 转成独立会话 worker（无法复制原会话，新会话从交接摘要开始）。',
+  'cmd.agents.oldWorker': '{name} 是旧式 worker，只把手上的活做完；先 /agents convert {name}，或新建一个 worker。',
   'cmd.agents.usage': '用法：/agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': '用法：/agents rename <name> <new-name>',
   'cmd.agents.needsValue': '{flag} 需要一个值',

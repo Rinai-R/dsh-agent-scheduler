@@ -54,10 +54,10 @@ describe('agent_merge', () => {
     const imageId = scheduler.ledgerOf(lead).find('hub-image')!.id
     const asrId = scheduler.ledgerOf(lead).find('hub-asr')!.id
     const reportedBefore = scheduler.ledgerOf(lead).members.get(imageId)?.reportedAt
-    const tool = ctx.tools.get('agent_merge', lead)!
+    // v2 removed the agent_merge tool; /agents merge still merges v1 workers.
+    expect(ctx.tools.get('agent_merge', lead)).toBeUndefined()
     const version = scheduler.rosterVersion(scheduler.ledgerOf(lead))
-    await expect(tool.execute({ worker: 'hub-image', with: 'hub-asr' }, exec(lead))).rejects.toThrow(/rosterVersion is required/)
-    await expect(tool.execute({ worker: 'hub-image', with: 'hub-asr', into: 'nobody', rosterVersion: version }, exec(lead))).rejects.toThrow(/into must be/)
+    const tool = { execute: async (a: { worker: string; with: string; into?: string; rosterVersion?: string; name?: string }, _e: unknown) => scheduler.merge(lead, { absorbed: a.worker, into: a.with, ...(a.name === undefined ? {} : { name: a.name }), ...(a.rosterVersion === undefined ? {} : { rosterVersion: a.rosterVersion }) }) }
     // Within one area the survivor may take back the area's name from before the split.
     const out = await tool.execute({ worker: 'hub-image', with: 'hub-asr', into: 'hub-asr', name: 'hub', rosterVersion: version }, exec(lead)) as Record<string, unknown>
     expect(out).toMatchObject({ merge: 'mg-1', request: 'r-3', absorbed: 'hub-image', into: 'hub-asr', name: 'hub' })
@@ -110,9 +110,6 @@ describe('agent_merge', () => {
     await expect(scheduler.merge(lead, { absorbed: 'docs', into: 'hub-asr', name: 'docs' })).rejects.toThrow(/already taken/)
     const worker = { id: scheduler.ledgerOf(lead).find('hub-asr')!.id, session: { header: { parentSession: lead.id } } } as never
     await expect(scheduler.merge(worker, { absorbed: 'hub-image', into: 'docs' })).rejects.toThrow(/only the lead/)
-    // While scheduling is on the lead names what it acts on.
-    scheduler.setMode(lead, true)
-    await expect(ctx.tools.get('agent_merge', lead)!.execute({ worker: 'docs', with: 'hub-asr', rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) }, exec(lead))).rejects.toThrow(/must say what this merge is for/)
   })
 
   it('fails when uncommitted changes are left without being handed over, and merges once they are', async () => {

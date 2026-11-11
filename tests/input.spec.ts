@@ -67,10 +67,12 @@ describe('input rule', () => {
     // Same bytes in both system prompts (message ids aside), so the fork keeps the lead's cache prefix.
     expect(leadReq.messages[0]!.role).toBe('system')
     expect(JSON.stringify(leadReq.messages[0]!.content)).toBe(JSON.stringify(forkReq.messages[0]!.content))
-    for (const rule of ['only a follow-up to one request already given', 'even in the same files or feature', 'already has open requests', 'agent_split with owner: <owner>', 'it goes by agent_send to that worker, no split', 'one worker for the whole repository or module', 'both concrete, never the area name again', 'prefer agent_split, which renames both sides', 'its own new worktree as cwd', 'never a directory another worker uses', 'still do not queue it', 'agent_create without from']) {
+    for (const rule of ['only a follow-up to one request already given', 'even in the same files or feature', 'also when it is running or has open requests', 'each request waits in its queue and runs as a turn of its own', 'agent_create with from: <owner>', 'one worker for the whole repository or module', 'a concrete name and role for the new task', 'its own new worktree as cwd inside this workspace', 'send it to the owner instead', 'agent_create without from']) {
       expect(JSON.stringify(leadReq.messages[0])).toContain(rule)
       expect(JSON.stringify(forkReq.messages[0])).toContain(rule)
     }
+    // The removed tool is never named to the model.
+    expect(JSON.stringify(leadReq.messages[0])).not.toContain('agent_split')
     // No exception lets a new task queue behind a worker's uncommitted changes.
     expect(FORK_NOTICE).not.toMatch(/agent_send it|build on the owner/u)
   })

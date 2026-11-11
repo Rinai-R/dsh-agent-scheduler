@@ -60,7 +60,7 @@ const CARD_STATE: Record<string, CardState> = { queued: 'queued', started: 'runn
 interface Ctx { key: string; id: string; state?: State; start?: { location: unknown } }
 
 /** One roster row as the host projection emits it. */
-interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number; readonly accessPreset?: string; readonly accessBy?: 'user' | 'lead' | 'inherited' }
+interface Member { readonly id: string; readonly name: string; readonly kind: 'fork' | 'worker'; readonly state: string; readonly text: string; readonly role?: string; readonly cwd?: string; readonly model?: string; readonly area?: string; readonly detail?: string; readonly pickedModel?: ForkModel; readonly reportedAt?: number; readonly reportFailed?: true; readonly seenAt?: number; readonly accessPreset?: string; readonly accessBy?: 'user' | 'lead' | 'inherited'; readonly session?: true }
 /** Provider route and model, as `/fork model` records it. */
 export interface ForkModel { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
 interface Roster {
@@ -1158,6 +1158,8 @@ export function createAgentsPage(ctx: {
   sidebarRight?: SidebarFace | undefined
   /** The sidebar resource address of a member's native chat. */
   chatAddress: (parent: string, child: string) => string
+  /** Open a top-level Session (a session worker) in the centre. */
+  openTopLevel?: ((sessionId: string) => void) | undefined
 }, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: CatalogSource) {
   return memo(function AgentsPage(props: {
     sessionId?: string
@@ -1315,6 +1317,8 @@ export function createAgentsPage(ctx: {
       setPicked(member.id)
       // Opening the chat reads its latest report; a prompt waiting stays marked until answered.
       if (reviewOf(member) !== undefined) markSeen(props.sessionId, member.id)
+      // A session worker is a top-level Session: it opens in the centre, like a left-sidebar click.
+      if (member.session === true) { ctx.openTopLevel?.(member.id); return }
       const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
       tab.tab.actions.openResource(ctx.chatAddress(props.sessionId, member.id), placement)
       if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
@@ -1656,7 +1660,7 @@ export function apply(ctx: any): void {
   registerTabType(ctx, { id: AGENTS_ID, kind: AGENTS_KIND, title: () => t('agents.title'), keepMounted: true })
   ctx.effect(() => keepChatTabsMounted(ctx), 'agent-scheduler: keep agent chats mounted')
   ctx.effect(() => steadyTabStrips(doc), 'agent-scheduler: keep the sidebar tab strip still')
-  registerSlot(ctx, 'paneTab', { key: AGENTS_ID }, createAgentsPage({ get sidebarRight() { return sidebar() }, chatAddress: host.chatAddress }, run, has, catalog))
+  registerSlot(ctx, 'paneTab', { key: AGENTS_ID }, createAgentsPage({ get sidebarRight() { return sidebar() }, chatAddress: host.chatAddress, openTopLevel: host.openTopLevel }, run, has, catalog))
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))

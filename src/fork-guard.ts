@@ -22,7 +22,7 @@ import type { Agent } from './dsh/types.js'
  */
 export const FORK_TOOLS: ReadonlySet<string> = new Set([
   // routing
-  'agent_list', 'agent_send', 'agent_create', 'agent_split', 'agent_merge', 'agent_recall', 'agent_interrupt', 'agent_archive', 'report',
+  'agent_list', 'agent_send', 'agent_create', 'agent_recall', 'agent_interrupt', 'agent_archive', 'report',
   // every user message reaches a fork first, so "set the role" from the user is the fork's to carry out
   'role_set',
   // reading, and a shell that the fork Session's read-only sandbox keeps from writing

@@ -46,14 +46,12 @@ describe('agent_split', () => {
     await vi.waitFor(() => { expect(ctx.agents.get(SessionId(hubId))?.status).toBe('running') })
 
     const newDir = mkdtempSync(join(tmpdir(), 'hub-image-'))
-    const split = ctx.tools.get('agent_split', lead)!
+    // v2 removed the agent_split tool; the split itself stays for v1 workers (/agents fork --owner-name).
+    expect(ctx.tools.get('agent_split', lead)).toBeUndefined()
     const splitArgs = { owner: 'hub', ownerName: 'hub-asr', ownerRole: 'smoke-tests ASR in hub', name: 'hub-image', role: 'fixes gpt_image in hub', cwd: newDir, task: 'fix gpt_image' }
-    // Like agent_create: the tool wants the rosterVersion from agent_list, and the lead says what it is for.
-    await expect(split.execute(splitArgs, exec(lead))).rejects.toThrow(/rosterVersion is required/)
     const rosterVersion = scheduler.rosterVersion(scheduler.ledgerOf(lead))
-    await expect(split.execute({ ...splitArgs, rosterVersion }, exec(lead))).rejects.toThrow(/The lead must say what the new worker is for/)
-    await expect(split.execute({ ...splitArgs, rosterVersion: '0.0.stale', for: 'r-1' }, exec(lead))).rejects.toThrow(/The roster changed since you read it/)
-    const out = await split.execute({ ...splitArgs, rosterVersion, for: 'r-1' }, exec(lead)) as Record<string, unknown>
+    await expect(scheduler.split(lead, { ...splitArgs, rosterVersion: '0.0.stale', for: 'r-1' })).rejects.toThrow(/The roster changed since you read it/)
+    const out = await scheduler.split(lead, { ...splitArgs, rosterVersion, for: 'r-1' }) as unknown as Record<string, unknown>
     expect(out).toMatchObject({ area: 'hub', owner: 'hub-asr', formerName: 'hub', name: 'hub-image', request: 'r-2', queued: false, ownerNotified: true, seeded: true })
 
     const ledger = scheduler.ledgerOf(lead)
@@ -236,15 +234,15 @@ describe('Agents page', () => {
 })
 
 describe('fork notice', () => {
-  it('says: coarse first, send when free, split on a collision with both sides renamed', () => {
+  it('says: coarse first, queue to the owner, and a copy of it only for parallel work', () => {
     for (const rule of [
-      'Workers start coarse and split only on a collision',
-      'when that worker is idle and has no open requests, it goes by agent_send to that worker, no split',
-      'agent_split with owner: <owner>, ownerName and ownerRole rewritten',
-      'both concrete, never the area name again',
+      'Workers start coarse and branch off only when work must run in parallel',
+      'agent_send to that worker, also when it is running or has open requests',
+      'agent_create with from: <owner>, which starts the new worker as a copy of the owner\'s session',
+      'a concrete name and role for the new task',
       'one worker for the whole repository or module',
-      'inside an area prefer agent_split, which renames both sides',
     ]) expect(FORK_NOTICE).toContain(rule)
+    expect(FORK_NOTICE).not.toContain('agent_split')
   })
 })
 

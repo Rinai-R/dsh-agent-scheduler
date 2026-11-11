@@ -305,6 +305,10 @@ export const ru: Record<keyof typeof zh, string> = {
   'fork.submitting': 'Ответвление…',
   'fork.cancel': 'Отмена',
 
+  'cmd.agents.convertUsage': 'Использование: /agents convert <worker>: превратить старого воркера (субагента) в воркера-сессию',
+  'cmd.agents.converted': '{name} теперь воркер-сессия: разговор сохранён, его можно открыть в боковой панели и говорить с ним напрямую.',
+  'cmd.agents.convertedFresh': '{name} теперь воркер-сессия (исходную сессию не удалось скопировать; новая начинается со сводки передачи).',
+  'cmd.agents.oldWorker': '{name} — воркер старого типа, он только доделывает то, что у него есть; сначала выполните /agents convert {name} или создайте нового воркера.',
   'cmd.agents.usage': 'Использование: /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': 'Использование: /agents rename <name> <new-name>',
   'cmd.agents.needsValue': 'Для {flag} нужно значение',

@@ -96,7 +96,7 @@ describe('fork guard', () => {
   })
 
   it('allows only reading and routing tools', () => {
-    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'agent_split', 'agent_merge', 'agent_recall', 'agent_interrupt', 'agent_archive', 'role_set', 'report', 'read', 'grep', 'glob', 'read_image', 'web_fetch', 'bash', 'pwsh', 'session_search', 'get_goal', 'skill', 'run_code']) expect(FORK_TOOLS.has(tool)).toBe(true)
+    for (const tool of ['agent_list', 'agent_send', 'agent_create', 'agent_recall', 'agent_interrupt', 'agent_archive', 'role_set', 'report', 'read', 'grep', 'glob', 'read_image', 'web_fetch', 'bash', 'pwsh', 'session_search', 'get_goal', 'skill', 'run_code']) expect(FORK_TOOLS.has(tool)).toBe(true)
     for (const tool of ['edit', 'write', 'apply_patch', 'str_replace_editor', 'subagent', 'subagent_fork', 'workflow', 'send_message', 'list_agents', 'remote_send_message', 'create_goal', 'schedule_create', 'job_list', 'ask_user_question', 'agent_model', 'agent_access', 'present', 'todo_write', 'cua_driver_native__click', 'some_new_tool']) expect(FORK_TOOLS.has(tool)).toBe(false)
   })
 

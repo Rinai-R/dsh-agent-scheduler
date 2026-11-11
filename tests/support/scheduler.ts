@@ -14,7 +14,15 @@ import { restoreMemberModel } from '../../src/member-model.js'
 import { stored, text } from './harness.js'
 import { toolCallResponse } from './mock-adapter.js'
 
-export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Scheduler {
+const installed = new WeakMap<Scheduler, Array<() => void>>()
+
+/** Stop a scheduler from hearing the composition (what a restart does to the old process). */
+export function uninstall(scheduler: Scheduler): void {
+  for (const off of installed.get(scheduler) ?? []) off()
+  scheduler.disconnectQueue()
+}
+
+export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}, opts: { tools?: boolean } = {}): Scheduler {
   const scheduler = new Scheduler({
     subagents: ctx.subagents,
     agents: ctx.agents,
@@ -25,18 +33,23 @@ export function install(ctx: Context, deps: Partial<SchedulerDeps> = {}): Schedu
     defaultOn: true,
     ...deps,
   })
-  ctx.on('agent/inbox/inserted', ({ agent, message }) => { scheduler.onInserted(agent, message) })
-  ctx.on('agent/pre-step', (payload, next) => preStep(scheduler, payload, next))
-  ctx.on('agent/status', ({ agent, status }) => { scheduler.onStatus(agent, status) })
+  const offs: Array<() => void> = []
+  const on = (name: string, listener: (...args: never[]) => unknown) => { const off = (ctx.on as (n: string, l: unknown) => unknown)(name, listener); if (typeof off === 'function') offs.push(off as () => void) }
+  on('agent/inbox/inserted', ({ agent, message }: { agent: Agent; message: never }) => { scheduler.onInserted(agent, message) })
+  on('agent/pre-step', (payload: never, next: never) => preStep(scheduler, payload, next))
+  on('agent/status', ({ agent, status }: { agent: Agent; status: 'idle' | 'running' }) => { scheduler.onStatus(agent, status) })
   // As the rule does: a resumed main Session settles what the restart cut off.
-  ctx.on('agent/created', ({ agent, source }) => {
+  on('agent/created', ({ agent, source }: { agent: Agent; source: string }) => {
     if (source === 'resume' && agent.session.header.parentSession === undefined) setTimeout(() => { void scheduler.recover(agent) }, 0)
     return undefined
   })
-  ctx.on('agent/created', ({ agent }) => { restoreMemberModel(scheduler, agent); scheduler.adoptForkSandbox(agent); return undefined })
+  on('agent/created', ({ agent }: { agent: Agent }) => { restoreMemberModel(scheduler, agent); scheduler.adoptForkSandbox(agent); return undefined })
+  installed.set(scheduler, offs)
   // As the rule does: the activation hook pins a fork's read-only sandbox before its first step.
   onSubagentStart(ctx, childId => { scheduler.pinForkSession(childId) })
   ctx.on('agent/disposed', () => { if (scheduler.queued().length > 0) void scheduler.drain() })
+  // A second scheduler on the same composition (a restart, an upgrade) listens but registers no tools again.
+  if (opts.tools === false) return scheduler
   for (const tool of schedulerTools(scheduler, ctx.agents as never)) ctx.tools.register(tool)
   ctx.tools.guard(forkGuard(agent => scheduler.forkNameOf(agent)))
   ctx.systemPrompt.section({ name: 'agent-scheduler', order: 900, text: c => c.agent === undefined ? '' : sectionFor(scheduler, c.agent) })

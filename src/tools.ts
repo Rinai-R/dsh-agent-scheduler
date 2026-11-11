@@ -4,6 +4,7 @@
  */
 import type { Agent, ToolDefinition } from './dsh/types.js'
 import { defineTool, statusOf, type AgentLookup } from './dsh/host/index.js'
+import { ownerOf } from './dsh/host/index.js'
 import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, LEAD_OFF_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
 import { mailPreview } from './projection.js'
@@ -65,17 +66,17 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
   return [
     defineTool({
       name: 'agent_create',
-      description: 'Create a long-lived worker agent with its own session, for one repository or area: start coarse, one worker per repository or module, named and described after it. Give it a role, optionally a working directory (one worker per directory or worktree), a model ("provider/model"), a preset, and a first task; the task becomes a request whose answer goes to the lead, not back to you. Call agent_list first and pass its rosterVersion: creations and deliveries of this session run one at a time, and one made on a roster that changed since is refused with the current roster. A fork creates at most one worker for its message; the lead names with for the fork-N or r-N it acts on, which also gets at most one (optional while scheduling is off, when the user talks to the lead directly).',
+      description: 'Create a long-lived worker: a session of its own in this workspace, which the user can also open and talk to directly. Start coarse, one worker per repository or module, named and described after it. Give it a role, optionally a worktree (cwd, created for you with repo and branch; it must be inside this workspace, and the worker may also work in other worktrees there), a model ("provider/model"), a preset, and a first task; the task becomes a request whose answer goes to the lead, not back to you. Call agent_list first and pass its rosterVersion: creations and deliveries of this session run one at a time, and one made on a roster that changed since is refused with the current roster. A fork creates at most one worker for its message; the lead names with for the fork-N or r-N it acts on, which also gets at most one (optional while scheduling is off, when the user talks to the lead directly).',
       parameters: {
         name: { type: 'string', required: true, description: 'Unique lower-kebab-case name, never reused.' },
         role: { type: 'string', required: true, description: 'What this worker is responsible for.' },
-        cwd: { type: 'string', description: 'Working directory or worktree, not shared with another active worker; omit to use the session\'s. Required with from when the source worker has one: a new worktree of its own. With repo and branch, it is created for you as a new git worktree.' },
+        cwd: { type: 'string', description: 'A worktree for its first work, inside this workspace (a worker writes only inside the workspace its session was created in). With repo and branch, it is created for you as a new git worktree. Informational: the worker is not bound to it.' },
         repo: { type: 'string', description: 'With branch: an existing checkout of the repository; cwd (which must not exist yet) is created from it as a new git worktree on a new branch. Use it instead of running git yourself.' },
         branch: { type: 'string', description: 'New branch for the worktree at cwd, e.g. feat/<slug> or fix/<slug>.' },
         base: { type: 'string', description: 'What the new branch starts from; default origin/main (fetched first).' },
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the user\'s worker model (Agents page or /worker model), then the configured worker model, then the runtime default.' },
-        from: { type: 'string', description: 'Existing worker name: the new worker continues its conversation (then no preset) and needs a new worktree of its own as cwd, never the owner\'s directory. For a new task in a busy worker\'s area prefer agent_split, which also renames the owner.' },
+        from: { type: 'string', description: 'Existing worker name: the new worker starts as a copy of its session (its conversation so far), then goes its own way.' },
         task: { type: 'string', description: 'Optional first request.' },
         rosterVersion: VERSION,
         for: { type: 'string', description: 'The lead only (a fork always creates for its own message): the fork-N whose conclusion or the r-N whose reply this worker is for; each gets at most one worker. Required for the lead while scheduling is on; optional while it is off (the user then talks to the lead directly, with no fork in between).' },
@@ -96,40 +97,8 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
       },
     }),
     defineTool({
-      name: 'agent_split',
-      description: 'Split a busy worker\'s area when a new task (not a follow-up) arrives while it is running or has open requests: the owner is renamed and its role narrowed to the work it already has, and a new worker forked from it (its conversation as context) takes the task in parallel in its own new worktree. Both keep the area; the old name stays reserved. Write both names and roles concretely for what each does (e.g. hub → hub-asr "smoke-tests ASR in hub" and hub-image "fixes gpt_image in hub"). Like agent_create: pass the rosterVersion from agent_list, and the lead passes for (optional while scheduling is off). The answer goes to the lead. If the owner is idle with nothing open, agent_send the task to it instead.',
-      parameters: {
-        owner: { type: 'string', required: true, description: 'The worker that owns the area now.' },
-        ownerName: { type: 'string', required: true, description: 'Its new lower-kebab-case name for the work it keeps; never used before.' },
-        ownerRole: { type: 'string', required: true, description: 'Its new role: only the work it already has.' },
-        name: { type: 'string', required: true, description: 'Lower-kebab-case name of the new worker, for the new task.' },
-        role: { type: 'string', required: true, description: 'What the new worker is responsible for.' },
-        cwd: { type: 'string', description: 'A new worktree of its own; required when the owner has a directory. With repo and branch, it is created for you.' },
-        repo: { type: 'string', description: 'With branch: an existing checkout of the repository; cwd is created from it as a new git worktree.' },
-        branch: { type: 'string', description: 'New branch for the worktree at cwd.' },
-        base: { type: 'string', description: 'What the new branch starts from; default origin/main.' },
-        model: { type: 'string', description: 'Optional "provider/model" for the new worker.' },
-        task: { type: 'string', required: true, description: 'Its first request.' },
-        rosterVersion: VERSION,
-        for: { type: 'string', description: 'The lead only, as for agent_create: the fork-N or r-N the new worker is for; optional while scheduling is off.' },
-      },
-      output: { schema: OK, render: json },
-      execute: async (args, exec) => {
-        const a = args as { owner: string; ownerName: string; ownerRole: string; name: string; role: string; cwd?: string; repo?: string; branch?: string; base?: string; model?: string; task: string; rosterVersion?: string; for?: string }
-        if ((a.repo === undefined) !== (a.branch === undefined)) throw new Error('repo and branch go together: both create the new worktree at cwd')
-        if (a.base !== undefined && a.repo === undefined) throw new Error('base only applies with repo and branch')
-        const worktree = a.repo === undefined || a.branch === undefined ? undefined : { repo: a.repo, branch: a.branch, base: a.base }
-        const agent = caller(exec)
-        requireVersion(agent, a.rosterVersion)
-        const named = a.for === '' ? undefined : a.for
-        // As for agent_create: the lead names its fork-N or r-N only while scheduling is on.
-        if (isMainSession(agent) && named === undefined && scheduler.isOn(agent)) throw new DispatchRefused('The lead must say what the new worker is for: pass for: the fork-N whose conclusion or the r-N whose reply you act on. If that fork already created a worker, agent_send it instead.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
-        return scheduler.split(agent, { owner: a.owner, ownerName: a.ownerName, ownerRole: a.ownerRole, name: a.name, role: a.role, cwd: a.cwd, worktree, task: a.task, model: a.model === undefined ? undefined : parseModel(a.model), rosterVersion: a.rosterVersion, for: named })
-      },
-    }),
-    defineTool({
       name: 'agent_send',
-      description: 'Send a request to a worker or fork by name, passing the rosterVersion from agent_list (refused when missing or stale, with the current roster). Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. Use it only for a follow-up to a request the target already has (rework, a question, review comments, a change of direction). A new task in its area also goes here while the target is idle with nothing open. If the target is running or has open requests, anything else piles up behind that work: for a new task in the same area, even in the same files, use agent_split instead, so it runs in parallel.',
+      description: 'Send a request to a worker or fork by name, passing the rosterVersion from agent_list (refused when missing or stale, with the current roster). Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. Requests to one worker queue up and run in order, each as a turn of its own; a busy worker takes the next when its current turn ends. For work that should run in parallel, create another worker (agent_create, with from to start from this one\'s conversation).',
       parameters: {
         to: { type: 'string', required: true, description: 'Name of the worker or fork.' },
         message: { type: 'string', required: true, description: 'Self-contained request.' },
@@ -145,7 +114,7 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
     }),
     defineTool({
       name: 'agent_list',
-      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, the lead\'s inbox (answers waiting for the lead, each summarized; the whole text reaches the lead when it is free), "history": archived and merged members with their session ids (agent_recall reads them), and the rosterVersion that agent_create, agent_split and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
+      description: 'List this session\'s workers with their state (and "open": how many requests each has not answered yet, "createdFor": the fork-N or r-N it was created for, "area": workers split from one area share it, "formerNames": names it had), the open requests, the lead\'s inbox (answers waiting for the lead, each summarized; the whole text reaches the lead when it is free), "history": archived and merged members with their session ids (agent_recall reads them), and the rosterVersion that agent_create and agent_send require. Forks are the router\'s own one-message agents, not workers, and are left out unless you ask for them with forks: true.',
       parameters: {
         forks: { type: 'boolean', description: 'Also list forks, archived ones included: a debugging view, not part of routing.' },
         history: { type: 'boolean', description: 'List every archived and merged member under history, not only the latest 20.' },
@@ -165,6 +134,10 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
             ...(m.mergedFrom === undefined ? {} : { mergedFrom: m.mergedFrom.map(f => ({ name: f.name, session: f.session })) }),
             ...(m.kind === 'fork' ? { input: m.text.slice(0, 120) } : { role: m.role ?? '' }),
             ...(m.area === undefined ? {} : { area: m.area }),
+            // v2: a top-level Session the user can open; v1 workers only finish what they have.
+            ...(m.kind === 'worker' ? { workerKind: m.session === true ? 'session' : 'subagent (old: finishes open requests; /agents convert to keep it)' } : {}),
+            ...(m.worktrees === undefined ? {} : { worktrees: [...m.worktrees] }),
+            ...(m.session === true ? { queue: scheduler.queueSummary(m.id) } : {}),
             ...(m.formerNames === undefined ? {} : { formerNames: [...m.formerNames] }),
             ...(m.cwd === undefined ? {} : { cwd: m.cwd }),
             // The model in effect: its own choice (agent_model / agent-model) over the start model.
@@ -212,33 +185,6 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
       },
       output: { schema: OK, render: json },
       execute: async (args, exec) => JSON.parse(JSON.stringify(await scheduler.recall(caller(exec), args as { name?: string; session?: string; query?: string; limit?: number; around?: number; includeInherited?: boolean }))) as Record<string, never>,
-    }),
-    defineTool({
-      name: 'agent_merge',
-      description: 'Merge one worker into another, the reverse of agent_split: when two workers (usually split from one area) should be one again. The absorbed worker first writes a handoff (what is done, in progress, decided, open, which files, branch/PR, uncommitted changes) and must have committed its code or handed the changes over; then it is archived, its names reach the survivor, and the survivor gets the handoff as a message. Refused while the absorbed worker is running or owes answers. Pass the rosterVersion from agent_list; the lead passes for while scheduling is on. Without into, the side with work in hand (then the area\'s original owner, then the older) stays. The outcome comes to the lead as "[merged mg-N: …]" or "[merge mg-N … failed: …]".',
-      parameters: {
-        worker: { type: 'string', required: true, description: 'One of the two workers.' },
-        with: { type: 'string', required: true, description: 'The other worker.' },
-        into: { type: 'string', description: 'Which of the two stays; default as described.' },
-        name: { type: 'string', description: 'The survivor\'s new name: a new one, one it had, or, within one area, a name the other had (e.g. the area\'s name from before the split).' },
-        role: { type: 'string', description: 'The survivor\'s role after the merge; default its own widened by the other\'s.' },
-        rosterVersion: VERSION,
-        for: { type: 'string', description: 'The lead only, as for agent_create: the fork-N or r-N you act on; optional while scheduling is off.' },
-      },
-      output: { schema: OK, render: json },
-      execute: async (args, exec) => {
-        const a = args as { worker: string; with: string; into?: string; name?: string; role?: string; rosterVersion?: string; for?: string }
-        const agent = caller(exec)
-        requireVersion(agent, a.rosterVersion)
-        const named = a.for === '' ? undefined : a.for
-        if (isMainSession(agent) && named === undefined && scheduler.isOn(agent)) throw new DispatchRefused('The lead must say what this merge is for: pass for: the fork-N whose conclusion or the r-N whose reply you act on.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
-        let pair: { absorbed: string; into: string }
-        if (a.into === undefined || a.into === '') pair = scheduler.pickSurvivor(agent, a.worker, a.with)
-        else if (a.into === a.worker) pair = { absorbed: a.with, into: a.worker }
-        else if (a.into === a.with) pair = { absorbed: a.worker, into: a.with }
-        else throw new Error(`into must be "${a.worker}" or "${a.with}"`)
-        return scheduler.merge(agent, { ...pair, name: a.name, role: a.role, rosterVersion: a.rosterVersion, for: named })
-      },
     }),
     defineTool({
       name: 'agent_model',
@@ -348,7 +294,12 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   if (!scheduler.takesPart(agent)) return ''
   const role = scheduler.roleFor(agent)
   const ledger = scheduler.ledgerOf(agent)
-  const isWorker = ledger.members.get(agent.id)?.kind === 'worker'
+  // A session worker whose router is not resident still knows who it is from its own owner record.
+  const owner = ownerOf(agent)
+  const listed = ledger.members.get(agent.id)
+  const isWorker = listed?.kind === 'worker' || owner !== undefined
+  // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
+  const self = listed ?? (owner === undefined ? undefined : { id: agent.id, name: owner.name, kind: 'worker' as const, state: 'started' as const, text: owner.role, role: owner.role, session: true as const, ...(owner.worktrees === undefined ? {} : { worktrees: owner.worktrees }) })
   // The lead with scheduling off talks to the user itself. A plain chat (no forks or workers yet)
   // gets no section at all, so the switch costs nothing until the lead first creates a worker;
   // the tool descriptions say enough for that first creation.
@@ -360,20 +311,21 @@ export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   const lines = isWorker
     ? [
         '# Agent Scheduler: worker',
-        `Your name is "${scheduler.ledgerOf(agent).members.get(agent.id)?.name ?? ''}" (the user may rename you; this is the current one).`,
-        'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead.' + (teams ? '' : ' Do not use send_message.'),
-        ...(teams ? [WORKER_TEAM_NOTICE] : []),
+        `Your name is "${self?.name ?? ''}" (the user may rename you; this is the current one).`,
+        self?.session === true
+          ? 'You are a long-lived worker with a session of your own; your router sent you here. Requests arrive as "[request r-N from name]": answer each, then end your turn, and your closing message (or report) goes back to the router as the answer. The user may also talk to you here directly: nothing of that goes to the router, unless the user asks you to share or push something, then call report with a summary (and where in this session the details are; the router can read them with agent_recall).'
+          : 'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead.' + (teams ? '' : ' Do not use send_message.'),
+        ...(teams && self?.session !== true ? [WORKER_TEAM_NOTICE] : []),
+        ...(self?.session === true && (self.worktrees?.length ?? 0) > 0 ? [`Worktrees you were given: ${self.worktrees!.join(', ')} (you may work in others under your workspace).`] : []),
       ]
     : [
         '# Agent Scheduler',
         'The user talks to a lead; every user message is handed to a fresh fork of the lead.',
         FORK_NOTICE,
         LEAD_NOTICE,
-        'Workers are long-lived agents with their own sessions. Use agent_list to see them, agent_create to make one (coarse: per repository or module), agent_send to delegate, agent_split to split a busy worker\'s area for a new task, agent_merge to merge two workers back into one once their split is no longer needed; all four take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
+        'Workers are long-lived agents, each a session of its own in this workspace that the user can also open and talk to directly. Use agent_list to see them, agent_create to make one (coarse: per repository or module; it may get a worktree, and can work in others), agent_send to delegate (requests to one worker queue up in order); both take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
         ...(teams ? [ON_TEAM_NOTICE] : []),
       ]
-  // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
-  const self = isWorker ? scheduler.ledgerOf(agent).members.get(agent.id) : undefined
   // A worker that absorbed others: where their history is, so it can recall what the handoff left out.
   for (const from of self?.mergedFrom ?? []) lines.push(`You absorbed ${from.name} (merge ${from.merge}); its history is session ${from.session}: use agent_recall({ name: "${from.name}", query }) to look details up.`)
   if (self?.area !== undefined && self.formerNames !== undefined && self.formerNames.length > 0) lines.push(`You are now worker "${self.name}" (formerly ${self.formerNames.map(n => `"${n}"`).join(', ')}) in area "${self.area}"; workers split from the same area share it, each with its own work.`)

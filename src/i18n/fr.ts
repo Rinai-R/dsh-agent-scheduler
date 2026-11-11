@@ -301,6 +301,10 @@ export const fr: Record<keyof typeof zh, string> = {
   'fork.submitting': 'Duplication…',
   'fork.cancel': 'Annuler',
 
+  'cmd.agents.convertUsage': 'Utilisation : /agents convert <worker> : transforme un ancien worker (sous-agent) en worker de session',
+  'cmd.agents.converted': '{name} est maintenant un worker de session : il garde sa conversation, et tu peux l\'ouvrir depuis la barre latérale pour lui parler directement.',
+  'cmd.agents.convertedFresh': '{name} est maintenant un worker de session (sa session n\'a pas pu être copiée ; la nouvelle part d\'un résumé de passation).',
+  'cmd.agents.oldWorker': '{name} est un ancien worker qui termine seulement ce qu\'il a ; lance d\'abord /agents convert {name}, ou crée un nouveau worker.',
   'cmd.agents.usage': 'Utilisation : /agents new <name> [--cwd <dir>] [--model <provider>/<model>[:effort]] <role> | /agents rename <name> <new-name> | /agents archive <name> | /agents archive done | /agents seen <name> | /agents seen all | /agents inbox … | /agents merge <a> into <b> | /agents fork <worker> <new-name>',
   'cmd.agents.renameUsage': 'Utilisation : /agents rename <name> <new-name>',
   'cmd.agents.needsValue': '{flag} nécessite une valeur',
