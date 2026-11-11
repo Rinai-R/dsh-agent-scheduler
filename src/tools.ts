@@ -7,6 +7,7 @@ import { defineTool, statusOf, type AgentLookup } from './dsh/host/index.js'
 import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, SESSION_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
 import { mailPreview } from './projection.js'
+import { BRIEF_PARAMETER, parseBrief } from './brief.js'
 
 type Live = AgentLookup
 
@@ -76,12 +77,14 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
         preset: { type: 'string', description: 'Optional agent preset; default is this session\'s preset.' },
         model: { type: 'string', description: 'Optional "provider/model"; default is the user\'s worker model (Agents page or /worker model), then the configured worker model, then the runtime default.' },
         from: { type: 'string', description: 'Existing worker name: the new worker starts as a copy of its session (its conversation so far), then goes its own way.' },
-        task: { type: 'string', description: 'Optional first request.' },
+        brief: BRIEF_PARAMETER,
+        task: { type: 'string', description: 'With brief: an optional extra note to the first work. A first task always needs brief; omit both to create a worker that waits.' },
         rosterVersion: VERSION,
         for: { type: 'string', description: 'The lead only (a fork always creates for its own message): the fork-N whose conclusion or the r-N whose reply this worker is for; each gets at most one worker. Required for the lead while scheduling is on; optional while it is off (the user then talks to the lead directly, with no fork in between).' },
       },
       output: { schema: OK, render: json },
       execute: async (args, exec) => {
+        const brief = (args as { brief?: unknown }).brief === undefined ? undefined : parseBrief((args as { brief?: unknown }).brief)
         const a = args as { name: string; role: string; cwd?: string; preset?: string; model?: string; from?: string; task?: string; repo?: string; branch?: string; base?: string; rosterVersion?: string; for?: string }
         if ((a.repo === undefined) !== (a.branch === undefined)) throw new Error('repo and branch go together: both create the new worktree at cwd')
         if (a.base !== undefined && a.repo === undefined) throw new Error('base only applies with repo and branch')
@@ -92,23 +95,28 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
         // With scheduling on, every user message reaches the lead through a fork, so the lead acts
         // on a fork-N or r-N and must name it. Off, it acts on the user's own words: nothing to name.
         if (isMainSession(agent) && named === undefined && scheduler.isOn(agent)) throw new DispatchRefused('The lead must say what this worker is for: pass for: the fork-N whose conclusion or the r-N whose reply you act on. If that fork already created a worker, agent_send it instead.', scheduler.rosterSummary(scheduler.ledgerOf(agent)))
-        return scheduler.createWorker(agent, { name: a.name, role: a.role, cwd: a.cwd, preset: a.preset, task: a.task, from: a.from, worktree, model: a.model === undefined ? undefined : parseModel(a.model), rosterVersion: a.rosterVersion, for: named })
+        return scheduler.createWorker(agent, { name: a.name, role: a.role, cwd: a.cwd, preset: a.preset, task: a.task, brief, requireBrief: true, from: a.from, worktree, model: a.model === undefined ? undefined : parseModel(a.model), rosterVersion: a.rosterVersion, for: named })
       },
     }),
     defineTool({
       name: 'agent_send',
-      description: 'Send a request to a worker or fork by name, passing the rosterVersion from agent_list (refused when missing or stale, with the current roster). Its answer goes to the lead as "[reply to r-N from name]", not back to you: do not wait for it. Requests to one worker queue up and run in order, each as a turn of its own; a busy worker takes the next when its current turn ends. For work that should run in parallel, create another worker (agent_create, with from to start from this one\'s conversation).',
+      description: 'Send a request to a worker by name, passing the rosterVersion from agent_list (refused when missing or stale, with the current roster). New work needs brief (the user\'s goal and words, your findings with refs, constraints, non-goals, acceptance criteria, open questions); message is then an optional extra note. A follow-up to an earlier request of yours to the same worker (rework, review comments, an answer to its question) passes followUp: "r-N" and message, without brief. Its answer comes back to you as "[reply to r-N from name]": do not wait for it. Requests to one worker queue up and run in order, each as a turn of its own. For work that should run in parallel, create another worker.',
       parameters: {
         to: { type: 'string', required: true, description: 'Name of the worker or fork.' },
-        message: { type: 'string', required: true, description: 'Self-contained request.' },
+        brief: BRIEF_PARAMETER,
+        message: { type: 'string', description: 'With brief: an optional extra note. With followUp: what to change or answer (required).' },
+        followUp: { type: 'string', description: 'A follow-up: the r-N of an earlier request of yours to this worker. Then no brief.' },
         rosterVersion: VERSION,
       },
       output: { schema: OK, render: json },
       execute: async (args, exec) => {
-        const a = args as { to: string; message: string; rosterVersion?: string }
+        const a = args as { to: string; message?: string; brief?: unknown; followUp?: string; rosterVersion?: string }
         const agent = caller(exec)
+        // The brief is checked before anything else: a refusal records nothing.
+        const brief = a.brief === undefined ? undefined : parseBrief(a.brief)
+        if (brief !== undefined && a.followUp !== undefined) throw new Error('give either brief (new work) or followUp (a follow-up), not both')
         requireVersion(agent, a.rosterVersion)
-        return scheduler.send(agent, a.to, a.message, { rosterVersion: a.rosterVersion })
+        return scheduler.send(agent, a.to, a.message ?? '', { rosterVersion: a.rosterVersion, brief, followUp: a.followUp === '' ? undefined : a.followUp, requireBrief: true })
       },
     }),
     defineTool({

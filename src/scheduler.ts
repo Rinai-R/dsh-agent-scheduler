@@ -31,6 +31,7 @@ import {
 } from './records.js'
 import { mergePending, schedulingOn } from './projection.js'
 import { completedRounds, cutByRestart } from './rounds.js'
+import { renderBrief, sessionRefs, withSenderRef, type Brief } from './brief.js'
 import type { MessageQueue } from './queue.js'
 import { connectRouters, inside, sendToSessionWorker } from './session-workers.js'
 import { unread } from './review.js'
@@ -66,6 +67,7 @@ export const SESSION_NOTICE = [
   'Any session can have workers: long-lived agents, each a session of its own in this workspace that the user can also open and talk to directly. agent_list shows yours with the rosterVersion that agent_create and agent_send require (dispatches run one at a time per session); agent_create makes one (coarse: per repository or module; it may get a worktree, and can work in others); agent_send delegates (requests to one worker queue up in order, each a turn of its own). A worker may have workers of its own. Decide from the conversation whether you are routing work or doing it.',
   'Answers come to you as messages of their own: "[reply to r-N from name, asked by ...]", "[report from name, not a request]", "[request r-N to name failed: ...]". Do not wait for them. The user reads only your replies: tell them results in your own words, briefly, with anything they must decide.',
   'Requests from the session that created you arrive as "[request r-N from name]": answer each, then end your turn; your closing message (or report) goes back to it as the answer. The user may also talk to you directly: nothing of that goes back unless they ask you to share it, then call report with a summary and where in your session the details are.',
+  'New work goes with a brief: goal; userWords (what the user said); findings, each with refs (file:line, commit, PR, session id + seq range, IM link, URL); constraints; nonGoals; acceptance (at least one checkable item); openQuestions. Empty lists are fine except acceptance. Your own session and turn are attached for the worker to agent_recall. Example: brief: {goal: "Fix the retry crash", userWords: "重试会崩，修一下", findings: [{text: "null deref on empty body", refs: [{kind: "file", path: "src/retry.ts", line: 42}]}], constraints: ["no API change"], nonGoals: [], acceptance: ["a test reproduces and passes"], openQuestions: []}. A follow-up to your earlier request (rework, review comments, an answer) passes followUp: "r-N" and message instead. A brief you receive comes as fixed sections; agent_recall its session refs when you need the detail.',
   'Hand-offs are limited: a request may pass through at most 3 sessions after the user\'s message, and while you answer a request you do not send a new one to the session that asked (your answer already goes there).',
   INBOX_NOTICE,
 ].join(' ')
@@ -165,6 +167,12 @@ export const selectionOptions = (selection: ForkModelSelection): AgentOptions =>
 export interface Dispatch {
   /** From agent_list (or the previous dispatch's result); a different current version refuses. */
   readonly rosterVersion?: string | undefined
+  /** The structured brief of new work (checked already, src/brief.ts); for a creation, of its first work (`task` is then a note). */
+  readonly brief?: Brief | undefined
+  /** A follow-up to an earlier request of the caller's session to the same worker: no brief needed. */
+  readonly followUp?: string | undefined
+  /** New work to a session worker must carry a brief (set by the tools; programmatic callers may omit). */
+  readonly requireBrief?: boolean | undefined
 }
 
 /** A dispatch refused before anything was created or sent; carries the current roster. */
@@ -935,8 +943,13 @@ export class Scheduler {
     if (queueDown !== undefined) throw new Error(queueDown)
     const ledger = this.ledgerOf(main)
     checkWorkerName(ledger, args.name, { failedFree: true })
+    // A first task is new work: it needs a brief when the tools ask for one, checked before anything is created.
+    const hasWork = args.task !== undefined || args.brief !== undefined
+    if (args.requireBrief === true && args.task !== undefined && args.brief === undefined) {
+      throw new DispatchRefused(`A first task for ${args.name} is new work and needs a brief (goal, userWords, findings, constraints, nonGoals, acceptance, openQuestions); task is only an extra note. Create without task and brief for a worker that waits.`, this.rosterSummary(ledger))
+    }
     // A first task is a hand-off too: refused past the hop limit before anything is created.
-    const taskHops = args.task === undefined ? 0 : this.handoffHops(main, caller, '')
+    const taskHops = hasWork ? this.handoffHops(main, caller, '') : 0
     const root = cwdOf(main)
     if (root === undefined) throw new Error('the router session has no working directory to create workers in')
     const expand = (p: string): string => p === '~' ? homedir() : p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : p
@@ -990,13 +1003,14 @@ export class Scheduler {
       `Your session works in ${root}; you may write anywhere under it.${cwd === undefined ? '' : ` Your worktree for this work is ${cwd}; enter or create other worktrees under ${root} when a task needs them.`}`,
       'Requests from your router arrive as "[request r-N from name]"; your closing message (or report) answers them. The user may also talk to you here directly: nothing of that goes to the router unless you call report.',
     ].join('\n\n')
-    const task = args.task
+    const brief = args.brief === undefined ? undefined : withSenderRef(args.brief, senderRange(caller))
+    const task = brief === undefined ? args.task : renderBrief(brief, args.task)
     let request: string | undefined
     if (task !== undefined) {
       request = ledger.nextRequestId()
       const rid = request
       this.record(main, s => appendRequest(s, { action: 'sent', id: rid, from: caller.id, to: id, text: task }))
-      const { qid } = await sendToSessionWorker(this.deps.queue!, main, id, rid, `${intro}\n\n${this.requestText(rid, ledger.nameOf(caller.id), task)}`, { hops: taskHops })
+      const { qid } = await sendToSessionWorker(this.deps.queue!, main, id, rid, `${intro}\n\n${this.requestText(rid, ledger.nameOf(caller.id), task)}`, { hops: taskHops, brief })
       this.record(main, s => appendRequest(s, { action: 'sent', id: rid, from: caller.id, to: id, text: task, qid }))
     } else {
       await sendToSessionWorker(this.deps.queue!, main, id, `intro:${id}`, `${intro}\n\nNo task yet: acknowledge briefly and wait for requests.`, { notice: true })
@@ -1486,7 +1500,7 @@ export class Scheduler {
     if (merging?.absorbed === target.id) throw new Error(`"${target.name}" is being merged into ${ledger.nameOf(merging.survivor)} (${merging.id}); send to ${ledger.nameOf(merging.survivor)} instead`)
     if (target.id === caller.id) throw new Error('cannot send a request to yourself')
     if (gone(target)) throw new Error(`"${to}" is ${target.state}`)
-    if (target.session === true) return this.sendToSession(main, caller, target, text)
+    if (target.session === true) return this.sendToSession(main, caller, target, text, dispatch)
     // v1 subagent workers only finish what they already have (design §7).
     if (target.kind === 'worker' && this.deps.sessionWorkers !== undefined) {
       throw new Error(`"${target.name}" is a worker of the old (subagent) kind: it only finishes what it already has. Convert it first (the user runs /agents convert ${target.name}), or create a new worker.`)
@@ -1524,6 +1538,32 @@ export class Scheduler {
   }
 
   /**
+   * What a hand-off to a session worker says (design phase 2 §4). New work carries a brief,
+   * rendered in fixed sections and pointing at the sender's own exploration (its session and the
+   * seq range of its current turn) so the worker can `agent_recall` it. A follow-up names an
+   * earlier request of this session to the same worker and needs no brief.
+   * @throws {DispatchRefused} when new work comes without a brief, or a follow-up names no such request.
+   */
+  private handoffText(main: Agent, caller: Agent, target: Member, note: string, dispatch: Dispatch): { text: string; brief?: Brief | undefined } {
+    const ledger = this.ledgerOf(main)
+    if (dispatch.brief !== undefined) {
+      const brief = withSenderRef(dispatch.brief, senderRange(caller))
+      return { text: renderBrief(brief, note), brief }
+    }
+    if (dispatch.followUp !== undefined) {
+      const earlier = ledger.state.requests.find(r => r.id === dispatch.followUp)
+      const mine = earlier !== undefined && earlier.to === target.id && (earlier.from === caller.id || earlier.from === main.id || ledger.members.get(earlier.from)?.kind === 'fork')
+      if (!mine) throw new DispatchRefused(`followUp "${dispatch.followUp}" is not a request this session sent to ${target.name}; new work needs a brief`, this.rosterSummary(ledger))
+      if (note.trim() === '') throw new DispatchRefused('a follow-up needs message: what to change or answer', this.rosterSummary(ledger))
+      return { text: `[follow-up to ${dispatch.followUp}]\n${note}` }
+    }
+    if (dispatch.requireBrief === true) {
+      throw new DispatchRefused(`New work for ${target.name} needs a brief (goal, userWords, findings, constraints, nonGoals, acceptance, openQuestions). For a follow-up to an earlier request of yours to ${target.name}, pass followUp: "r-N" and message instead.`, this.rosterSummary(ledger))
+    }
+    return { text: note }
+  }
+
+  /**
    * The loop guard for a hand-off from `caller` to the session `target` (design phase 2 §5.2).
    * A session answering queued requests (claimed by the turn it is in) passes them on one hop
    * further; a fork or a session acting on the user's own words starts at 0. More than
@@ -1547,15 +1587,17 @@ export class Scheduler {
   }
 
   /** A request to a session worker goes through the queue; its answer comes back through it (src/session-workers.ts). */
-  private async sendToSession(main: Agent, caller: Agent, target: Member, text: string): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string; rosterVersion: string }> {
+  private async sendToSession(main: Agent, caller: Agent, target: Member, note: string, dispatch: Dispatch = {}): Promise<{ request: string; to: string; queued: boolean; busy: boolean; ahead: string[]; note: string; rosterVersion: string }> {
     const ledger = this.ledgerOf(main)
+    // Checked before anything is recorded: a refused hand-off leaves no request id and no queue entry.
+    const { text, brief } = this.handoffText(main, caller, target, note, dispatch)
     const hops = this.handoffHops(main, caller, target.id)
     const id = ledger.nextRequestId()
     const from = ledger.nameOf(caller.id)
     this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text }))
     let sent: { qid: string; ahead: number }
     try {
-      sent = await sendToSessionWorker(this.deps.queue!, main, target.id, id, this.requestText(id, from, text, target), { hops })
+      sent = await sendToSessionWorker(this.deps.queue!, main, target.id, id, this.requestText(id, from, text, target), { hops, brief })
     } catch (error) {
       this.record(main, s => appendRequest(s, { action: 'failed', id, detail: messageOf(error) }))
       throw new Error(`request ${id} to "${target.name}" was not queued: ${messageOf(error)}`)
@@ -1563,10 +1605,10 @@ export class Scheduler {
     this.record(main, s => appendRequest(s, { action: 'sent', id, from: caller.id, to: target.id, text, qid: sent.qid }))
     const busy = statusOf(this.deps.agents, target.id) === 'running'
     const ahead = ledger.openTo(target.id).filter(r => r.id !== id).map(r => r.id)
-    const note = busy
+    const status = busy
       ? `${target.name} is busy; ${id} waits in its queue (${sent.ahead} ahead) and runs as its own turn when the current one ends.`
       : `${target.name} gets ${id} now (queued ${sent.qid}).`
-    return { request: id, to: target.name, queued: sent.ahead > 0, busy, ahead, note, rosterVersion: this.rosterVersion(ledger) }
+    return { request: id, to: target.name, queued: sent.ahead > 0, busy, ahead, note: status, rosterVersion: this.rosterVersion(ledger) }
   }
 
   /**
@@ -1711,8 +1753,15 @@ export class Scheduler {
     const view = (m: Member) => ({ name: m.name, session: m.id, state: m.mergedInto !== undefined ? 'merged' : m.state })
     const byId = members.find(m => m.id === key)
     if (byId !== undefined) return [view(byId)]
+    // A session a brief to this session points at (its sender's exploration, e.g. a fork of another session).
+    if (this.briefedSessions(ledger.mainId).has(key)) return [{ name: 'brief sender', session: key, state: 'briefed' }]
     const current = members.filter(m => m.name === key)
     return (current.length > 0 ? current : members.filter(m => m.formerNames?.includes(key) === true)).map(view)
+  }
+
+  /** Sessions the briefs delivered to this session point at: they may be recalled from here. */
+  private briefedSessions(sessionId: string): Set<string> {
+    return new Set((this.deps.queue?.messagesTo(sessionId) ?? []).flatMap(m => m.brief === undefined ? [] : sessionRefs(m.brief)))
   }
 
   /**
@@ -2528,4 +2577,16 @@ export function mailKindOf(text: string): { kind: MailKind; request?: string } {
   if (failed !== null) return { kind: 'failure', request: failed[1]! }
   if (text.startsWith('The user said: ')) return { kind: 'conclusion' }
   return { kind: 'report' }
+}
+
+/**
+ * The sender's own exploration, for a brief: its Session and the seq range of the turn it is in
+ * (a fork's whole own turn; a session's current turn).
+ */
+export function senderRange(caller: Agent): { id: string; seqFrom: number; seqTo: number } {
+  const events = eventsOf(caller.session)
+  const last = events.at(-1)?.seq ?? 0
+  let from = 0
+  for (let i = events.length - 1; i >= 0; i -= 1) if (events[i]!.type === 'turn/start') { from = events[i]!.seq; break }
+  return { id: caller.id, seqFrom: from, seqTo: Math.max(from, last) }
 }

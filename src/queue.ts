@@ -7,6 +7,7 @@
  * tests) and Sessions are reached through a {@link QueueHost} (src/dsh/host/queue-host.ts).
  * @module dsh-agent-scheduler/queue
  */
+import type { Brief } from './brief.js'
 import { createHash } from 'node:crypto'
 import type { Round } from './rounds.js'
 
@@ -51,6 +52,8 @@ export interface QueueMessage {
   readonly request?: string | undefined
   /** How many hand-offs led here: 0 for one a user message caused (the loop guard, src/session-workers.ts). */
   readonly hops?: number | undefined
+  /** The structured brief of new work (src/brief.ts); absent on follow-ups and older records. */
+  readonly brief?: Brief | undefined
 }
 
 export interface QueueTarget {
@@ -167,6 +170,7 @@ export interface Enqueue {
   readonly mode?: 'turn' | 'step' | undefined
   readonly request?: string | undefined
   readonly hops?: number | undefined
+  readonly brief?: Brief | undefined
 }
 
 /** @returns the stable id of a producer's message. */
@@ -227,6 +231,7 @@ export class MessageQueue {
         mode: e.mode ?? 'turn', state: 'queued', attempts: 0, createdAt: this.now().toISOString(),
         ...(e.request === undefined ? {} : { request: e.request }),
         ...(e.hops === undefined || e.hops === 0 ? {} : { hops: e.hops }),
+        ...(e.brief === undefined ? {} : { brief: e.brief }),
       })
       result = { qid, state: 'queued', duplicate: false }
     })

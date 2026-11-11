@@ -359,7 +359,7 @@ void (null as unknown as Agent)
 describe('agent_send never blocks on delivery (r-176)', () => {
   const fast = { storeMs: 200, activateMs: 200, sendMs: 200, roundsMs: 500, maxAttempts: 2, retryMs: 50 }
   const sendTool = async (ctx: Context, lead: Agent, scheduler: { rosterVersion(l: unknown): string; ledgerOf(a: Agent): unknown }, to: string, message: string) =>
-    ctx.tools.get('agent_send', lead)!.execute({ to, message, rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) }, { agent: lead, callId: `c-${Math.random()}` } as never) as Promise<{ request: string; note: string }>
+    ctx.tools.get('agent_send', lead)!.execute({ to, brief: { goal: message, userWords: message, findings: [], constraints: [], nonGoals: [], acceptance: ['answered'], openQuestions: [] }, rosterVersion: scheduler.rosterVersion(scheduler.ledgerOf(lead)) }, { agent: lead, callId: `c-${Math.random()}` } as never) as Promise<{ request: string; note: string }>
 
   it('the tool returns at once while the worker\'s activation hangs; the request then fails with the reason and the lead is told', async () => {
     const { ctx, lead, scheduler, controller } = await v2(o => o.sessionId === 'router' ? 'LEAD' : 'WORKER', { timeouts: fast })
