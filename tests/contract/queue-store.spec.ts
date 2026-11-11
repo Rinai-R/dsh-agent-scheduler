@@ -12,8 +12,8 @@ import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageJson from '@deepseek-ai/dsh-storage-json'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
-import { openQueueStore, OWNER_STALE_MS, QUEUE_DOMAIN, QueueOwnedElsewhere } from '../../src/dsh/host/queue-store.js'
-import { MessageQueue, type QueueHost } from '../../src/queue.js'
+import { openQueueStore, OWNER_STALE_MS, QUEUE_DOMAIN, QueueOwnedElsewhere, watchQueueStore } from '../../src/dsh/host/queue-store.js'
+import { MessageQueue, PendingQueueStore, type QueueHost } from '../../src/queue.js'
 
 async function mount(root: string) {
   const ctx = new Context()
@@ -79,5 +79,33 @@ describe('queue store on the storage domain (Q1-Q3)', () => {
     const e = await mount(root)
     expect(await openQueueStore(e, { instance: 'E', now: () => later })).toBeDefined()
     for (const ctx of [a, b, c, d, e]) await ctx.fiber.dispose()
+  })
+})
+
+describe('queue store across a live reload (Q5, r-175/r-176)', () => {
+  it('a row remounted in the same process opens the queue again once the old row has closed it; requests never hang', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'q5-'))
+    const ctx = await mount(root)
+    const logs: string[] = []
+    const row = (store: PendingQueueStore) => (sub: Context) => {
+      watchQueueStore(sub, opened => { store.set(opened) }, (m, e) => { logs.push(`${m} ${String(e)}`) }, reason => { store.fail(reason) })
+    }
+    const first = new PendingQueueStore()
+    const fiber = await ctx.plugin(row(first) as never, {} as never) as unknown as { dispose(): unknown }
+    await first.ready
+    const q1 = new MessageQueue(first, host, undefined)
+    await q1.enqueue({ target: 'W', producer: { kind: 'router', id: 'R' }, dedupeKey: 'before', text: 'x' })
+    // The live reload: the old row is disposed and the new one mounts at once, before the old
+    // domain has finished closing. Before the fix the new open failed with "already open" and the
+    // store never became ready, so every agent_send waited forever.
+    void fiber.dispose()
+    const second = new PendingQueueStore()
+    await ctx.plugin(row(second) as never, {} as never)
+    await Promise.race([second.ready, new Promise((_, reject) => setTimeout(() => { reject(new Error('the remounted store never opened')) }, 5_000))])
+    const q2 = new MessageQueue(second, host, undefined)
+    expect(q2.messagesTo('W').map(m => m.dedupeKey)).toEqual(['before'])
+    await q2.enqueue({ target: 'W', producer: { kind: 'router', id: 'R' }, dedupeKey: 'after', text: 'y' })
+    expect(q2.messagesTo('W').map(m => m.dedupeKey)).toEqual(['before', 'after'])
+    expect(logs.filter(l => /failed/u.test(l))).toEqual([])
   })
 })

@@ -103,8 +103,8 @@ describe('enqueue and delivery', () => {
 
   it('back-pressure: at most maxInFlight undelivered-but-untaken per target, and a quota per producer', async () => {
     const { host, queue } = setup({ maxInFlight: 2, maxQueued: 3 })
-    for (const k of ['1', '2', '3', '4', '5']) await queue.enqueue({ target: 'W', producer: router(), dedupeKey: k, text: k })
-    await settleTick()
+    // Enqueueing does not wait for delivery, so let each delivery happen before the next send.
+    for (const k of ['1', '2', '3', '4', '5']) { await queue.enqueue({ target: 'W', producer: router(), dedupeKey: k, text: k }); await settleTick() }
     expect(host.sent).toEqual(['1', '2'])
     expect(queue.messagesTo('W').filter(m => m.state === 'queued')).toHaveLength(3)
     await expect(queue.enqueue({ target: 'W', producer: router(), dedupeKey: '6', text: '6' })).rejects.toBeInstanceOf(QueueFull)
@@ -315,5 +315,118 @@ describe('crash windows and restart recovery (§3.5)', () => {
     pending.fail('this DSH has no storage domain')
     await expect(queue.enqueue({ target: 'W', producer: router(), dedupeKey: '1', text: 'x' })).rejects.toThrow(/no storage domain/u)
     expect(pending.unavailableReason).toMatch(/no storage domain/u)
+  })
+})
+
+describe('nothing waits forever (r-176: agent_send hung behind a stuck queue)', () => {
+  const fast = { storeMs: 50, activateMs: 50, sendMs: 50, roundsMs: 50, maxAttempts: 2, retryMs: 20 }
+  function hung(timeouts = fast) {
+    const store = new MemoryQueueStore()
+    const host = new FakeHost()
+    const queue = new MessageQueue(store, host, { maxInFlight: 3, maxQueued: 20 }, { timeouts })
+    const replies: QueueReply[] = []
+    queue.onReply('router', r => { replies.push(r) })
+    return { store, host, queue, replies }
+  }
+
+  it('a send to a target whose previous request\'s turn errored returns at once and is delivered', async () => {
+    const { host, queue, replies } = hung()
+    const first = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'r-171', text: 'first', request: 'r-171' })
+    await settleTick()
+    const ids = host.claimAll(queue, 'W', 29)
+    await settleTick()
+    host.end('W', ids, 10, { stopped: 'error', cause: 'PI_AI_ERROR' })
+    await queue.settle('W')
+    expect(queue.status(first.qid)).toBe('failed')
+    expect(replies.find(r => r.qid === first.qid)).toMatchObject({ state: 'failed', error: expect.stringMatching(/error/u) })
+    const started = Date.now()
+    const next = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'r-172', text: 'retry', request: 'r-172' })
+    expect(Date.now() - started).toBeLessThan(40)
+    await settleTick()
+    expect(queue.status(next.qid)).toBe('delivered')
+  })
+
+  it('a send while the target is cold returns before the activation, which then delivers', async () => {
+    const { host, queue } = hung({ ...fast, activateMs: 1_000 })
+    let activate!: () => void
+    const original = host.resolve.bind(host)
+    host.resolve = async (target: string) => { await new Promise<void>(resolve => { activate = resolve }); return original(target) }
+    const m = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k', text: 'cold' })
+    expect(queue.status(m.qid)).toBe('queued')
+    activate()
+    await settleTick()
+    expect(queue.status(m.qid)).toBe('delivered')
+  })
+
+  it('a send while activation hangs still returns; the delivery fails later with the reason, and the next one is not held', async () => {
+    const { host, queue, replies } = hung()
+    const original = host.resolve.bind(host)
+    let hang = true
+    host.resolve = async (target: string) => hang ? new Promise<never>(() => undefined) : original(target)
+    const started = Date.now()
+    const m = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k', text: 'x', request: 'r-1' })
+    // A second send while the first delivery hangs returns at once too.
+    const second = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k2', text: 'y', request: 'r-2' })
+    expect(Date.now() - started).toBeLessThan(40)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(queue.status(m.qid)).toBe('failed')
+    expect(replies.find(r => r.qid === m.qid)).toMatchObject({ state: 'failed', error: expect.stringMatching(/not delivered after 2 attempts: activating session W did not finish/u) })
+    expect(replies.find(r => r.qid === second.qid)).toMatchObject({ state: 'failed' })
+    // The target is not held: once it can be reached, the next request goes through.
+    hang = false
+    const third = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k3', text: 'z', request: 'r-3' })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(queue.status(third.qid)).toBe('delivered')
+  })
+
+  it('a flush that never returns fails the delivery with the reason; a message that did land is found, not repeated', async () => {
+    const { host, queue } = hung()
+    const send = host.send.bind(host)
+    host.send = async (agent, m, id) => { await send(agent, m, id); return new Promise<boolean>(() => undefined) }
+    const m = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k', text: 'x' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    // The first attempt timed out after the message reached the inbox; the retry finds it there.
+    expect(queue.status(m.qid)).toBe('delivered')
+    expect(host.sent).toEqual(['x'])
+  })
+
+  it('a store that never opens fails enqueue with the reason instead of hanging', async () => {
+    const { PendingQueueStore } = await import('../src/queue.js')
+    const pending = new PendingQueueStore()
+    const queue = new MessageQueue(pending, new FakeHost(), { maxInFlight: 3, maxQueued: 20 }, { timeouts: fast })
+    const started = Date.now()
+    await expect(queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k', text: 'x' })).rejects.toThrow(/opening the queue store did not finish/u)
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+})
+
+describe('the store goes away and comes back (hot reload)', () => {
+  it('a turn that ended aborted (disposed) while the store was closed fails its claimed request once the store reopens, and frees the slot', async () => {
+    const { PendingQueueStore } = await import('../src/queue.js')
+    const durable = new MemoryQueueStore()
+    const pending = new PendingQueueStore()
+    pending.set(durable)
+    const host = new FakeHost()
+    const queue = new MessageQueue(pending, host, { maxInFlight: 1, maxQueued: 20 }, { timeouts: { storeMs: 200, activateMs: 200, sendMs: 200, roundsMs: 200, maxAttempts: 2, retryMs: 20 } })
+    const replies: QueueReply[] = []
+    queue.onReply('router', r => { replies.push(r) })
+    const first = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'r-172', text: 'a', request: 'r-172' })
+    await settleTick()
+    const ids = host.claimAll(queue, 'W', 30)
+    await settleTick()
+    expect(queue.status(first.qid)).toBe('claimed')
+    // The reload closes the store; the worker's turn is disposed meanwhile.
+    pending.set(undefined)
+    host.end('W', ids, 7648, { stopped: 'aborted', cause: 'disposed' })
+    // A failure while closed (the reopen was refused once) does not stick once it opens.
+    pending.fail('the worker queue could not be opened: domain is already open')
+    pending.set(durable)
+    await queue.recover()
+    expect(queue.status(first.qid)).toBe('failed')
+    expect(replies.find(r => r.qid === first.qid)).toMatchObject({ state: 'failed', error: expect.stringMatching(/aborted: disposed/u) })
+    // The slot is free: the next request is delivered.
+    const next = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'r-173', text: 'b', request: 'r-173' })
+    await settleTick()
+    expect(queue.status(next.qid)).toBe('delivered')
   })
 })

@@ -104,18 +104,53 @@ export function watchQueueStore(ctx: Context, ready: (store: QueueStore | undefi
     mounted = true
     let closed = false
     let close: (() => Promise<void>) | undefined
-    void openQueueStore(scoped).then(opened => {
-      if (opened === undefined) return
-      if (closed) { void opened.close(); return }
-      close = opened.close
-      ready(opened.store)
-    }, error => {
-      log('opening the agent-scheduler queue failed', error)
-      // Kept by another process: say so instead of leaving every send waiting.
-      if (error instanceof QueueOwnedElsewhere) unavailable?.(error.message)
-    })
-    scoped.effect(() => () => { closed = true; ready(undefined); void close?.() }, 'agent-scheduler: queue store')
+    const attempt = async (): Promise<void> => {
+      // A live reload remounts this row in the same process while the previous row's domain is
+      // still closing: wait for that close, and retry the "already open" refusal for a while.
+      const slot = closingSlot()
+      for (let tried = 0; ; tried += 1) {
+        await withDeadline(slot.closing, REOPEN_WAIT_MS)
+        if (closed) return
+        try {
+          const opened = await openQueueStore(scoped)
+          if (opened === undefined) return
+          if (closed) { await opened.close(); return }
+          close = opened.close
+          ready(opened.store)
+          return
+        } catch (error) {
+          if (isAlreadyOpen(error) && tried < REOPEN_TRIES) { await sleep(REOPEN_BACKOFF_MS * (tried + 1)); continue }
+          log('opening the agent-scheduler queue failed', error)
+          // Never leave requests waiting on a store that will not open: they fail with the reason.
+          unavailable?.(error instanceof QueueOwnedElsewhere ? error.message : `the worker queue could not be opened: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+      }
+    }
+    void attempt()
+    scoped.effect(() => () => {
+      closed = true
+      ready(undefined)
+      // Recorded process-wide, so the row mounted next (a live reload) opens after this close.
+      const slot = closingSlot()
+      const done = (close?.() ?? Promise.resolve()).catch((error: unknown) => { log('closing the agent-scheduler queue failed', error) })
+      slot.closing = Promise.all([slot.closing, done]).then(() => undefined)
+    }, 'agent-scheduler: queue store')
   })
+}
+
+/** How a remounted row waits for the previous row's close (see {@link watchQueueStore}). */
+const REOPEN_WAIT_MS = 5_000
+const REOPEN_TRIES = 10
+const REOPEN_BACKOFF_MS = 200
+const sleep = (ms: number): Promise<void> => new Promise(resolve => { setTimeout(resolve, ms) })
+const withDeadline = (work: Promise<void>, ms: number): Promise<void> => Promise.race([work, sleep(ms)])
+const isAlreadyOpen = (error: unknown): boolean => (error as { code?: unknown } | undefined)?.code === 'already-open' || /already open/u.test(String((error as Error | undefined)?.message ?? ''))
+/** Process-wide (a reload may load this module afresh): the close of the last row's queue domain. */
+const CLOSING = Symbol.for('dsh-agent-scheduler/queue-store/closing')
+const closingSlot = (): { closing: Promise<void> } => {
+  const g = globalThis as { [CLOSING]?: { closing: Promise<void> } }
+  return (g[CLOSING] ??= { closing: Promise.resolve() })
 }
 
 /**
