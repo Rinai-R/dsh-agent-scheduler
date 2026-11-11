@@ -66,6 +66,23 @@ describe('session workers (v2)', () => {
     expect(scheduler.ledgerOf(lead).state.requests.find(r => r.id === 'r-1')).toMatchObject({ state: 'answered', answer: 'HUB DID IT' })
   })
 
+  it('a session made for a worker whose name was taken meanwhile is archived, not left blank in the sidebar', async () => {
+    const { lead, scheduler, controller } = await v2(() => 'OK')
+    // Two creations race for one name: both pass the first check; the second loses after its session exists.
+    const port = controller.port
+    const create = port.create.bind(port)
+    let raced = false
+    port.create = async spec => {
+      const made = await create(spec)
+      // Meanwhile (another surface, a restart's refold) the name becomes taken in the router's log.
+      if (!raced) { raced = true; appendRecord(lead.session, 'plugin:dsh-agent-scheduler/agent' as never, { version: 1, action: 'created', id: 'session-other', name: 'twin', role: 'first', by: lead.id, at: new Date().toISOString() } as never); scheduler.forget('router') }
+      return made
+    }
+    await expect(scheduler.createWorker(lead, { name: 'twin', role: 'second' })).rejects.toThrow(/twin/u)
+    expect(controller.archived).toHaveLength(1)
+    expect(scheduler.ledgerOf(lead).state.members.filter(m => m.name === 'twin').map(m => m.id)).toEqual(['session-other'])
+  })
+
   it('refuses a worktree outside the router\'s workspace, with the reason', async () => {
     const { lead, scheduler } = await v2(() => 'X')
     const elsewhere = mkdtempSync(join(tmpdir(), 'elsewhere-'))
@@ -186,6 +203,36 @@ describe('session workers (v2)', () => {
     expect(controller.created).toContain(now.id)
     await scheduler.send(lead, 'old', 'now it works')
     await until(lead, '[reply to r-2 from old]')
+  })
+
+  it('upgrade with an old worker still mid-request: it answers into the inbox under v2, its answer is not lost, and convert waits', async () => {
+    const hold = gate()
+    const { ctx, lead, scheduler } = await v2(async o => {
+      if (o.sessionId === 'router') return 'LEAD'
+      if (body(o).includes('slow legacy job')) { await hold.promise; return 'LEGACY ANSWER' }
+      return 'OK'
+    })
+    // v1: an old worker gets a request it is still working on when the plugin upgrades.
+    const plain = install(ctx, { defaultOn: false }, { tools: false })
+    await plain.createWorker(lead, { name: 'old', role: 'legacy', task: 'slow legacy job' })
+    plain.forget('router')
+    scheduler.forget('router')
+    // Under v2: the open request is still open, convert refuses while it is owed, and new work is refused.
+    expect(scheduler.ledgerOf(lead).openTo(scheduler.ledgerOf(lead).find('old')!.id).map(r => r.id)).toEqual(['r-1'])
+    expect(await runAgentsCommand(scheduler, { agent: lead, rawInput: 'convert old' } as never)).toMatchObject({ kind: 'error', text: expect.stringMatching(/still working/u) })
+    await expect(scheduler.send(lead, 'old', 'more')).rejects.toThrow(/old \(subagent\) kind/u)
+    // It finishes: the answer reaches the lead once, and the request is closed.
+    hold.open()
+    await until(lead, '[reply to r-1 from old]')
+    await lead.whenIdle()
+    expect(JSON.stringify(lead.session.snapshotEvents()).split('LEGACY ANSWER').length - 1).toBeGreaterThanOrEqual(1)
+    expect(scheduler.ledgerOf(lead).openTo(scheduler.ledgerOf(lead).find('old')!.id)).toEqual([])
+    // Then convert works and the old one is archived, not half-alive.
+    expect(await runAgentsCommand(scheduler, { agent: lead, rawInput: 'convert old' } as never)).toMatchObject({ kind: 'success' })
+    const ledger = scheduler.ledgerOf(lead)
+    const old = ledger.state.members.find(m => m.name === 'old-v1')!
+    expect(old).toMatchObject({ state: 'archived' })
+    void ctx
   })
 
   it('agent_split and agent_merge are gone as tools; their old records still fold', async () => {

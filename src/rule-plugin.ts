@@ -357,12 +357,13 @@ export function apply(ctx: Context, config: Config): void {
     store.set(opened)
     // The store opened (at startup, after a restart): settle, redeliver and reply what was left.
     if (opened !== undefined) void queue.recover().catch((error: unknown) => { log('queue recovery failed', error) })
-  }, log)
+  }, log, reason => { store.fail(reason) })
   // Other plugins (a Feishu or GitHub router later) produce into the same queue (design §8; experimental).
   ctx.effect(() => provideQueue(ctx, queue), 'agent-scheduler: queue service')
   const scheduler = new Scheduler({
     sessionWorkers,
     queue,
+    queueUnavailable: () => store.unavailableReason,
     subagents: ctx.subagents,
     agents: ctx.agents as never,
     readLog: logReader(ctx),

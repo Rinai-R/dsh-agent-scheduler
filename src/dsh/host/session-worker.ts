@@ -30,7 +30,7 @@ type Controller = {
   selectModel(request: { sessionId: string; provider: string; model: string; reasoningEffort?: string }): Promise<unknown>
   fork(request: { sessionId: string; atSeq?: number }): Promise<{ sessionId: string }>
 }
-type Registry = { resolveByPath(path: string): Promise<{ id: string; path?: string; record?: { path: string }; attachSession(id: string): Promise<void> } | undefined> }
+type Registry = { resolveByPath(path: string): Promise<{ id: string; path?: string; record?: { path: string }; attachSession(id: string): Promise<void> } | undefined>; archiveSession?(id: string, options?: { stopActivity?: boolean }): Promise<unknown> }
 
 /** The source a message the queue delivers carries; `queueId` survives in the target's log (spike `relay`). */
 export const QUEUE_SOURCE = 'agent-message'
@@ -50,6 +50,8 @@ export interface SessionWorkerPort {
   /** A top-level copy of a (subagent) Session, with its history; then as for create. */
   fork(source: string, spec: { cwd: string; title: string; owner: OwnerRecord }): Promise<{ id: string; warnings: string[] }>
   resolve(id: string): Promise<Agent | undefined>
+  /** Archive a session that was created but did not become a worker; false when this DSH cannot. */
+  rollBack(id: string): Promise<boolean>
   rename(id: string, title: string): Promise<void>
   selectModel(id: string, model: { provider: string; model: string; reasoningEffort?: string | undefined }): Promise<void>
 }
@@ -100,6 +102,24 @@ export function sessionWorkerPort(ctx: Context): SessionWorkerPort {
     if (agent !== undefined) { appendRecord(agent.session, OWNER_RECORD, spec.owner); markRouter(agent, spec.owner.router) }
     return warnings
   }
+  /**
+   * A session that was created but did not become a worker (a later step threw, or the caller
+   * gave up on it) is archived, not left in the sidebar as a blank titled conversation. Archiving
+   * keeps it recoverable from the archive; nothing is deleted.
+   */
+  const rollBack = async (id: string): Promise<boolean> => {
+    const r = registry()
+    if (typeof r?.archiveSession !== 'function') return false
+    try { await r.archiveSession(id, { stopActivity: true }); return true } catch { return false }
+  }
+  const finishOrRollBack = async (id: string, spec: Parameters<typeof finish>[1]): Promise<string[]> => {
+    try {
+      return await finish(id, spec)
+    } catch (error) {
+      await rollBack(id)
+      throw error
+    }
+  }
   const has = (): boolean => features.record('sessionController', typeof controller()?.create === 'function' && typeof controller()?.resolveAgent === 'function', 'sessionController.create')
   return {
     get available() { return has() },
@@ -108,14 +128,15 @@ export function sessionWorkerPort(ctx: Context): SessionWorkerPort {
       const c = controller()
       if (c === undefined) throw new Error('this DSH cannot create sessions')
       const made = await c.create({ cwd: spec.cwd, ...(spec.preset === undefined ? {} : { agentPreset: spec.preset }) })
-      return { id: made.sessionId, warnings: await finish(made.sessionId, spec) }
+      return { id: made.sessionId, warnings: await finishOrRollBack(made.sessionId, spec) }
     },
     async fork(source, spec) {
       const c = controller()
       if (c === undefined) throw new Error('this DSH cannot fork sessions')
       const made = await c.fork({ sessionId: source })
-      return { id: made.sessionId, warnings: await finish(made.sessionId, spec) }
+      return { id: made.sessionId, warnings: await finishOrRollBack(made.sessionId, spec) }
     },
+    rollBack,
     resolve,
     async rename(id, title) { await controller()?.rename({ sessionId: id, title }) },
     async selectModel(id, model) { await controller()?.selectModel({ sessionId: id, provider: model.provider, model: model.model, ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }) }) },

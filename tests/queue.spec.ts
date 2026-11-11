@@ -286,4 +286,34 @@ describe('crash windows and restart recovery (§3.5)', () => {
     expect(after.replies.map(r => r.qid)).toEqual([a.qid])
     expect(store.message(a.qid)?.replied).toBe(true)
   })
+
+  it('taken into a turn but the claim was not written before the crash, and the turn never ended: failed, not left delivered', async () => {
+    const { store, host, queue } = setup()
+    const a = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: '1', text: 'x', request: 'r-1' })
+    await settleTick()
+    expect(store.message(a.qid)?.state).toBe('delivered')
+    // The target's step took it (it is in the log), and the process died before claimed() was written.
+    const t = host.t('W')
+    t.log.push(...t.inbox)
+    t.inbox = []
+    t.running = false
+    const after = restart(store, host)
+    await after.queue.recover()
+    await settleTick()
+    expect(store.message(a.qid)?.state).toBe('failed')
+    expect(after.replies).toEqual([expect.objectContaining({ qid: a.qid, state: 'failed', request: 'r-1' })])
+    // It does not hold an in-flight slot: three more are delivered.
+    for (const k of ['2', '3', '4']) await after.queue.enqueue({ target: 'W', producer: router(), dedupeKey: k, text: k })
+    await settleTick()
+    expect(after.queue.messagesTo('W').filter(m => m.state === 'delivered')).toHaveLength(3)
+  })
+
+  it('a store that can never open fails a send at once with the reason, instead of waiting forever', async () => {
+    const { PendingQueueStore } = await import('../src/queue.js')
+    const pending = new PendingQueueStore()
+    const queue = new MessageQueue(pending, new FakeHost())
+    pending.fail('this DSH has no storage domain')
+    await expect(queue.enqueue({ target: 'W', producer: router(), dedupeKey: '1', text: 'x' })).rejects.toThrow(/no storage domain/u)
+    expect(pending.unavailableReason).toMatch(/no storage domain/u)
+  })
 })

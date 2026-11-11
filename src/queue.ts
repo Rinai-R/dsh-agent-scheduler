@@ -272,6 +272,8 @@ export class MessageQueue {
     const previous = this.chains.get(target) ?? Promise.resolve()
     const next = previous.catch(() => undefined).then(async () => { await this.store.ready; await work() })
     this.chains.set(target, next)
+    // A failure is the caller's to handle (enqueue rethrows it); the chain itself must not leave it unhandled.
+    next.catch(() => undefined)
     void next.finally(() => { if (this.chains.get(target) === next) this.chains.delete(target) }).catch(() => undefined)
     return next
   }
@@ -368,6 +370,13 @@ export class MessageQueue {
       }
       if (m.state !== 'delivered' && !(m.state === 'queued' && m.inboxMessageId !== undefined)) continue
       const where = this.host.find(agent, m.qid, m.inboxMessageId)
+      if (where === 'log' && !agent.running) {
+        // A turn took it (it is in the log), no completed round settled it above, and nothing runs
+        // now: that turn never ended, and the process died before its claim was written. Same as a
+        // claimed message whose turn never ended: told, not re-run, and it frees its in-flight slot.
+        await this.update(m, { state: 'failed', error: 'interrupted by a DSH restart', settledAt: this.now().toISOString() })
+        continue
+      }
       if (where === undefined) {
         // Lost with the inbox (graceful disposal discards queued input): deliver it again.
         if (m.state === 'delivered') await this.update(m, { state: 'queued', error: 'redelivered after a restart' })
@@ -406,12 +415,31 @@ const messageOf = (error: unknown): string => error instanceof Error ? error.mes
 export class PendingQueueStore implements QueueStore {
   private current: QueueStore | undefined
   private open!: () => void
-  ready: Promise<void> = new Promise(resolve => { this.open = resolve })
+  private refuse: ((error: Error) => void) | undefined
+  ready: Promise<void> = new Promise((resolve, reject) => { this.open = resolve; this.refuse = reject })
+  /** Why the durable store will not open (this DSH has no storage domain); operations then fail at once. */
+  private unavailable: string | undefined
+  /**
+   * The durable store cannot open on this host: fail waiting and later operations with the reason,
+   * instead of letting a send wait forever.
+   */
+  fail(reason: string): void {
+    this.unavailable = reason
+    const refuse = this.refuse
+    const failed = Promise.reject(new Error(reason))
+    failed.catch(() => undefined)
+    // The promise callers already wait on is rejected too; nobody may be waiting, so mark it handled.
+    this.ready.catch(() => undefined)
+    this.ready = failed
+    refuse?.(new Error(reason))
+  }
+  /** The reason the store will not open, when it will not. */
+  get unavailableReason(): string | undefined { return this.unavailable }
   /** @param store - the durable store, now open; undefined when it went away (later operations wait again). */
   set(store: QueueStore | undefined): void {
     this.current = store
-    if (store !== undefined) this.open()
-    else this.ready = new Promise(resolve => { this.open = resolve })
+    if (store !== undefined) { this.unavailable = undefined; this.open() }
+    else this.ready = new Promise((resolve, reject) => { this.open = resolve; this.refuse = reject })
   }
   get isOpen(): boolean { return this.current !== undefined }
   private get s(): QueueStore { if (this.current === undefined) throw new Error('the queue store is not open'); return this.current }

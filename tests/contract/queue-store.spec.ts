@@ -12,7 +12,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageJson from '@deepseek-ai/dsh-storage-json'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
-import { openQueueStore, QUEUE_DOMAIN } from '../../src/dsh/host/queue-store.js'
+import { openQueueStore, OWNER_STALE_MS, QUEUE_DOMAIN, QueueOwnedElsewhere } from '../../src/dsh/host/queue-store.js'
 import { MessageQueue, type QueueHost } from '../../src/queue.js'
 
 async function mount(root: string) {
@@ -55,5 +55,29 @@ describe('queue store on the storage domain (Q1-Q3)', () => {
     await expect(opened.store.putMessage({ qid: 'q-bad' } as never)).rejects.toThrow()
     await opened.close()
     await ctx.fiber.dispose()
+  })
+
+  it('Q4: one keeper per DSH_HOME: a second process is refused while the first lives, and takes over once it closed or went stale', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'queue-owner-'))
+    // Two mounts of the same root stand for two host processes on one DSH_HOME.
+    const a = await mount(root)
+    const b = await mount(root)
+    const first = (await openQueueStore(a, { instance: 'A' }))!
+    await expect(openQueueStore(b, { instance: 'B' })).rejects.toBeInstanceOf(QueueOwnedElsewhere)
+    // The first closes cleanly: the second may keep the queue at once.
+    await first.close()
+    const second = (await openQueueStore(b, { instance: 'B' }))!
+    expect(second).toBeDefined()
+    await second.close()
+    // A keeper that died without closing: its heartbeat goes stale and is taken over after the timeout.
+    const c = await mount(root)
+    const crashed = (await openQueueStore(c, { instance: 'C' }))!
+    void crashed // never closed (the process died)
+    const d = await mount(root)
+    await expect(openQueueStore(d, { instance: 'D' })).rejects.toBeInstanceOf(QueueOwnedElsewhere)
+    const later = Date.now() + OWNER_STALE_MS + 1_000
+    const e = await mount(root)
+    expect(await openQueueStore(e, { instance: 'E', now: () => later })).toBeDefined()
+    for (const ctx of [a, b, c, d, e]) await ctx.fiber.dispose()
   })
 })

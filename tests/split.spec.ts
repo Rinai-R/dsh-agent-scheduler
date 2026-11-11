@@ -234,15 +234,15 @@ describe('Agents page', () => {
 })
 
 describe('fork notice', () => {
-  it('says: coarse first, send when free, split on a collision with both sides renamed', () => {
+  it('says: coarse first, queue to the owner, and a copy of it only for parallel work', () => {
     for (const rule of [
-      'Workers start coarse and split only on a collision',
-      'when that worker is idle and has no open requests, it goes by agent_send to that worker, no split',
-      'agent_split with owner: <owner>, ownerName and ownerRole rewritten',
-      'both concrete, never the area name again',
+      'Workers start coarse and branch off only when work must run in parallel',
+      'agent_send to that worker, also when it is running or has open requests',
+      'agent_create with from: <owner>, which starts the new worker as a copy of the owner\'s session',
+      'a concrete name and role for the new task',
       'one worker for the whole repository or module',
-      'inside an area prefer agent_split, which renames both sides',
     ]) expect(FORK_NOTICE).toContain(rule)
+    expect(FORK_NOTICE).not.toContain('agent_split')
   })
 })
 

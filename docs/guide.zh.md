@@ -15,10 +15,10 @@
   `[reply to r-N from name, asked by …]` 回到 lead。
 - **一条管道，终点是 lead。** 分身的结论、worker 的答复、`report` 和失败的请求都直接到 lead，并
   注明是谁、为哪条输入派的活。不会为了转交结果再唤醒任何 agent。
-- **先粗后细，撞上才拆。** 新领域先建一个管整个仓库或模块的 worker。跟进请求交给已经拿着它的
-  worker，新任务在 owner 空闲时也直接交给它；owner 在跑或还有未回答的请求时，新任务就用
-  `agent_split` 拆分：owner 改名为它手上那部分工作，再从它续出一个新 worker 去做新任务，用自己的
-  worktree，两者共享同一个 area，并行而不是排队。分身不等 worker。
+- **先粗后细，worker 是独立会话。** 新领域先建一个管整个仓库或模块的 worker。每个 worker 是 router
+  工作区里的一个顶层会话（可以在侧栏打开、直接和它对话），前面有一条持久队列：派给忙碌 worker 的请求
+  按顺序排队，每条单独占一轮。必须并行的工作就新建 worker，可以从另一个 worker 的会话复制出来
+  （`agent_create` 带 `from`）。分身不等 worker。
 - **右侧栏一份名单。** Agents 页列出分身和 worker 的实时状态与在途请求，点一行就在名单旁边嵌入它的
   对话。页面和对话都保持挂载，切换标签不会让对话重新加载。
 - **哪些该看一眼。** 上报之后、你还没点开的成员，行首是醒目的实心点：绿＝有新结论，红＝失败；
@@ -68,9 +68,9 @@ dsh plugin --profile web add dsh-agent-scheduler     # 装进指定 profile
 worker 继续跑，结果照常汇报。切换会改变 lead 的系统提示，所以 lead 的下一次请求不命中一次提示缓存。
 
 开关只管一件事：用户消息是否自动交给一个新分身。关着时，用户直接和 lead 对话，lead 自己回答，但
-worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_split`、`agent_send`、`agent_interrupt`、
+worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_send`、`agent_interrupt`、
 `agent_archive`、`role_set`、`report`——派活锁和 `rosterVersion` 校验照样生效，worker 的回答、上报和
-失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create`、`agent_split` 时 `for` 可以不填（填了 `fork-N`
+失败照样交给 lead。关着时中间没有分身，所以 lead 调 `agent_create` 时 `for` 可以不填（填了 `fork-N`
 或 `r-N` 仍会校验，每个仍只建一个 worker）；开着时 lead 照旧必须填。开调度时建的分身，关掉之后仍只能
 路由。调度工具注册在每个会话里（工具列表不变才能命中缓存）；关着且还没有分身或 worker 的会话，
 系统提示里没有调度段，建出第一个 worker 后多出一段只给 lead 的简短说明。
@@ -99,9 +99,26 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 一直黄。点开会发 `/agents seen`，记一条 `seen` 记录，重启后已读的不会再亮；顶部「全部已读」（`/agents seen all`）一次读完。没读的成员即使已归档也留在
 「分身」「Worker」里，折叠组只收已读的；分组标题和输入框的 Agents 按钮带未读数。
 
-**合并 worker。** `agent_split` 的反操作：`agent_merge`、`/agents merge`，或 worker 行上的「合并到…」。被合并方先写交接（已完成、进行中、决策、未决问题、改过的文件、分支/PR、未提交改动），代码必须先提交或在交接里交给保留方（调度器会在它的目录里查 `git status`）；然后它被归档，名字归保留方（之后按这些名字派的活都落到保留方），保留方可以改名（同一 area 内可改回 split 前的名字），并收到交接消息。写不了交接的被合并方，从它的日志生成。被合并方在跑或有未答请求时拒绝；重启后从最后记录的一步续上。详见 [docs/worker-merge.md](worker-merge.md)。
+**合并 worker（仅限旧的子智能体 worker）。** 升级前建的 worker 仍可用 `/agents merge` 或 worker 行上的「合并到…」合并；会话 worker 不合并（不需要的那个直接归档）。被合并方先写交接（已完成、进行中、决策、未决问题、改过的文件、分支/PR、未提交改动），代码必须先提交或在交接里交给保留方（调度器会在它的目录里查 `git status`）；然后它被归档，名字归保留方（之后按这些名字派的活都落到保留方），保留方可以改名（同一 area 内可改回 split 前的名字），并收到交接消息。写不了交接的被合并方，从它的日志生成。被合并方在跑或有未答请求时拒绝；重启后从最后记录的一步续上。详见 [docs/worker-merge.md](worker-merge.md)。
 
 **lead 收件箱。** lead 忙的时候到的答复、报告、分身结论和失败通知，放在 Agents 页顶部的「待 lead 处理」一栏，不再挤进输入框上方的排队消息（那里只留你自己排的）。lead 空闲时一次合并交给它，排在你给它排的消息之后。可以拖动排序（或 Alt+↑/↓）、📌 置顶、⏸ 暂缓（取消前一直跳过）、⚡ 立即交给 lead（插进它当前回合），或「全部交给 lead」；点条目打开发件人的对话。有回报在等的成员行尾有 ✉，输入框旁的 Agents 按钮显示 ✉N。收件箱是插件记录，重启后还在；lead 的 `agent_list` 里有每条的摘要（发件人、请求号、时间、正文前 120 字）。
+
+### worker 是会话
+
+每个新 worker 都是在 router 工作区里新建的顶层会话，挂在侧栏这个工作区下，标题为 `名字 · 职责`。router（lead）通过一条持久队列找到它，队列存在 DSH 的存储里（`<DSH_HOME>/storages/agent_scheduler_queue/`）：
+
+- 给同一 worker 的请求按顺序投递，每条在当前一轮之后单独占一轮，并且去重，重启不会让一条跑两次；
+- 一个 worker 最多有 3 条已投递但还没取走的请求，一个 router 给同一 worker 最多排 20 条；
+- 取走请求的那一轮以 `[reply to r-N from name]` 回答；中断、出错或被重启截断的一轮会把请求报为失败，不会重跑；
+- 你在 worker 自己的会话里直接和它聊时，除非它调用 `report`（以 `[report from name, not a request]` 送达），否则什么都不会推给 router。
+
+**worker 共用一块可写区域。** worker 的会话工作在 router 的工作区里，DSH 的 `workspace-write` 沙箱允许它写会话工作目录下的任何地方，所以每个 worker 都能写整个工作区，而不只是分给它的 worktree。worker 之间没有隔离。请给每个 worker 单独的 worktree，并把不想被改动的东西放在 router 工作区之外。工作区之外的 worktree 会被拒绝，因为 worker 写不了那里。
+
+**升级前的 worker**（子智能体 worker）会做完它们手上的请求；转换前，新请求会被拒绝，请运行 `/agents convert <名字>`。不会自动转换、归档或删除任何东西。
+
+**队列只由一个 DSH 进程保管。** 同一个 `DSH_HOME` 上的两个 DeepSeek Harness 进程（比如桌面版和 `dsh web`）不会实时共享队列，所以只有先起来的那个保管：它带心跳登记自己，第二个进程会拒绝新建 worker 或给它派活，并说明是哪个进程在保管。先起来的那个关闭或挂掉（心跳过期或进程已不在）后，下一个进程接手。
+
+**前提。** 会话 worker 需要 DSH 的会话控制器和存储域（DSH 0.2.1-rc.5 及以后的桌面版和 `dsh web` 都有）。没有存储域时队列无法保存：新建 worker 或给它派活会带着原因直接失败，而不是一直等。
 
 ### 指挥台
 
@@ -135,7 +152,8 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 | `/agents archive done` | 归档所有已交回、没有欠回答的分身。 |
 | `/agents seen <name>` | 把成员最近一次上报标为已读（在 Agents 页点开成员时自动发送）。 |
 | `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`、`/agents inbox now all`、`/agents inbox move <m-N> [<m-N>\|end]` | 调整 lead 的收件箱（Agents 页会发这些）。 |
-| `/agents merge <被合并的> into <保留的> [--name <新名字>] [--role <职责>]` | 把一个 worker 合并到另一个（split 的反操作；`/agents merge <a> <b>` 自动挑保留方）。Agents 页的「合并到…」做同样的事。 |
+| `/agents merge <被合并的> into <保留的> [--name <新名字>] [--role <职责>]` | 把一个旧的（子智能体）worker 合并到另一个（`/agents merge <a> <b>` 自动挑保留方）。Agents 页的「合并到…」同效。会话 worker 不合并。 |
+| `/agents convert <名字>` | 把旧的（子智能体）worker 转成会话 worker：连同历史复制成一个顶层会话（失败时改为新建一个，带上它最近几次回答的摘要），旧的归档为 `<名字>-v1`。它还欠回答或正在跑时拒绝。 |
 | `/agents seen all` | 把所有未读上报标为已读（Agents 页顶部的「全部已读」）。有圆点之前的旧会话，过去的上报会先显示为未读一次。 |
 | `/worker` | 查看之后新建 worker 的默认模型。 |
 | `/worker model <provider>/<model> [effort]` | 设置之后新建 worker 的默认模型。 |
@@ -149,9 +167,8 @@ worker 相关的工具照常可用——`agent_list`、`agent_create`、`agent_s
 
 | 工具 | 作用 |
 |---|---|
-| `agent_create` | 建 worker：`name`、`role`、`rosterVersion`（取自 `agent_list`），可选 `cwd`、`preset`、`model`、`from`（接着另一个 worker 的对话）、`task`；lead 还要传 `for`（它依据的 `fork-N` 或 `r-N`）；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
-| `agent_split` | 拆分忙着的 worker 的领域：`owner`，`ownerName` + `ownerRole`（它保留的那部分工作），新 worker 的 `name` + `role` + `task`，`cwd`（或 `repo` + `branch`），`rosterVersion`，lead 还要传 `for`。owner 的改名和 `/agents rename` 是同一套（旧名字保留）；新 worker 接着 owner 的对话，owner 还没完成过一轮时则全新启动。两者带同一个 `area`，Agents 页把它们排在一起。 |
-| `agent_send` | 给分身或 worker 派活，带 `rosterVersion`；回答以 `[reply to r-N from …]` 回来。只用于目标已经在做的工作的跟进，不用于新的并行任务。 |
+| `agent_create` | 建 worker（本工作区里的一个顶层会话）：`name`、`role`、`rosterVersion`（取自 `agent_list`），可选 `cwd`（工作区内的 worktree）、`preset`、`model`、`from`（从另一个 worker 的会话复制出来）、`task`；lead 还要传 `for`（它依据的 `fork-N` 或 `r-N`）；给了 `repo` + `branch`（+ `base`，默认 `origin/main`）会先把 `cwd` 建成新的 git worktree。 |
+| `agent_send` | 给 worker 派活，带 `rosterVersion`；请求进它的队列（按顺序，每条单独一轮），回答以 `[reply to r-N from …]` 回来。一个 router 给同一 worker 排队超过 20 条时返回 `queue/full`。旧的子智能体 worker 只做完手上的，转换前拒绝新请求。 |
 | `agent_list` | 当前 worker（含 `createdFor`）与在途请求，带 `open` 计数和 `rosterVersion`；加 `forks: true` 才连一次性分身一起列出。 |
 | `agent_interrupt` | 停当前这一轮；它待处理的收件箱保留。 |
 | `agent_archive` | 归档一个 agent；会话保留，名字不再复用。 |

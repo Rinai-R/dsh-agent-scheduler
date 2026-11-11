@@ -18,12 +18,12 @@
 - **One pipeline, ending at the lead.** A fork's conclusion, a worker's answer, a `report` and a
   failed request all go straight to the lead, tagged with who asked and for which input. No agent is
   woken again just to relay a result.
-- **Coarse workers that split on a collision.** A new area gets one worker for the whole repository
-  or module. A follow-up goes to the worker that already has the request, and a new task to an idle
-  owner. A new task in an area whose worker is running or already has open requests splits it:
-  `agent_split` renames the owner to the work it keeps and forks a new worker for the new task in
-  its own worktree, both sharing the area, so it runs in parallel instead of queueing. A fork never
-  waits for its workers.
+- **Coarse workers as sessions of their own.** A new area gets one worker for the whole repository
+  or module. Each worker is a top-level session in the router's workspace (you can open it from the
+  sidebar and talk to it directly), with a persistent queue in front of it: requests to a busy
+  worker wait their turn in order and each runs as a turn of its own. Work that must run in parallel
+  gets a new worker, optionally started as a copy of another (`agent_create` with `from`). A fork
+  never waits for its workers.
 - **A roster in the sidebar.** The Agents page lists forks and workers with live state and open
   requests, and opens any of them as an embedded conversation beside the roster. Both the page and
   the chats stay mounted, so switching tabs does not reload a conversation.
@@ -89,10 +89,10 @@ Switching changes the lead's system prompt, so the next lead request misses the 
 
 The switch decides one thing only: whether each user message is handed to a new fork. With it
 off, the user talks to the lead directly and the lead answers itself, but it keeps every worker
-tool — `agent_list`, `agent_create`, `agent_split`, `agent_send`, `agent_interrupt`,
+tool — `agent_list`, `agent_create`, `agent_send`, `agent_interrupt`,
 `agent_archive`, `role_set` and `report` — under the same dispatch lock and `rosterVersion` check. Workers' answers, reports
 and failures still come to the lead. Because there is no fork in between, `for` is optional on the
-lead's `agent_create` and `agent_split` while scheduling is off (a named `fork-N` or `r-N` is still checked and
+lead's `agent_create` while scheduling is off (a named `fork-N` or `r-N` is still checked and
 still gets one worker); with it on, the lead must name one as before. A fork created while
 scheduling was on stays a router after the switch goes off. The tools are registered in every
 session of the preset (a stable tool list keeps the prompt cache); an off session with no forks or
@@ -139,8 +139,8 @@ current mode, and the choice survives a restart. See [`worker-access.md`](worker
 Unread members stay in 分身 / Worker even when archived; the folds hold only what was read. Section
 titles and the composer's Agents button count them.
 
-**Merging workers.** The reverse of `agent_split`: `agent_merge`, `/agents merge`, or 「合并到…」 on a
-worker row. The absorbed worker first writes a handoff (done, in progress, decisions, open questions,
+**Merging workers (subagent workers only).** Workers made before the upgrade to session workers can still be merged
+with `/agents merge` or 「合并到…」 on a worker row; session workers do not merge (archive the one you no longer need). The absorbed worker first writes a handoff (done, in progress, decisions, open questions,
 files, branch/PR, uncommitted changes) and must commit or hand over its changes (the scheduler checks
 `git status` in its directory); then it is archived, its names reach the survivor (requests to them go
 there), the survivor may take a new name (within one area, the area's name from before the split),
@@ -156,6 +156,23 @@ released), ⚡ hand one to the lead now (into its running turn), or 「全部交
 to open its sender's chat. A member with something waiting shows ✉ on its row, and the composer's
 Agents button shows ✉N. The inbox is a plugin record, so a restart keeps it; the lead's
 `agent_list` lists a summary of each (sender, request, time, the first 120 characters).
+
+### Workers as sessions
+
+Every new worker is a top-level session created in the router's workspace and attached to it in the sidebar, titled `name · role`. The router (the lead) reaches it through a persistent queue kept in DSH's storage (`<DSH_HOME>/storages/agent_scheduler_queue/`):
+
+- requests to one worker are delivered in order, each as a turn of its own after the current one, and are deduplicated, so a restart never runs one twice;
+- a worker holds at most 3 delivered-but-not-yet-taken requests, and one router may have at most 20 waiting for one worker;
+- the turn that took a request answers it as `[reply to r-N from name]`; a turn that was aborted, failed or cut by a restart reports the request as failed and is not re-run;
+- when you talk to a worker directly in its own session, nothing goes to the router unless it calls `report`, which arrives as `[report from name, not a request]`.
+
+**Workers share one write area.** A worker's session works in the router's workspace, and DSH's `workspace-write` sandbox lets it write anywhere under its session's working directory, so every worker can write anywhere in that workspace, not only in the worktree it was given. Workers are not isolated from one another. Give each worker its own worktree, and keep anything you do not want touched outside the router's workspace. A worktree outside the workspace is refused, since the worker could not write there.
+
+**Workers from before the upgrade** (subagent workers) keep answering the requests they already have; new requests to them are refused until you run `/agents convert <name>`. Nothing is converted, archived or deleted on its own.
+
+**One DSH process keeps the queue.** Two DeepSeek Harness processes on the same `DSH_HOME` (the desktop app and `dsh web`, say) do not share the queue live, so only the first keeps it: it records itself with a heartbeat, and the second refuses to create workers or send them requests, naming the other process. Once the first closes, or dies (its heartbeat goes stale, or its process is gone), the next one takes over.
+
+**Requirements.** Session workers need DSH's session controller and storage domain (both in DSH 0.2.1-rc.5 and later, desktop and `dsh web`). Without the storage domain the queue cannot be kept: creating a worker or sending it a request fails with that reason instead of waiting.
 
 ### The Deck
 
@@ -191,7 +208,8 @@ All of these run in the main session.
 | `/agents archive done` | Archive every concluded fork that owes no answer. |
 | `/agents seen <name>` | Mark a member's latest report read (the Agents page sends it when you open the member). |
 | `/agents inbox pin\|unpin\|hold\|release\|now <m-N>`, `/agents inbox now all`, `/agents inbox move <m-N> [<m-N>\|end]` | Arrange the lead's inbox (the Agents page sends these). |
-| `/agents merge <absorbed> into <survivor> [--name <new>] [--role <text>]` | Merge a worker into another (the reverse of a split; `/agents merge <a> <b>` picks the survivor). The Agents page's 「合并到…」 does the same. |
+| `/agents merge <absorbed> into <survivor> [--name <new>] [--role <text>]` | Merge an old (subagent) worker into another (`/agents merge <a> <b>` picks the survivor). The Agents page's 「合并到…」 does the same. Session workers do not merge. |
+| `/agents convert <name>` | Turn an old (subagent) worker into a session worker: its session is copied with its history into a top-level session (or, when that fails, a new one starts from a summary of its last answers), and the old one is archived as `<name>-v1`. Refused while it still owes answers or is running. |
 | `/agents seen all` | Mark every unread report read (the Agents page's 「全部已读」). A session from before review marks shows its past reports unread once. |
 | `/worker` | Show the model later workers start with. |
 | `/worker model <provider>/<model> [effort]` | Set the default model for later workers. |
@@ -205,9 +223,8 @@ All of these run in the main session.
 
 | Tool | Purpose |
 |---|---|
-| `agent_create` | Start a worker: `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd`, `preset`, `model`, `from` (continue another worker's conversation), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on); `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
-| `agent_split` | Split a busy worker's area for a new task: `owner`, `ownerName` + `ownerRole` (the narrower work it keeps), `name` + `role` + `task` for the new worker, `cwd` (or `repo` + `branch`), `rosterVersion`, and `for` from the lead. The owner is renamed like `/agents rename` (its old names stay reserved); the new worker continues its conversation, or starts fresh while the owner has no completed round. Both carry the `area`; the Agents page keeps them together. |
-| `agent_send` | Send a request to a fork or worker, with `rosterVersion`; its answer arrives as `[reply to r-N from …]`. Use it for a follow-up to work the target already has, not for a new parallel task. |
+| `agent_create` | Start a worker (a top-level session in this workspace): `name`, `role`, `rosterVersion` (from `agent_list`), optional `cwd` (a worktree inside the workspace), `preset`, `model`, `from` (start as a copy of another worker's session), `task`; the lead also passes `for` (the `fork-N` or `r-N` it acts on); `repo` + `branch` (+ `base`, default `origin/main`) first create `cwd` as a new git worktree. |
+| `agent_send` | Send a request to a worker, with `rosterVersion`; it waits in the worker's queue (in order, each a turn of its own) and its answer arrives as `[reply to r-N from …]`. A queue that is full (20 waiting from one router) refuses with `queue/full`. Old subagent workers only finish what they have and refuse new requests until converted. |
 | `agent_list` | The workers (with `createdFor`) and the open requests, with `open` counts and the `rosterVersion`; pass `forks: true` to see the one-message forks too. |
 | `agent_interrupt` | Stop an agent's current round; its pending inbox is kept. |
 | `agent_archive` | Archive an agent; its session is kept and its name is never reused. |

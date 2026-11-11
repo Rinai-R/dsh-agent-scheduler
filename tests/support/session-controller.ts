@@ -18,6 +18,8 @@ export interface TestController {
   readonly created: string[]
   readonly titles: Map<string, string>
   readonly workspaces: Map<string, string>
+  /** Sessions rolled back (archived) after a failed creation. */
+  readonly archived: string[]
   /** Release a worker Session (as DSH does when unused, or on shutdown); it comes back cold. */
   release(id: string): Promise<void>
 }
@@ -26,6 +28,7 @@ export function testController(ctx: Context, opts: { workspace?: string; failFor
   const created: string[] = []
   const titles = new Map<string, string>()
   const workspaces = new Map<string, string>()
+  const archived: string[] = []
   const handles = new Map<string, { dispose(): Promise<void> }>()
   const agentOptions = { provider: 'mock', model: 'worker-model' }
   // One resume per Session at a time, as the controller's own `resumes` map does
@@ -79,6 +82,7 @@ export function testController(ctx: Context, opts: { workspace?: string; failFor
       return finish(id, spec)
     },
     resolve,
+    async rollBack(id) { archived.push(id); return true },
     async rename(id, title) { titles.set(id, title) },
     async selectModel(id) {
       const agent = await resolve(id)
@@ -86,7 +90,7 @@ export function testController(ctx: Context, opts: { workspace?: string; failFor
     },
   }
   return {
-    port, created, titles, workspaces,
+    port, created, titles, workspaces, archived,
     async release(id) {
       const agent = ctx.agents.get(SessionId(id))
       if (agent !== undefined) await agent.whenIdle()
