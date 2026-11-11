@@ -2322,11 +2322,12 @@ export class Scheduler {
       if (now.state !== 'done' && now.state !== 'archived') this.record(main, s => appendForkState(s, { forkId: memberId, state: 'done' }))
       if (now.state !== 'archived') setTimeout(() => { void this.retire(main, memberId) }, 0)
       const open = ledger.openFrom(memberId).map(r => `${r.id} → ${ledger.nameOf(r.to)}`)
+      // The reply comes last, so passing it on verbatim takes exactly the fork's text and nothing else.
       forLead.push([
         `The user said: ${now.text}`,
+        ...(open.length === 0 ? [] : [`Delegated, answers will come to you: ${open.join(', ')}`]),
         `${now.name} handled it. Its reply to the user:`,
         rounds.at(-1)!.answer,
-        ...(open.length === 0 ? [] : [`Delegated, answers will come to you: ${open.join(', ')}`]),
       ].join('\n'))
     } else if (now.kind === 'fork' && now.state === 'started' && rounds.at(-1)!.stopped !== undefined) {
       // A fork that failed or was stopped before concluding: a short error reply, never silence.

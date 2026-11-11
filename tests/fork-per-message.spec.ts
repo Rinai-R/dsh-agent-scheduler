@@ -82,6 +82,20 @@ describe('one fork per message (Q2)', () => {
     expect(leadModelTexts(adapter).join('')).toMatch(/pass that reply on to the user as your own answer, as it is/u)
   })
 
+  it('the fork\'s reply is the tail of what the session gets, after any delegation note (nothing to strip when copying it)', async () => {
+    const { lead } = await session(o => {
+      if (o.sessionId === 'router') return textResponse('LEAD')
+      if (body(o).includes('## Goal')) return textResponse('WORKER DONE')
+      if (called(o, 'agent_create')) return textResponse('Handed to hub.\nSecond line.')
+      return listThen(o, 'c1', 'agent_create', { name: 'hub', role: 'develops hub', brief })
+    })
+    lead.followup(user('fix the crash in hub'))
+    await until(lead, 'Its reply to the user')
+    const given = lead.session.snapshotEvents().filter(e => e.type === 'user/message').map(e => (e.data as unknown as { content: Array<{ text?: string }> }).content[0]?.text ?? '').find(t => t.includes('Its reply to the user'))!
+    expect(given.indexOf('Delegated, answers will come to you: r-1')).toBeLessThan(given.indexOf('Its reply to the user'))
+    expect(given.endsWith('Its reply to the user:\nHanded to hub.\nSecond line.')).toBe(true)
+  })
+
   it('hands off with a brief, then replies with a short confirmation; the worker\'s answer comes later', async () => {
     const { lead } = await session(o => {
       if (o.sessionId === 'router') return textResponse('LEAD')

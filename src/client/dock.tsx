@@ -14,7 +14,7 @@
  * and colours come from the host theme's variables.
  * @module dsh-agent-scheduler/client/dock
  */
-import { memo, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { memo, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from 'react'
 import { reviewOf } from '../review.js'
 import { mailPreview } from '../mail.js'
 import type { MailItem } from '../projection.js'
@@ -118,7 +118,8 @@ export function dockModel(roster: DockRoster | undefined, statuses: Statuses | u
 
 /** The summary line's text, e.g. 「3 个 worker · 1 个运行中 · 1 条未读」. */
 export function dockSummary(model: DockModel): string {
-  const parts = [tn('dock.workers', model.workers.length)]
+  // A worker of another session with none of its own: the summary names where it came from.
+  const parts = model.workers.length === 0 && model.parent !== undefined ? [t('dock.parent.session')] : [tn('dock.workers', model.workers.length)]
   const running = model.workers.filter(w => w.dot === 'running').length
   const waiting = model.workers.filter(w => w.dot === 'waiting').length
   if (running > 0) parts.push(tn('dock.running', running))
@@ -127,6 +128,9 @@ export function dockSummary(model: DockModel): string {
   if (model.inbox > 0) parts.push(tn('dock.inbox', model.inbox))
   return parts.join(' · ')
 }
+
+/** @returns the command that marks a row read when it is opened, if it has an unread reply. */
+export const rowOpenLine = (row: Pick<DockRow, 'id' | 'unread'>): string | undefined => row.unread > 0 ? dockLine.seen(row.id) : undefined
 
 /** Where the collapsed state is kept: one choice for every session, like the Todo dock's. */
 export interface DockStore {
@@ -165,6 +169,7 @@ export const dockLine = {
   send: (name: string, text: string) => `/agents send ${name} ${text.replace(/\s+/gu, ' ').trim()}`,
   convert: (name: string) => `/agents convert ${name}`,
   rename: (name: string, to: string) => `/agents rename ${name} ${to}`,
+  fork: (name: string, to: string) => `/agents fork ${name} ${to}`,
   archive: (name: string) => `/agents archive ${name}`,
   create: (name: string, role: string) => `/agents new ${name} ${role.replace(/\s+/gu, ' ').trim()}`,
   seenAll: () => '/agents seen all',
@@ -202,8 +207,10 @@ export function createSessionDock(deps: DockDeps) {
     const collapsed = useSyncExternalStore(store.subscribe, store.collapsed, store.collapsed)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [draft, setDraft] = useState<{ row: string; kind: 'send' | 'rename'; text: string } | undefined>(undefined)
+    const [draft, setDraft] = useState<{ row: string; kind: 'send' | 'rename' | 'fork'; text: string } | undefined>(undefined)
     const [creating, setCreating] = useState<{ name: string; role: string } | undefined>(undefined)
+    const box = useRef<HTMLDivElement | null>(null)
+    useComposerAligned(box)
     const sessionId = props.sessionId
     if (sessionId === undefined || deps.isChild(sessionId)) return null
     const model = dockModel(roster, statuses, parentRoster, sessionId)
@@ -213,12 +220,18 @@ export function createSessionDock(deps: DockDeps) {
       setError(null)
       deps.run(sessionId, line).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
     }
-    const open = (row: DockRow) => { if (row.session) deps.openSession(row.id); else deps.openChild(sessionId, row.id) }
+    const open = (row: DockRow) => {
+      // Opening a worker reads its latest reply, as opening a member's chat always did.
+      const seen = rowOpenLine(row)
+      if (seen !== undefined) deps.run(sessionId, seen).catch(() => undefined)
+      if (row.session) deps.openSession(row.id); else deps.openChild(sessionId, row.id)
+    }
     const submitDraft = () => {
       if (draft === undefined || draft.text.trim() === '') return
       const row = model.workers.find(w => w.id === draft.row)
       if (row === undefined) return
-      run(draft.kind === 'send' ? dockLine.send(row.name, draft.text) : dockLine.rename(row.name, draft.text.trim()))
+      if (draft.kind !== 'send' && !WORKER_NAME.test(draft.text.trim())) { setError(t('dock.name.invalid')); return }
+      run(draft.kind === 'send' ? dockLine.send(row.name, draft.text) : draft.kind === 'fork' ? dockLine.fork(row.name, draft.text.trim()) : dockLine.rename(row.name, draft.text.trim()))
       setDraft(undefined)
     }
     const onDraftKey = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -227,7 +240,7 @@ export function createSessionDock(deps: DockDeps) {
     }
     const createOk = creating !== undefined && WORKER_NAME.test(creating.name) && creating.role.trim() !== ''
     return (
-      <div className="sch-dock" data-scheduler-dock="" data-collapsed={collapsed ? 'yes' : 'no'}>
+      <div ref={box} className="sch-dock" data-scheduler-dock="" data-collapsed={collapsed ? 'yes' : 'no'}>
         <div className="sch-dock-head">
           <button type="button" className="sch-dock-fold" aria-expanded={!collapsed} aria-label={t(collapsed ? 'dock.expand' : 'dock.collapse')} title={t(collapsed ? 'dock.expand' : 'dock.collapse')} onClick={() => { store.set(!collapsed) }}>
             <span className="sch-dock-chev" aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
@@ -265,11 +278,12 @@ export function createSessionDock(deps: DockDeps) {
                     <span className="sch-dock-acts">
                       <button type="button" title={t('dock.send')} aria-label={t('dock.send')} onClick={() => { setDraft({ row: row.id, kind: 'send', text: '' }) }}>✉</button>
                       <button type="button" title={t('dock.rename')} aria-label={t('dock.rename')} onClick={() => { setDraft({ row: row.id, kind: 'rename', text: row.name }) }}>✎</button>
+                      {row.session ? <button type="button" title={t('dock.fork')} aria-label={t('dock.fork')} onClick={() => { setDraft({ row: row.id, kind: 'fork', text: `${row.name}-2` }) }}>⑂</button> : null}
                       {row.session ? null : <button type="button" title={t('dock.convert')} aria-label={t('dock.convert')} disabled={busy} onClick={() => { run(dockLine.convert(row.name)) }}>⇪</button>}
                       <button type="button" title={t('dock.archive')} aria-label={t('dock.archive')} disabled={busy} onClick={() => { run(dockLine.archive(row.name)) }}>🗄</button>
                     </span>
                     {draft?.row !== row.id ? null : (
-                      <input className="sch-dock-input" autoFocus value={draft.text} placeholder={t(draft.kind === 'send' ? 'dock.send.placeholder' : 'dock.rename.placeholder')} onChange={e => { setDraft({ ...draft, text: e.currentTarget.value }) }} onKeyDown={onDraftKey} onBlur={() => { if (draft.text.trim() === '') setDraft(undefined) }} />
+                      <input className="sch-dock-input" autoFocus value={draft.text} placeholder={t(draft.kind === 'send' ? 'dock.send.placeholder' : draft.kind === 'fork' ? 'dock.fork.placeholder' : 'dock.rename.placeholder')} onChange={e => { setDraft({ ...draft, text: e.currentTarget.value }) }} onKeyDown={onDraftKey} onBlur={() => { if (draft.text.trim() === '') setDraft(undefined) }} />
                     )}
                   </li>
                 ))}
@@ -293,6 +307,56 @@ export function createSessionDock(deps: DockDeps) {
   })
 }
 
+/**
+ * Line the dock up with the composer card, as the Todo dock is: the seat spans the whole column,
+ * while the composer card is centred and narrower on a wide window.
+ * @returns the bounds to apply, relative to the seat, or undefined to fill it.
+ */
+export function composerBounds(seat: { left: number; width: number }, card: { left: number; width: number } | undefined): { marginLeft: number; width: number } | undefined {
+  if (card === undefined || card.width <= 0 || card.width >= seat.width - 1) return undefined
+  return { marginLeft: Math.max(0, card.left - seat.left), width: card.width }
+}
+
+/** The first ancestor that has a box (the seat's own wrapper is `display: contents`, with no size). */
+function boxedParent(from: HTMLElement): HTMLElement | undefined {
+  let n = from.parentElement
+  while (n !== null && n.getBoundingClientRect().width === 0) n = n.parentElement
+  return n ?? undefined
+}
+
+/** The composer's bordered card next to this seat: the input's first ancestor with a border. */
+function composerCard(stack: HTMLElement): HTMLElement | undefined {
+  let n: HTMLElement | null = stack.querySelector<HTMLElement>('[data-composer-input]')
+  while (n !== null && n !== stack) {
+    if (getComputedStyle(n).borderTopWidth !== '0px') return n
+    n = n.parentElement
+  }
+  return undefined
+}
+
+function useComposerAligned(ref: RefObject<HTMLDivElement | null>): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el === null || typeof ResizeObserver === 'undefined') return undefined
+    const stack = boxedParent(el)
+    if (stack === undefined) return undefined
+    const align = () => {
+      const seat = stack.getBoundingClientRect()
+      const box = composerCard(stack)?.getBoundingClientRect()
+      const b = composerBounds({ left: seat.left, width: seat.width }, box === undefined ? undefined : { left: box.left, width: box.width })
+      el.style.marginLeft = b === undefined ? '' : `${b.marginLeft}px`
+      el.style.width = b === undefined ? '' : `${b.width}px`
+    }
+    align()
+    // The stack resizes with the window and the panes; the card mounts or changes after the dock.
+    const watch = new ResizeObserver(align)
+    watch.observe(stack)
+    const card = composerCard(stack)
+    if (card !== undefined) watch.observe(card)
+    return () => { watch.disconnect() }
+  })
+}
+
 const scrollToInbox = (): void => {
   if (typeof document === 'undefined') return
   document.querySelector('[data-scheduler-inbox-card]')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
@@ -312,13 +376,15 @@ export function createInboxCard(deps: Pick<DockDeps, 'run' | 'isChild'>) {
     useLocale()
     const roster = props.useProjection?.('agentScheduler') as DockRoster | undefined
     const [busy, setBusy] = useState(false)
+    const box = useRef<HTMLDivElement | null>(null)
+    useComposerAligned(box)
     const sessionId = props.sessionId
     if (sessionId === undefined || deps.isChild(sessionId)) return null
     const model = inboxCardModel(roster)
     if (model.waiting.length === 0 && model.unread.length === 0) return null
     const run = (line: string) => { setBusy(true); deps.run(sessionId, line).finally(() => { setBusy(false) }) }
     return (
-      <div className="sch-dock sch-dock-card" data-scheduler-inbox-card="">
+      <div ref={box} className="sch-dock sch-dock-card" data-scheduler-inbox-card="">
         <div className="sch-dock-head"><span className="sch-dock-summary">{t('dock.card.title')}</span></div>
         <ul className="sch-dock-rows">
           {model.waiting.map(m => (
@@ -362,6 +428,8 @@ export const DOCK_STYLE = `
 .sch-dock-up{color:var(--dsw-alias-label-primary)}
 .sch-dock-rows{list-style:none;margin:0;padding:0}
 .sch-dock-row{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 2px}
+.sch-dock-card .sch-dock-rows{padding:2px 8px 4px}
+.sch-dock-card .sch-dock-row{padding:2px 0}
 .sch-dock-open{flex:1;min-width:0;display:flex;align-items:center;gap:8px;border:0;background:none;color:inherit;font:inherit;cursor:pointer;padding:3px 4px;border-radius:var(--dsw-radius-sm);text-align:left}
 .sch-dock-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}
 .sch-dock-dot[data-dot=running]{background:var(--dsw-alias-state-business-primary)}

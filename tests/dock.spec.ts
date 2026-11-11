@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { dockLine, dockModel, dockStore, dockSummary, inboxCardModel, inboxLine, type DockRoster } from '../src/client/dock.js'
+import { composerBounds, dockLine, dockModel, rowOpenLine, dockStore, dockSummary, inboxCardModel, inboxLine, type DockRoster } from '../src/client/dock.js'
 import { applyRoster, EMPTY_ROSTER, rosterView } from '../src/projection.js'
 import { runAgentsCommand, runScheduleCommand } from '../src/rule-plugin.js'
 import { MemoryQueueStore, MessageQueue } from '../src/queue.js'
@@ -68,6 +68,13 @@ describe('dock model', () => {
     expect(view.owner).toEqual({ router: 'R', name: 'hub', role: 'r' })
   })
 
+  it('opening a row with an unread reply marks it read; a worker with no workers of its own names its parent in the summary', () => {
+    expect(rowOpenLine({ id: 'w1', unread: 1 })).toBe('/agents seen w1')
+    expect(rowOpenLine({ id: 'w1', unread: 0 })).toBeUndefined()
+    const m = dockModel(roster({ owner: { router: 'R', name: 'hub' } }), undefined, undefined, 'me')
+    expect(dockSummary(m)).toBe('由上级会话创建')
+  })
+
   it('the collapsed state is remembered across pages, and listeners hear the change', () => {
     const map = new Map<string, string>()
     const storage = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => { map.set(k, v) } }
@@ -82,6 +89,14 @@ describe('dock model', () => {
     const b = dockStore()
     b.set(true)
     expect(b.collapsed()).toBe(true)
+  })
+})
+
+describe('dock width', () => {
+  it('lines up with the composer card when that is narrower than the seat, else fills the seat', () => {
+    expect(composerBounds({ left: 280, width: 1920 }, { left: 900, width: 680 })).toEqual({ marginLeft: 620, width: 680 })
+    expect(composerBounds({ left: 280, width: 587 }, { left: 280, width: 587 })).toBeUndefined()
+    expect(composerBounds({ left: 280, width: 587 }, undefined)).toBeUndefined()
   })
 })
 
@@ -133,6 +148,10 @@ describe('everything moved off the Agents page stays reachable', () => {
     expect(body as unknown).toBeDefined()
     expect((await run(dockLine.rename('hub', 'hub-core'))).kind).toBe('success')
     expect(scheduler.ledgerOf(lead).find('hub-core')?.id).toBe(hub.id)
+    // Fork from the dock: the same path as /agents fork, a session copy of hub.
+    expect(dockLine.fork('hub-core', 'hub-two')).toBe('/agents fork hub-core hub-two')
+    expect((await run(dockLine.fork('hub-core', 'hub-two'))).kind).toBe('success')
+    expect(scheduler.ledgerOf(lead).find('hub-two')).toMatchObject({ session: true, from: hub.id })
     expect((await run(dockLine.seenAll())).kind).toBe('success')
     expect((await run(dockLine.archive('hub-core'))).kind).toBe('success')
     expect(scheduler.ledgerOf(lead).members.get(hub.id)?.state).toBe('archived')
