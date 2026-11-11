@@ -50,7 +50,6 @@ const HEARTBEAT_MS = 10_000
 
 /** Whether a process id is alive on this machine (signal 0 checks without signalling). */
 const alive = (pid: number): boolean => {
-  if (pid === process.pid) return true
   try { process.kill(pid, 0); return true } catch (error) { return (error as { code?: string }).code === 'EPERM' }
 }
 
@@ -104,18 +103,53 @@ export function watchQueueStore(ctx: Context, ready: (store: QueueStore | undefi
     mounted = true
     let closed = false
     let close: (() => Promise<void>) | undefined
-    void openQueueStore(scoped).then(opened => {
-      if (opened === undefined) return
-      if (closed) { void opened.close(); return }
-      close = opened.close
-      ready(opened.store)
-    }, error => {
-      log('opening the agent-scheduler queue failed', error)
-      // Kept by another process: say so instead of leaving every send waiting.
-      if (error instanceof QueueOwnedElsewhere) unavailable?.(error.message)
-    })
-    scoped.effect(() => () => { closed = true; ready(undefined); void close?.() }, 'agent-scheduler: queue store')
+    const attempt = async (): Promise<void> => {
+      // A live reload remounts this row in the same process while the previous row's domain is
+      // still closing: wait for that close, and retry the "already open" refusal for a while.
+      const slot = closingSlot()
+      for (let tried = 0; ; tried += 1) {
+        await withDeadline(slot.closing, REOPEN_WAIT_MS)
+        if (closed) return
+        try {
+          const opened = await openQueueStore(scoped)
+          if (opened === undefined) return
+          if (closed) { await opened.close(); return }
+          close = opened.close
+          ready(opened.store)
+          return
+        } catch (error) {
+          if (isAlreadyOpen(error) && tried < REOPEN_TRIES) { await sleep(REOPEN_BACKOFF_MS * (tried + 1)); continue }
+          log('opening the agent-scheduler queue failed', error)
+          // Never leave requests waiting on a store that will not open: they fail with the reason.
+          unavailable?.(error instanceof QueueOwnedElsewhere ? error.message : `the worker queue could not be opened: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+      }
+    }
+    void attempt()
+    scoped.effect(() => () => {
+      closed = true
+      ready(undefined)
+      // Recorded process-wide, so the row mounted next (a live reload) opens after this close.
+      const slot = closingSlot()
+      const done = (close?.() ?? Promise.resolve()).catch((error: unknown) => { log('closing the agent-scheduler queue failed', error) })
+      slot.closing = Promise.all([slot.closing, done]).then(() => undefined)
+    }, 'agent-scheduler: queue store')
   })
+}
+
+/** How a remounted row waits for the previous row's close (see {@link watchQueueStore}). */
+const REOPEN_WAIT_MS = 5_000
+const REOPEN_TRIES = 10
+const REOPEN_BACKOFF_MS = 200
+const sleep = (ms: number): Promise<void> => new Promise(resolve => { setTimeout(resolve, ms) })
+const withDeadline = (work: Promise<void>, ms: number): Promise<void> => Promise.race([work, sleep(ms)])
+const isAlreadyOpen = (error: unknown): boolean => (error as { code?: unknown } | undefined)?.code === 'already-open' || /already open/u.test(String((error as Error | undefined)?.message ?? ''))
+/** Process-wide (a reload may load this module afresh): the close of the last row's queue domain. */
+const CLOSING = Symbol.for('dsh-agent-scheduler/queue-store/closing')
+const closingSlot = (): { closing: Promise<void> } => {
+  const g = globalThis as { [CLOSING]?: { closing: Promise<void> } }
+  return (g[CLOSING] ??= { closing: Promise.resolve() })
 }
 
 /**
@@ -123,8 +157,9 @@ export function watchQueueStore(ctx: Context, ready: (store: QueueStore | undefi
  * @param ctx - a context that injects `storageDomain`.
  * @returns the store, or undefined on a DSH without the storage domain (then the caller says why).
  */
-export async function openQueueStore(ctx: Context, opts: { now?: () => number; instance?: string } = {}): Promise<{ store: QueueStore; close: () => Promise<void> } | undefined> {
+export async function openQueueStore(ctx: Context, opts: { now?: () => number; instance?: string; pid?: number } = {}): Promise<{ store: QueueStore; close: () => Promise<void> } | undefined> {
   const instance = opts.instance ?? INSTANCE
+  const pid = opts.pid ?? process.pid
   const facility = (ctx as unknown as { storageDomain?: { open(spec: unknown): Promise<OpenDomain> }; get(name: string): { open(spec: unknown): Promise<OpenDomain> } | undefined }).storageDomain
     ?? (ctx as unknown as { get(name: string): { open(spec: unknown): Promise<OpenDomain> } | undefined }).get('storageDomain')
   if (!features.record('storageDomain', facility !== undefined && typeof facility.open === 'function', 'storageDomain.open')) return undefined
@@ -135,11 +170,14 @@ export async function openQueueStore(ctx: Context, opts: { now?: () => number; i
   const ownerTable = domain.table('owner')
   const current = ownerTable.get('host')
   const now = opts.now?.() ?? Date.now()
-  if (current !== undefined && current.instance !== instance && now - current.heartbeatAt < OWNER_STALE_MS && alive(current.pid)) {
+  // The same process is never "another process": a live reload loads this module afresh (a new
+  // instance id, same pid), and within one process the storage backend already allows a single
+  // open handle, so the old copy has closed the domain by the time this open succeeds.
+  if (current !== undefined && current.instance !== instance && current.pid !== pid && now - current.heartbeatAt < OWNER_STALE_MS && alive(current.pid)) {
     await domain.close()
     throw new QueueOwnedElsewhere(current)
   }
-  const beat = async (): Promise<void> => { await ownerTable.put('host', { instance, pid: process.pid, heartbeatAt: opts.now?.() ?? Date.now() }) }
+  const beat = async (): Promise<void> => { await ownerTable.put('host', { instance, pid, heartbeatAt: opts.now?.() ?? Date.now() }) }
   await beat()
   const timer = setInterval(() => { void beat().catch(() => undefined) }, HEARTBEAT_MS)
   ;(timer as { unref?: () => void }).unref?.()
@@ -158,7 +196,7 @@ export async function openQueueStore(ctx: Context, opts: { now?: () => number; i
     close: async () => {
       clearInterval(timer)
       // Give the queue up at once: a heartbeat of 0 lets another process take it without waiting.
-      try { await ownerTable.put('host', { instance, pid: process.pid, heartbeatAt: 0 }) } catch { /* closing anyway */ }
+      try { await ownerTable.put('host', { instance, pid, heartbeatAt: 0 }) } catch { /* closing anyway */ }
       await domain.close()
     },
   }

@@ -113,6 +113,44 @@ export interface QueueLimits {
 }
 export const DEFAULT_LIMITS: QueueLimits = { maxInFlight: 3, maxQueued: 20 }
 
+/**
+ * How long one step may take before it counts as failed. Nothing in the queue waits without a
+ * bound: a store that never opens, an activation or flush that never returns, a log read that
+ * hangs. A step that times out is retried up to `maxAttempts`, then the message fails with the
+ * reason and its producer is told.
+ */
+export interface QueueTimeouts {
+  /** Waiting for the durable store to open (enqueue, cancel, settle). */
+  readonly storeMs: number
+  /** Resolving (activating) the target Session. */
+  readonly activateMs: number
+  /** Handing the message to the target and flushing it to its log. */
+  readonly sendMs: number
+  /** Reading the target's completed rounds. */
+  readonly roundsMs: number
+  /** Delivery attempts before the message fails. */
+  readonly maxAttempts: number
+  /** Wait before retrying a failed delivery. */
+  readonly retryMs: number
+}
+export const DEFAULT_TIMEOUTS: QueueTimeouts = { storeMs: 10_000, activateMs: 30_000, sendMs: 15_000, roundsMs: 30_000, maxAttempts: 3, retryMs: 5_000 }
+
+/** A step that did not finish in time. */
+export class QueueTimeout extends Error {
+  override readonly name = 'QueueTimeout'
+  readonly code = 'queue/timeout'
+}
+
+/** @returns `work`, or a rejection with `what` once `ms` pass first. */
+export function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { reject(new QueueTimeout(`${what} did not finish within ${Math.round(ms / 1000)}s`)) }, ms)
+    ;(timer as { unref?: () => void }).unref?.()
+  })
+  return Promise.race([work, late]).finally(() => { clearTimeout(timer) })
+}
+
 /** A producer is over its quota on a target; back off and retry. */
 export class QueueFull extends Error {
   override readonly name = 'QueueFull'
@@ -138,6 +176,10 @@ type Listener<T> = (value: T) => void | Promise<void>
 /** The queue. One instance per host process (see design §3.6). */
 export class MessageQueue {
   private readonly chains = new Map<string, Promise<void>>()
+  /** Targets being delivered to now, and those kicked meanwhile (delivered to again when it ends). */
+  private readonly delivering = new Set<string>()
+  private readonly kickedAgain = new Set<string>()
+  private readonly timeouts: QueueTimeouts
   private readonly replyListeners = new Map<string, Set<Listener<QueueReply>>>()
   private readonly reportListeners = new Set<Listener<QueueReport>>()
   private readonly now: () => Date
@@ -146,9 +188,10 @@ export class MessageQueue {
     private readonly store: QueueStore,
     private readonly host: QueueHost,
     private readonly limits: QueueLimits = DEFAULT_LIMITS,
-    opts: { now?: () => Date; log?: (message: string, error?: unknown) => void } = {},
+    opts: { now?: () => Date; log?: (message: string, error?: unknown) => void; timeouts?: Partial<QueueTimeouts> } = {},
   ) {
     this.now = opts.now ?? (() => new Date())
+    this.timeouts = { ...DEFAULT_TIMEOUTS, ...opts.timeouts }
     this.log = opts.log ?? (() => undefined)
   }
 
@@ -216,9 +259,47 @@ export class MessageQueue {
     return () => { this.reportListeners.delete(listener) }
   }
 
+  private disposed = false
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+
+  /**
+   * Stop: no new delivery loop, no pending retry. Called when this copy of the plugin goes away
+   * (a live reload, shutdown); what was saved and not delivered is delivered by the next copy's
+   * recover. A loop already running stops at its next step; its writes go nowhere, since the store
+   * of a disposed copy is closed.
+   */
+  dispose(): void {
+    this.disposed = true
+    for (const timer of this.timers) clearTimeout(timer)
+    this.timers.clear()
+  }
+
+  /** A timer the queue owns: cleared on {@link dispose}. */
+  private later(ms: number, work: () => void): void {
+    if (this.disposed) return
+    const timer = setTimeout(() => { this.timers.delete(timer); if (!this.disposed) work() }, ms)
+    ;(timer as { unref?: () => void }).unref?.()
+    this.timers.add(timer)
+  }
+
   /** Deliver what can go to a target now. */
   kick(target: string): void {
-    void this.serial(target, () => this.drain(target)).catch(error => { this.log(`delivering to ${target} failed`, error) })
+    if (this.disposed) return
+    // Delivery runs outside the target's write chain: enqueue never waits behind an activation or
+    // a flush. One delivery loop per target keeps the order; a kick meanwhile runs it once more.
+    if (this.delivering.has(target)) { this.kickedAgain.add(target); return }
+    this.delivering.add(target)
+    void (async () => {
+      try {
+        await this.waitReady()
+        await this.drain(target)
+      } catch (error) {
+        this.log(`delivering to ${target} failed`, error)
+      } finally {
+        this.delivering.delete(target)
+        if (this.kickedAgain.delete(target)) this.kick(target)
+      }
+    })()
   }
 
   /**
@@ -268,9 +349,16 @@ export class MessageQueue {
 
   // ---------------------------------------------------------------- internals
 
+  /** The store is open, or a bounded wait says why not (never forever). */
+  private async waitReady(): Promise<void> {
+    if (this.store.ready === undefined) return
+    await withTimeout(this.store.ready, this.timeouts.storeMs, 'opening the queue store')
+  }
+
+  /** The target's write chain: short state changes only, never host I/O that can hang. */
   private serial(target: string, work: () => Promise<void>): Promise<void> {
     const previous = this.chains.get(target) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(async () => { await this.store.ready; await work() })
+    const next = previous.catch(() => undefined).then(async () => { await this.waitReady(); await work() })
     this.chains.set(target, next)
     // A failure is the caller's to handle (enqueue rethrows it); the chain itself must not leave it unhandled.
     next.catch(() => undefined)
@@ -284,8 +372,43 @@ export class MessageQueue {
     return next
   }
 
+  /**
+   * Change a message from the delivery loop, on the target's write chain and against its current
+   * state (a claim or settle may have moved it meanwhile).
+   * @returns the message after the change, or undefined when `when` refused it.
+   */
+  private async patch(m: QueueMessage, change: Partial<QueueMessage>, when: (now: QueueMessage) => boolean = now => now.state === m.state): Promise<QueueMessage | undefined> {
+    // A delivery loop that outlived its copy writes nothing: the next copy's recover owns the message.
+    if (this.disposed) return undefined
+    let out: QueueMessage | undefined
+    await this.serial(m.target, async () => {
+      const now = this.store.message(m.qid)
+      if (now === undefined || !when(now)) return
+      out = await this.update(now, change)
+    })
+    return out
+  }
+
+  /** A delivery step failed: retry later, or fail the message with the reason once out of attempts. */
+  private async deliveryFailed(m: QueueMessage, error: unknown): Promise<false> {
+    if (this.disposed) return false
+    const attempts = m.attempts + 1
+    const reason = messageOf(error)
+    if (attempts >= this.timeouts.maxAttempts) {
+      await this.patch(m, { attempts, state: 'failed', error: `not delivered after ${attempts} attempts: ${reason}`, settledAt: this.now().toISOString() }, now => now.state === 'queued')
+      await this.replyAll(m.target)
+      // The next message may go: a failed one does not hold the target.
+      this.later(0, () => { this.kick(m.target) })
+    } else {
+      await this.patch(m, { attempts, error: reason }, now => now.state === 'queued')
+      this.later(this.timeouts.retryMs, () => { this.kick(m.target) })
+    }
+    return false
+  }
+
   private async drain(target: string): Promise<void> {
     for (;;) {
+      if (this.disposed) return
       const all = this.messagesTo(target)
       const inFlight = all.filter(m => m.state === 'delivered').length
       if (inFlight >= this.limits.maxInFlight) return
@@ -300,41 +423,41 @@ export class MessageQueue {
   private async deliverOne(m: QueueMessage): Promise<boolean> {
     let agent: QueueAgent | undefined
     try {
-      agent = await this.host.resolve(m.target)
+      agent = await withTimeout(this.host.resolve(m.target), this.timeouts.activateMs, `activating session ${m.target}`)
     } catch (error) {
-      await this.update(m, { attempts: m.attempts + 1, error: messageOf(error) })
-      return false
+      return this.deliveryFailed(m, error)
     }
     if (agent === undefined) {
-      await this.update(m, { state: 'failed', error: `no session ${m.target}`, settledAt: this.now().toISOString() })
+      await this.patch(m, { state: 'failed', error: `no session ${m.target}`, settledAt: this.now().toISOString() })
       void this.replyAll(m.target)
       return true
     }
-    // At least once: a delivery that landed before a crash is found, not repeated.
+    // At least once: a delivery that landed before a crash (or before a timed-out flush) is found, not repeated.
     const where = this.host.find(agent, m.qid, m.inboxMessageId)
     if (where !== undefined) {
-      await this.update(m, { state: 'delivered', deliveredAt: m.deliveredAt ?? this.now().toISOString() })
+      await this.patch(m, { state: 'delivered', deliveredAt: m.deliveredAt ?? this.now().toISOString(), error: undefined })
       return true
     }
     const inboxMessageId = this.host.prepare(m)
     // Recorded before it is sent: a crash after sending finds it by this id (or by its qid).
-    const prepared = await this.update(m, { inboxMessageId, attempts: m.attempts + 1 })
+    const prepared = await this.patch(m, { inboxMessageId })
+    if (prepared === undefined) return true
     let ok = false
     try {
-      ok = await this.host.send(agent, prepared, inboxMessageId)
+      ok = await withTimeout(this.host.send(agent, prepared, inboxMessageId), this.timeouts.sendMs, `delivering to session ${m.target}`)
     } catch (error) {
-      await this.update(prepared, { error: messageOf(error) })
-      return false
+      return this.deliveryFailed(prepared, error)
     }
-    if (!ok) { await this.update(prepared, { error: 'the target did not acknowledge the delivery' }); return false }
-    await this.update(prepared, { state: 'delivered', deliveredAt: this.now().toISOString(), error: undefined })
+    if (!ok) return this.deliveryFailed(prepared, new Error('the target did not acknowledge the delivery'))
+    // A claim may already have moved it on (the target took it at once): keep that.
+    await this.patch(prepared, { state: 'delivered', deliveredAt: this.now().toISOString(), error: undefined }, now => now.state === 'queued')
     return true
   }
 
   private async settleLocked(target: string, restarting: boolean): Promise<void> {
     const t = this.store.target(target) ?? { nextSeq: 1 }
     const from = (t.settledThrough ?? -1) + 1
-    const rounds = await this.host.rounds(target, from)
+    const rounds = await withTimeout(this.host.rounds(target, from), this.timeouts.roundsMs, `reading the rounds of session ${target}`)
     const byInbox = new Map(this.messagesTo(target).filter(m => m.inboxMessageId !== undefined).map(m => [m.inboxMessageId!, m]))
     for (const round of rounds) {
       const taken = [...round.claimed].flatMap(id => { const m = byInbox.get(id); return m === undefined ? [] : [m] })
@@ -360,7 +483,7 @@ export class MessageQueue {
     }
     if (!restarting) return
     // After a restart: what no completed round took.
-    const agent = await this.host.resolve(target).catch(() => undefined)
+    const agent = await withTimeout(this.host.resolve(target), this.timeouts.activateMs, `activating session ${target}`).catch(() => undefined)
     if (agent === undefined) return
     for (const m of this.messagesTo(target)) {
       if (m.state === 'claimed' && !agent.running) {
@@ -438,7 +561,12 @@ export class PendingQueueStore implements QueueStore {
   /** @param store - the durable store, now open; undefined when it went away (later operations wait again). */
   set(store: QueueStore | undefined): void {
     this.current = store
-    if (store !== undefined) { this.unavailable = undefined; this.open() }
+    if (store !== undefined) {
+      this.unavailable = undefined
+      this.open()
+      // After a failure (fail() replaced `ready` with a rejection) the store came back: ready again.
+      this.ready = Promise.resolve()
+    }
     else this.ready = new Promise((resolve, reject) => { this.open = resolve; this.refuse = reject })
   }
   get isOpen(): boolean { return this.current !== undefined }
