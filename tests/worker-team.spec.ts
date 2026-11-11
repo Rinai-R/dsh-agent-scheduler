@@ -134,7 +134,7 @@ describe('a worker leads its own Agent Team', () => {
     for (const name of ['send_message', 'list_agents', 'team_task_update', 'interrupt_agent', 'wait_agent']) expect(guard({ name, agent: lead })).toBeUndefined()
     // A fork: every Team tool refused.
     lead.followup(user('route this'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const forkId = scheduler.ledgerOf(lead).state.members.find(m => m.kind === 'fork')!.id
     const fork = { id: forkId, session: { header: { parentSession: lead.id } } } as never
     expect(guard({ name: 'list_agents', agent: fork })).toMatch(/is a fork/)

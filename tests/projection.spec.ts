@@ -19,7 +19,7 @@ describe('roster projection', () => {
     const scheduler = install(ctx)
     scheduler.setRole(lead, 'LEAD ROLE: map every requirement')
     lead.followup(user('why is billing slow'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const view = rosterOf(lead)
     expect(view.role).toBe('LEAD ROLE: map every requirement')
     expect(view.members).toEqual([expect.objectContaining({ name: 'fork-1', kind: 'fork', text: 'why is billing slow' })])

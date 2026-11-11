@@ -101,7 +101,7 @@ describe('member model', () => {
     const { ctx, lead, adapter } = await setup(() => textResponse('ok'))
     const scheduler = install(ctx)
     lead.followup(user('first'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const forkId = SessionId(forksOf(lead)[0]!)
     const run = (rawInput: string) => runMemberModelCommand(scheduler, ctx.agents as never, { agent: lead, rawInput, attachments: [] } as never, validate(ctx))
     expect(await run('fork-1 mock-b/fork-own')).toMatchObject({ kind: 'error', text: expect.stringMatching(/lead's model/u) })

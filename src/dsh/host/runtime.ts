@@ -57,10 +57,15 @@ const never = (): AbortSignal => new AbortController().signal
 export function subagentPort(service: SubagentService): SubagentPort {
   return {
     async startFork(main, { childId, label, prompt }) {
-      await service.startActivation({
-        provider: 'fork', label, childId: SessionId(childId), signal: never(), delivery: 'parent',
+      // Caller delivery: the runtime keeps the fork's result for us and posts no settlement
+      // notice into the lead (any that still comes is swallowed by the scheduler's admit). The
+      // conclusion is read from the fork's own log when it goes idle, as before.
+      const started = await service.startActivation({
+        provider: 'fork', label, childId: SessionId(childId), signal: never(), delivery: 'caller',
         request: { parent: main, prompt: [...prompt] },
       })
+      // Nobody else waits on it: a failed capture must not surface as an unhandled rejection.
+      void Promise.resolve(started.result).catch(() => undefined)
     },
     async startWorker(main, { childId, label, text, seed, cwd, preset, model }) {
       if (seed !== undefined) registerForkSeed(childId, seed)

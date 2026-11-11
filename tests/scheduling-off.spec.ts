@@ -91,7 +91,7 @@ describe('scheduling off', () => {
     const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     const scheduler = install(ctx)
     lead.followup(user('hello'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     scheduler.setMode(lead, false)
     const fork = { id: forksOf(lead)[0]!, session: { header: { parentSession: lead.id } } } as never
     expect(scheduler.forkNameOf(fork)).toBe('fork-1')

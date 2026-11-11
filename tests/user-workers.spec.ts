@@ -133,7 +133,7 @@ describe('/agents rename', () => {
     expect((await agents(scheduler, lead, 'rename site docs')).kind).toBe('success')
     expect(scheduler.ledgerOf(lead).find('docs')).toMatchObject({ name: 'docs', formerNames: ['site'] })
     lead.followup(user('hi'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     expect((await agents(scheduler, lead, 'rename fork-1 helper')).text).toMatch(/is a fork/)
     await scheduler.archive(lead, 'ops')
     expect((await agents(scheduler, lead, 'rename ops ops2')).text).toMatch(/archived/)

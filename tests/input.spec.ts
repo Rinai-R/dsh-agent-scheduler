@@ -31,10 +31,10 @@ describe('input rule', () => {
     await vi.waitFor(() => { expect(adapter.requests.filter(r => r.sessionId !== 'lead').length).toBe(2) }, { timeout: 10_000 })
     expect(lead.status).toBe('running')
     hold.open()
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const log = lead.session.snapshotEvents()
     // Both conclusions came while the lead was busy: they waited in its inbox and reach it together.
-    const merged = log.filter(e => e.type === 'user/message' && text(e).includes('Its conclusion'))
+    const merged = log.filter(e => e.type === 'user/message' && text(e).includes('Its reply to the user'))
     expect(merged).toHaveLength(1)
     expect(text(merged[0]!)).toContain('The user said: input one')
     expect(text(merged[0]!)).toContain('The user said: input two')
@@ -61,7 +61,7 @@ describe('input rule', () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     install(ctx)
     lead.followup(user('add a feature'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const forkReq = adapter.requests.find(r => r.sessionId !== 'lead')!
     const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
     // Same bytes in both system prompts (message ids aside), so the fork keeps the lead's cache prefix.
@@ -81,12 +81,12 @@ describe('input rule', () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD ACK' : 'FORK CONCLUSION'))
     install(ctx)
     lead.followup(user('why is billing slow'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
     expect(body(leadReq)).toContain('The user said: why is billing slow')
     expect(body(leadReq)).toContain('FORK CONCLUSION')
     lead.followup(user('second'))
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its reply to the user', 2)
     const req = adapter.requests.find(r => r.sessionId === forksOf(lead)[1])!
     expect(body(req)).toContain('The user said: why is billing slow')
   })
@@ -95,11 +95,11 @@ describe('input rule', () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     install(ctx)
     lead.followup(user('first'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const forkId = forksOf(lead)[0]! as SessionId
     await ctx.subagents.sendMessage(lead, forkId, [{ type: 'text', text: 'follow up for the fork' }], { signal: new AbortController().signal })
     await vi.waitFor(() => { expect(adapter.requests.some(r => r.sessionId === forkId && body(r).includes('follow up for the fork'))).toBe(true) }, { timeout: 10_000 })
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its reply to the user', 2)
     expect(forksOf(lead)).toHaveLength(1)
   })
 
@@ -134,13 +134,13 @@ describe('input rule', () => {
     const h1 = await ctx.agentLoop.createAgent(ctx, { sessionId: SessionId('main'), agentOptions: opts } as never)
     const scheduler = install(ctx)
     h1.agent.followup(user('before restart'))
-    await until(h1.agent, 'Its conclusion')
+    await until(h1.agent, 'Its reply to the user')
     const forkId = forksOf(h1.agent)[0]! as SessionId
     await h1.dispose()
     scheduler.forget('main')
     const h2 = await ctx.agentLoop.resume(ctx, { resumeSessionId: SessionId('main'), agentOptions: opts } as never)
     await ctx.subagents.sendMessage(h2.agent, forkId, [{ type: 'text', text: 'again' }], { signal: new AbortController().signal })
-    await until(h2.agent, 'Its conclusion', 2)
+    await until(h2.agent, 'Its reply to the user', 2)
     expect(body(adapter.requests.filter(r => r.sessionId === 'main').at(-1)!).match(/The user said: before restart/gu)?.length).toBe(2)
   })
 })
@@ -150,7 +150,7 @@ describe('lead wakes', () => {
     const { ctx, lead, adapter } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     install(ctx)
     lead.followup(user('first ever'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const leadReqs = adapter.requests.filter(r => r.sessionId === 'lead')
     expect(leadReqs).toHaveLength(1)
     expect(body(leadReqs[0]!)).toContain('The user said: first ever')
@@ -212,7 +212,7 @@ describe('fork model', () => {
     install(ctx, { configuredModel: { provider: 'mock-b', model: 'configured' } } as never)
     appendForkModel(lead.session, { provider: 'mock-b', model: 'override', reasoningEffort: 'high' })
     lead.followup(user('a'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     const fork = adapter.requests.find(r => r.sessionId === forksOf(lead)[0])!
     expect(fork.model).toBe('lead-model')
     expect(fork.reasoningEffort).toBeUndefined()
@@ -222,9 +222,9 @@ describe('fork model', () => {
     const { ctx, lead, adapter } = await setup(() => textResponse('X'))
     install(ctx)
     lead.followup(user('a'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     lead.followup(user('b'))
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its reply to the user', 2)
     const firstLead = adapter.requests.filter(r => r.sessionId === 'lead')[0]!
     const fork = adapter.requests.find(r => r.sessionId === forksOf(lead)[1])!
     expect(fork.model).toBe('lead-model')
@@ -345,9 +345,9 @@ describe('composer receipt', () => {
     install(ctx)
     // A first exchange gives the log its system prompt; scheduling is on from the second.
     lead.followup(user('warm up'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     lead.followup(prompt('SECRET WORDS for the fork', 'rpc-1'))
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its reply to the user', 2)
     expect(received(lead, 'rpc-1')).toBe(true)
     // The removal that follows is recorded as canceled; the browser ignores it once received.
     expect(canceledFirst(lead, 'rpc-1')).toBe(false)
@@ -370,7 +370,7 @@ describe('composer receipt', () => {
     install(ctx)
     lead.steer(prompt('STEERED SECRET', 'rpc-2'))
     hold.open()
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     expect(received(lead, 'rpc-2')).toBe(true)
     // The lead's later requests keep tool call and result adjacent, and never carry the input
     // as a message of its own.
@@ -384,7 +384,7 @@ describe('composer receipt', () => {
     const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     install(ctx)
     lead.followup(prompt('first ever', 'rpc-3'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     expect(received(lead, 'rpc-3')).toBe(false)
     expect(records(lead.session.snapshotEvents(), INPUT_RECORD)[0]).not.toHaveProperty('logged')
     expect(admitHidden(lead.session, prompt('x', 'rpc-4'), 'n')).toBe(true)

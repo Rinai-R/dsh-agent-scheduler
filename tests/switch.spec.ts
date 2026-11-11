@@ -48,7 +48,7 @@ describe('scheduling switch', () => {
 
     expect(runScheduleCommand(scheduler, { agent: lead, rawInput: 'on' } as never).kind).toBe('success')
     lead.followup(user('during'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     expect(forksOf(lead)).toHaveLength(1)
     const fork = adapter.requests.find(r => r.sessionId === forksOf(lead)[0])!
     // The fork sees the earlier plain exchange as its context, and the lead's section.
@@ -105,9 +105,9 @@ describe('scheduling switch', () => {
     const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     const scheduler = install(ctx)
     lead.followup(user('one'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     lead.followup(user('two'))
-    await until(lead, 'Its conclusion', 2)
+    await until(lead, 'Its reply to the user', 2)
     const forks = forksOf(lead)
     expect(forks).toHaveLength(2)
     // Concluded forks archive themselves; the command finds nothing left and archives nothing twice.

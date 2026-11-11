@@ -132,7 +132,7 @@ describe('restart recovery, option A (default: fail)', () => {
     const scheduler = install(ctx)
     // A first exchange writes the system prompt, so the next hand-off is logged as the user's own message.
     h1.agent.followup(user('first'))
-    await until(h1.agent, 'Its conclusion')
+    await until(h1.agent, 'Its reply to the user')
     const image = { type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=' }
     h1.agent.followup({ ...user('look at this screenshot'), content: [{ type: 'text', text: 'look at this screenshot' }, image] } as never)
     await vi.waitFor(() => { expect(forksOf(h1.agent)).toHaveLength(2) }, { timeout: 10_000 })

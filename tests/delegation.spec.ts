@@ -44,7 +44,7 @@ describe('requests', () => {
     install(ctx)
     lead.followup(user('look at billing retries'))
     // The conclusion does not wait for the worker, and says what is still coming.
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     expect(leadSaw(lead, 'FORK CONCLUSION')).toBe(1)
     expect(leadSaw(lead, 'Delegated, answers will come to you: r-1')).toBe(1)
     expect(leadSaw(lead, 'BILLING ANSWER')).toBe(0)
@@ -93,7 +93,7 @@ describe('requests', () => {
     const { ctx, lead } = await setup(script.respond)
     const scheduler = install(ctx)
     lead.followup(user('look at billing retries'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     await scheduler.archive(lead, 'fork-1')
     hold.open()
     await until(lead, '[reply to r-1 from billing, asked by fork-1')
@@ -320,7 +320,7 @@ describe('worker tools', () => {
     const scheduler = install(ctx)
     scheduler.setRole(lead, 'LEAD ROLE: map every requirement')
     lead.followup(user('a'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     await scheduler.createWorker(lead, { name: 'billing', role: 'BILLING ROLE' })
     await vi.waitFor(() => { expect(adapter.requests.some(isWorker('billing'))).toBe(true) })
     const leadReq = adapter.requests.find(r => r.sessionId === 'lead')!
@@ -356,7 +356,7 @@ describe('agent list scope', () => {
     const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     const scheduler = install(ctx)
     lead.followup(user('why is billing slow'))
-    await until(lead, 'Its conclusion')
+    await until(lead, 'Its reply to the user')
     await scheduler.createWorker(lead, { name: 'billing', role: 'owns billing' })
     const list = ctx.tools.get('agent_list', lead)!
     const call = (args: object) => list.execute(args, { agent: lead, signal: new AbortController().signal } as never) as Promise<{ agents: Array<{ name: string; kind: string; input?: string }> }>

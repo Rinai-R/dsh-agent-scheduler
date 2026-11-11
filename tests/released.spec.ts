@@ -51,7 +51,7 @@ describe('a main session released while the scheduler awaits', () => {
     hold()
     main.followup(user('route this'))
     // The fork concludes; retire waits in drainChildren.
-    await until(main, 'Its conclusion')
+    await until(main, 'Its reply to the user')
     await draining.promise
     const forkId = forksOf(main)[0]!
     expect(scheduler.ledgerOf(main).members.get(forkId)?.state).toBe('done')

@@ -26,7 +26,7 @@ async function withFork() {
   const created = new Map<string, Agent>()
   env.ctx.on('agent/created', ({ agent }) => { created.set(agent.id, agent); return undefined })
   env.lead.followup(user('look at billing retries'))
-  await until(env.lead, 'Its conclusion')
+  await until(env.lead, 'Its reply to the user')
   const fork = created.get(scheduler.ledgerOf(env.lead).find('fork-1')!.id)!
   return { ...env, scheduler, fork }
 }
