@@ -259,8 +259,32 @@ export class MessageQueue {
     return () => { this.reportListeners.delete(listener) }
   }
 
+  private disposed = false
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+
+  /**
+   * Stop: no new delivery loop, no pending retry. Called when this copy of the plugin goes away
+   * (a live reload, shutdown); what was saved and not delivered is delivered by the next copy's
+   * recover. A loop already running stops at its next step; its writes go nowhere, since the store
+   * of a disposed copy is closed.
+   */
+  dispose(): void {
+    this.disposed = true
+    for (const timer of this.timers) clearTimeout(timer)
+    this.timers.clear()
+  }
+
+  /** A timer the queue owns: cleared on {@link dispose}. */
+  private later(ms: number, work: () => void): void {
+    if (this.disposed) return
+    const timer = setTimeout(() => { this.timers.delete(timer); if (!this.disposed) work() }, ms)
+    ;(timer as { unref?: () => void }).unref?.()
+    this.timers.add(timer)
+  }
+
   /** Deliver what can go to a target now. */
   kick(target: string): void {
+    if (this.disposed) return
     // Delivery runs outside the target's write chain: enqueue never waits behind an activation or
     // a flush. One delivery loop per target keeps the order; a kick meanwhile runs it once more.
     if (this.delivering.has(target)) { this.kickedAgain.add(target); return }
@@ -354,6 +378,8 @@ export class MessageQueue {
    * @returns the message after the change, or undefined when `when` refused it.
    */
   private async patch(m: QueueMessage, change: Partial<QueueMessage>, when: (now: QueueMessage) => boolean = now => now.state === m.state): Promise<QueueMessage | undefined> {
+    // A delivery loop that outlived its copy writes nothing: the next copy's recover owns the message.
+    if (this.disposed) return undefined
     let out: QueueMessage | undefined
     await this.serial(m.target, async () => {
       const now = this.store.message(m.qid)
@@ -365,23 +391,24 @@ export class MessageQueue {
 
   /** A delivery step failed: retry later, or fail the message with the reason once out of attempts. */
   private async deliveryFailed(m: QueueMessage, error: unknown): Promise<false> {
+    if (this.disposed) return false
     const attempts = m.attempts + 1
     const reason = messageOf(error)
     if (attempts >= this.timeouts.maxAttempts) {
       await this.patch(m, { attempts, state: 'failed', error: `not delivered after ${attempts} attempts: ${reason}`, settledAt: this.now().toISOString() }, now => now.state === 'queued')
       await this.replyAll(m.target)
       // The next message may go: a failed one does not hold the target.
-      setTimeout(() => { this.kick(m.target) }, 0)
+      this.later(0, () => { this.kick(m.target) })
     } else {
       await this.patch(m, { attempts, error: reason }, now => now.state === 'queued')
-      const retry = setTimeout(() => { this.kick(m.target) }, this.timeouts.retryMs)
-      ;(retry as { unref?: () => void }).unref?.()
+      this.later(this.timeouts.retryMs, () => { this.kick(m.target) })
     }
     return false
   }
 
   private async drain(target: string): Promise<void> {
     for (;;) {
+      if (this.disposed) return
       const all = this.messagesTo(target)
       const inFlight = all.filter(m => m.state === 'delivered').length
       if (inFlight >= this.limits.maxInFlight) return

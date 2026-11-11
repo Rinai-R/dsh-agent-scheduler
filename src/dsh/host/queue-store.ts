@@ -50,7 +50,6 @@ const HEARTBEAT_MS = 10_000
 
 /** Whether a process id is alive on this machine (signal 0 checks without signalling). */
 const alive = (pid: number): boolean => {
-  if (pid === process.pid) return true
   try { process.kill(pid, 0); return true } catch (error) { return (error as { code?: string }).code === 'EPERM' }
 }
 
@@ -158,8 +157,9 @@ const closingSlot = (): { closing: Promise<void> } => {
  * @param ctx - a context that injects `storageDomain`.
  * @returns the store, or undefined on a DSH without the storage domain (then the caller says why).
  */
-export async function openQueueStore(ctx: Context, opts: { now?: () => number; instance?: string } = {}): Promise<{ store: QueueStore; close: () => Promise<void> } | undefined> {
+export async function openQueueStore(ctx: Context, opts: { now?: () => number; instance?: string; pid?: number } = {}): Promise<{ store: QueueStore; close: () => Promise<void> } | undefined> {
   const instance = opts.instance ?? INSTANCE
+  const pid = opts.pid ?? process.pid
   const facility = (ctx as unknown as { storageDomain?: { open(spec: unknown): Promise<OpenDomain> }; get(name: string): { open(spec: unknown): Promise<OpenDomain> } | undefined }).storageDomain
     ?? (ctx as unknown as { get(name: string): { open(spec: unknown): Promise<OpenDomain> } | undefined }).get('storageDomain')
   if (!features.record('storageDomain', facility !== undefined && typeof facility.open === 'function', 'storageDomain.open')) return undefined
@@ -170,11 +170,14 @@ export async function openQueueStore(ctx: Context, opts: { now?: () => number; i
   const ownerTable = domain.table('owner')
   const current = ownerTable.get('host')
   const now = opts.now?.() ?? Date.now()
-  if (current !== undefined && current.instance !== instance && now - current.heartbeatAt < OWNER_STALE_MS && alive(current.pid)) {
+  // The same process is never "another process": a live reload loads this module afresh (a new
+  // instance id, same pid), and within one process the storage backend already allows a single
+  // open handle, so the old copy has closed the domain by the time this open succeeds.
+  if (current !== undefined && current.instance !== instance && current.pid !== pid && now - current.heartbeatAt < OWNER_STALE_MS && alive(current.pid)) {
     await domain.close()
     throw new QueueOwnedElsewhere(current)
   }
-  const beat = async (): Promise<void> => { await ownerTable.put('host', { instance, pid: process.pid, heartbeatAt: opts.now?.() ?? Date.now() }) }
+  const beat = async (): Promise<void> => { await ownerTable.put('host', { instance, pid, heartbeatAt: opts.now?.() ?? Date.now() }) }
   await beat()
   const timer = setInterval(() => { void beat().catch(() => undefined) }, HEARTBEAT_MS)
   ;(timer as { unref?: () => void }).unref?.()
@@ -193,7 +196,7 @@ export async function openQueueStore(ctx: Context, opts: { now?: () => number; i
     close: async () => {
       clearInterval(timer)
       // Give the queue up at once: a heartbeat of 0 lets another process take it without waiting.
-      try { await ownerTable.put('host', { instance, pid: process.pid, heartbeatAt: 0 }) } catch { /* closing anyway */ }
+      try { await ownerTable.put('host', { instance, pid, heartbeatAt: 0 }) } catch { /* closing anyway */ }
       await domain.close()
     },
   }

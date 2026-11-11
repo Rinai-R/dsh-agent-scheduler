@@ -379,6 +379,30 @@ describe('nothing waits forever (r-176: agent_send hung behind a stuck queue)', 
     expect(queue.status(third.qid)).toBe('delivered')
   })
 
+  it('after dispose: no retry fires, no delivery starts, nothing is written; the next copy delivers what was saved', async () => {
+    const { store, host, queue } = hung()
+    const original = host.resolve.bind(host)
+    let hang = true
+    host.resolve = async (target: string) => hang ? new Promise<never>(() => undefined) : original(target)
+    const m = await queue.enqueue({ target: 'W', producer: router(), dedupeKey: 'k', text: 'x', request: 'r-1' })
+    await new Promise(resolve => setTimeout(resolve, 40))
+    // The plugin goes away (a live reload) while a retry is pending.
+    queue.dispose()
+    const writes = store.writes
+    hang = false
+    queue.kick('W')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(store.writes).toBe(writes)
+    expect(host.sent).toEqual([])
+    expect(store.message(m.qid)?.state).toBe('queued')
+    // The next copy (same store) recovers and delivers it once.
+    const next = new MessageQueue(store, host)
+    await next.recover()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(host.sent).toEqual(['x'])
+    expect(next.status(m.qid)).toBe('delivered')
+  })
+
   it('a flush that never returns fails the delivery with the reason; a message that did land is found, not repeated', async () => {
     const { host, queue } = hung()
     const send = host.send.bind(host)

@@ -379,7 +379,7 @@ export function apply(ctx: Context, config: Config): void {
       if (session !== undefined) names.rename(session, title)
     },
   })
-  ctx.effect(() => () => { scheduler.dispose(); scheduler.disconnectQueue() }, 'agent-scheduler: queue')
+  ctx.effect(() => () => { queue.dispose(); scheduler.dispose(); scheduler.disconnectQueue() }, 'agent-scheduler: queue')
   onAgents(ctx, {
     inserted: (agent, message) => {
       // Session titles come from user messages; the input rule removes them, so name the session
