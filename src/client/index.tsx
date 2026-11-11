@@ -201,7 +201,7 @@ const STYLE = `
 .sch-dot[data-review=reported],.sch-review-n[data-review=reported]{--sch-dot:var(--dsw-alias-state-success-primary)}
 .sch-dot[data-review=failed],.sch-review-n[data-review=failed]{--sch-dot:var(--dsw-alias-state-error-primary)}
 .sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
-.sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:#fff;font-size:11px;font-weight:600;line-height:16px}
+.sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:var(--dsw-alias-label-primary-inverted,#fff);font-size:11px;font-weight:600;line-height:16px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 
 /* Scheduling switch in the composer's mode row, beside access mode and Plan, in their metrics. */
