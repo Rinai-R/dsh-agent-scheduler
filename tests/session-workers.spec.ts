@@ -84,6 +84,23 @@ describe('session workers (v2)', () => {
     expect(scheduler.ledgerOf(lead).state.members.filter(m => m.name === 'twin').map(m => m.id)).toEqual(['session-other'])
   })
 
+  it('concurrent or retried creates of one name leave exactly one live worker session; nothing extra stays open', async () => {
+    const { ctx, lead, scheduler, controller } = await v2(() => 'OK')
+    const tries = await Promise.allSettled([
+      scheduler.createWorker(lead, { name: 'hub', role: 'r' }),
+      scheduler.createWorker(lead, { name: 'hub', role: 'r' }),
+      scheduler.createWorker(lead, { name: 'hub', role: 'r' }),
+    ])
+    expect(tries.filter(t => t.status === 'fulfilled')).toHaveLength(1)
+    // A retry after it exists is refused too.
+    await expect(scheduler.createWorker(lead, { name: 'hub', role: 'r' })).rejects.toThrow(/hub/u)
+    const hubs = scheduler.ledgerOf(lead).state.members.filter(m => m.kind === 'worker' && m.name === 'hub')
+    expect(hubs).toHaveLength(1)
+    // Every session the controller made is either that worker or archived (none here: refusals come before creation).
+    const live = controller.created.filter(id => ctx.agents.get(SessionId(id)) !== undefined)
+    expect(live).toEqual([hubs[0]!.id])
+  })
+
   it('refuses a worktree outside the router\'s workspace, with the reason', async () => {
     const { lead, scheduler } = await v2(() => 'X')
     const elsewhere = mkdtempSync(join(tmpdir(), 'elsewhere-'))
