@@ -269,7 +269,7 @@ export const ja: Record<keyof typeof zh, string> = {
   'cmd.access.unknown': "そのアクセスモードはありません：{mode}（選択可：{modes}）。",
   'access.label': "アクセスモード",
   'access.title': "{name} のアクセスモード",
-  'access.fork': "フォークはルーティング専用で、読み取り専用ツールとフォークガードに従います。",
+  'access.fork': "フォークはこのセッションそのものです。同じツールとアクセスモードで、DSH は承認なしで実行します。",
   'access.pending': "切り替え中…",
   'access.by.lead': "lead が設定",
   'access.by.inherited': "lead の現在のモードに従う",

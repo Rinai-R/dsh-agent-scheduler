@@ -309,7 +309,7 @@ export const zh = {
   'cmd.access.unknown': '没有这个访问模式：{mode}（可选：{modes}）。',
   'access.label': '访问模式',
   'access.title': '{name} 的访问模式',
-  'access.fork': '分身只做路由，访问模式跟随只读与工具守卫。',
+  'access.fork': '分身和本会话完全一样：同样的工具和访问模式；DSH 让它不经审批直接执行。',
   'access.pending': '切换中…',
   'access.by.lead': 'lead 设置',
   'access.by.inherited': '随 lead 的当前模式',

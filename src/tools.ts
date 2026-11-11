@@ -4,8 +4,7 @@
  */
 import type { Agent, ToolDefinition } from './dsh/types.js'
 import { defineTool, statusOf, type AgentLookup } from './dsh/host/index.js'
-import { ownerOf } from './dsh/host/index.js'
-import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, LEAD_OFF_NOTICE, type Scheduler } from './scheduler.js'
+import { DispatchRefused, FORK_NOTICE, isMainSession, LEAD_NOTICE, SESSION_NOTICE, type Scheduler } from './scheduler.js'
 import type { ForkModelSelection } from './records.js'
 import { mailPreview } from './projection.js'
 
@@ -275,17 +274,13 @@ export function schedulerTools(scheduler: Scheduler, agents: Live, deps: { valid
   ]
 }
 
-/** The sentence of LEAD_OFF_NOTICE that Agent Teams changes: its send_message is the lead's own. */
-const TOOLS_CAVEAT = 'Do not use send_message or the subagent tools for this.'
-const TEAM_OFF_CAVEAT = 'Agent Teams is on: spawn_teammate, send_message, list_agents and the team_task tools are your own Team (teammates share your working directory); use them for help inside this conversation, and agent_create / agent_send for workers.'
-/** A worker leads its own Agent Team (src/dsh/host/agent-team.ts). */
-export const WORKER_TEAM_NOTICE = 'You are the Team Lead of your own Agent Team: spawn_teammate creates teammates (they share your working directory), send_message and the team_task tools coordinate them, wait_agent waits for them. Their answers come to you, not to the lead; once they have answered, end your turn with a summary: that is your answer to the request. Teammates cannot form teams of their own.'
-/** While scheduling is on, the lead and forks do not form teams. */
-const ON_TEAM_NOTICE = 'Agent Teams is on, but while scheduling is on the lead and forks do not form teams (spawn_teammate is refused): workers do. Existing teammates of the lead keep messages, tasks and interrupts.'
+/** A Session leads its own Agent Team; teammates share its working directory. */
+export const WORKER_TEAM_NOTICE = 'Agent Teams is on: spawn_teammate, send_message, list_agents and the team_task tools are your own Team (teammates share your working directory); use them for help inside this conversation, and agent_create / agent_send for workers, which are sessions of their own. While the 调度 switch is on, this session does not create teammates (spawn_teammate is refused); existing teammates keep messages, tasks and interrupts.'
 
 /**
- * The system-prompt section. Identical for the lead and its forks so a fork keeps the lead's
- * cache prefix; workers get their own.
+ * The system-prompt section: the same text for every Session and its forks, whatever the switch
+ * says and whether the Session has workers, so the switch, a first worker or a fork never
+ * changes the cached prefix. Only the user's own role text (role_set) is appended.
  * @param scheduler - the scheduler.
  * @param agent - the agent being assembled.
  * @returns section text.
@@ -293,42 +288,16 @@ const ON_TEAM_NOTICE = 'Agent Teams is on, but while scheduling is on the lead a
 export function sectionFor(scheduler: Scheduler, agent: Agent): string {
   if (!scheduler.takesPart(agent)) return ''
   const role = scheduler.roleFor(agent)
-  const ledger = scheduler.ledgerOf(agent)
-  // A session worker whose router is not resident still knows who it is from its own owner record.
-  const owner = ownerOf(agent)
-  const listed = ledger.members.get(agent.id)
-  const isWorker = listed?.kind === 'worker' || owner !== undefined
-  // A worker renamed in a split: its conversation still shows its old name, the prompt its new one.
-  const self = listed ?? (owner === undefined ? undefined : { id: agent.id, name: owner.name, kind: 'worker' as const, state: 'started' as const, text: owner.role, role: owner.role, session: true as const, ...(owner.worktrees === undefined ? {} : { worktrees: owner.worktrees }) })
-  // The lead with scheduling off talks to the user itself. A plain chat (no forks or workers yet)
-  // gets no section at all, so the switch costs nothing until the lead first creates a worker;
-  // the tool descriptions say enough for that first creation.
-  const teams = scheduler.teamsAvailable()
-  if (isMainSession(agent) && !scheduler.isOn(agent)) {
-    if (ledger.state.members.length === 0) return ''
-    return ['# Agent Scheduler', teams ? LEAD_OFF_NOTICE.replace(TOOLS_CAVEAT, TEAM_OFF_CAVEAT) : LEAD_OFF_NOTICE, ...(role !== undefined && role !== '' ? [`Role:\n${role}`] : [])].join('\n')
+  const lines = ['# Agent Scheduler', SESSION_NOTICE, LEAD_NOTICE, FORK_NOTICE]
+  if (scheduler.teamsAvailable()) lines.push(WORKER_TEAM_NOTICE)
+  // An old (subagent) worker is a child of its session, not a session: it still needs its name and
+  // what it absorbed, which no other session shares a prefix with.
+  const self = scheduler.ledgerOf(agent).members.get(agent.id)
+  if (self?.kind === 'worker' && self.session !== true) {
+    lines.push(`You are worker "${self.name}" (the user may rename you; this is the current one), a subagent of this session; requests to you arrive as "[request r-N from name]".`)
+    for (const from of self.mergedFrom ?? []) lines.push(`You absorbed ${from.name} (merge ${from.merge}); its history is session ${from.session}: use agent_recall({ name: "${from.name}", query }) to look details up.`)
+    if (self.area !== undefined && self.formerNames !== undefined && self.formerNames.length > 0) lines.push(`You are now worker "${self.name}" (formerly ${self.formerNames.map(n => `"${n}"`).join(', ')}) in area "${self.area}"; workers split from the same area share it, each with its own work.`)
   }
-  const lines = isWorker
-    ? [
-        '# Agent Scheduler: worker',
-        `Your name is "${self?.name ?? ''}" (the user may rename you; this is the current one).`,
-        self?.session === true
-          ? 'You are a long-lived worker with a session of your own; your router sent you here. Requests arrive as "[request r-N from name]": answer each, then end your turn, and your closing message (or report) goes back to the router as the answer. The user may also talk to you here directly: nothing of that goes to the router, unless the user asks you to share or push something, then call report with a summary (and where in this session the details are; the router can read them with agent_recall).'
-          : 'You are a long-lived worker. Requests arrive as "[request r-N from name]". Answer each, then end your turn: your final message (or report) goes to the lead automatically as the answer. The user may also talk to you directly; those messages are not requests and your replies stay in your chat, except a report, which goes to the lead as "[report from <your name>, not a request]". You may delegate with agent_send; that answer also goes to the lead.' + (teams ? '' : ' Do not use send_message.'),
-        ...(teams && self?.session !== true ? [WORKER_TEAM_NOTICE] : []),
-        ...(self?.session === true && (self.worktrees?.length ?? 0) > 0 ? [`Worktrees you were given: ${self.worktrees!.join(', ')} (you may work in others under your workspace).`] : []),
-      ]
-    : [
-        '# Agent Scheduler',
-        'The user talks to a lead; every user message is handed to a fresh fork of the lead.',
-        FORK_NOTICE,
-        LEAD_NOTICE,
-        'Workers are long-lived agents, each a session of its own in this workspace that the user can also open and talk to directly. Use agent_list to see them, agent_create to make one (coarse: per repository or module; it may get a worktree, and can work in others), agent_send to delegate (requests to one worker queue up in order); both take the rosterVersion from agent_list and run one at a time per session. Every answer comes to the lead as "[reply to r-N from name, asked by ...]"; forks do not wait for them. Do not use send_message or the subagent tools for this.',
-        ...(teams ? [ON_TEAM_NOTICE] : []),
-      ]
-  // A worker that absorbed others: where their history is, so it can recall what the handoff left out.
-  for (const from of self?.mergedFrom ?? []) lines.push(`You absorbed ${from.name} (merge ${from.merge}); its history is session ${from.session}: use agent_recall({ name: "${from.name}", query }) to look details up.`)
-  if (self?.area !== undefined && self.formerNames !== undefined && self.formerNames.length > 0) lines.push(`You are now worker "${self.name}" (formerly ${self.formerNames.map(n => `"${n}"`).join(', ')}) in area "${self.area}"; workers split from the same area share it, each with its own work.`)
   if (role !== undefined && role !== '') lines.push(`Role:\n${role}`)
   return lines.join('\n')
 }

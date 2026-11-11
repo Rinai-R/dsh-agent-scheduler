@@ -5,7 +5,6 @@
 import { describe, expect, it } from 'vitest'
 import { CAPACITY_CODE, DELEGATION_DEPTH_HINT, RELAY_PREFIX, RETURN_GUIDANCE, unwrapRelayed, withoutReturnGuidance } from '../../src/dsh/host/index.js'
 import { FORK_NOTICE } from '../../src/scheduler.js'
-import { forkRefusal } from '../../src/fork-guard.js'
 import { fetched, installed, probesAvailable } from './probe.js'
 
 describe('runtime wording', () => {
@@ -35,6 +34,5 @@ describe('runtime wording', () => {
   it.runIf(probesAvailable())('T3: the delegation-depth context still tells children what FORK_NOTICE answers', () => {
     expect(fetched('dsh-tool-subagent')).toContain(DELEGATION_DEPTH_HINT)
     expect(FORK_NOTICE).toContain(DELEGATION_DEPTH_HINT)
-    expect(forkRefusal('fork-1', 'bash')).toContain(DELEGATION_DEPTH_HINT)
   })
 })

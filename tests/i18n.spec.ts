@@ -96,7 +96,7 @@ describe('dictionaries', () => {
   })
 
   it('what the model reads stays English: no translated text in prompts or tools', () => {
-    for (const file of ['src/tools.ts', 'src/scheduler.ts', 'src/fork-guard.ts', 'src/recovery.ts']) {
+    for (const file of ['src/tools.ts', 'src/scheduler.ts', 'src/recovery.ts']) {
       expect(readFileSync(join(ROOT, file), 'utf8'), file).not.toMatch(/from '\.\/i18n\//u)
     }
   })

@@ -13,7 +13,7 @@ import { AGENT_RECORD, REQUEST_RECORD } from '../src/records.js'
 afterEach(teardown)
 
 /** A fork is any child that is not a worker: forks carry the lead's section, workers their own. */
-const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && o.sessionId !== 'main' && JSON.stringify(o.messages[0]).includes('# Agent Scheduler\\n') && !JSON.stringify(o.messages[0]).includes('Agent Scheduler: worker')
+const isFork = (o: GenerateOptions) => o.sessionId !== 'lead' && o.sessionId !== 'main' && JSON.stringify(o.messages[0]).includes('# Agent Scheduler\\n') && !body(o).includes('You are worker')
 const isWorker = (name: string) => (o: GenerateOptions) => body(o).includes(`You are worker \\"${name}\\"`)
 /** The system message is the first message of a request. */
 const systemOf = (o: GenerateOptions) => JSON.stringify(o.messages[0])
@@ -62,7 +62,8 @@ describe('requests', () => {
     const workerReq = adapter.requests.find(isWorker('billing'))!
     expect(body(workerReq)).toContain('[request r-1 from fork-1]')
     expect(body(workerReq)).not.toContain('Your parent agent id is')
-    expect(systemOf(workerReq)).toContain('Agent Scheduler: worker')
+    // Every session carries the same section: workers too (phase 2, Q0).
+    expect(systemOf(workerReq)).toContain('# Agent Scheduler')
   })
 
   it('agent_send from the lead: the reply comes back to the lead', async () => {

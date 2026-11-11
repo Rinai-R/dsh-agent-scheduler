@@ -82,11 +82,11 @@ export function connectRouters(queue: MessageQueue, hooks: SessionWorkerHooks): 
  * @returns the queue id and whether it waits behind others.
  * @throws {QueueFull} through, as a clear refusal for the lead.
  */
-export async function sendToSessionWorker(queue: MessageQueue, router: Agent, worker: string, request: string, text: string, opts: { notice?: boolean } = {}): Promise<{ qid: string; ahead: number }> {
+export async function sendToSessionWorker(queue: MessageQueue, router: Agent, worker: string, request: string, text: string, opts: { notice?: boolean; hops?: number } = {}): Promise<{ qid: string; ahead: number }> {
   const before = queue.messagesTo(worker).filter(m => m.state === 'queued' || m.state === 'delivered' || m.state === 'claimed').length
   try {
     // A notice (an intro, a conversion) is no request: its turn answers nobody.
-    const { qid } = await queue.enqueue({ target: worker, producer: { kind: ROUTER_PRODUCER, id: router.id, session: router.id }, dedupeKey: request, text, ...(opts.notice === true ? {} : { request }) })
+    const { qid } = await queue.enqueue({ target: worker, producer: { kind: ROUTER_PRODUCER, id: router.id, session: router.id }, dedupeKey: request, text, ...(opts.notice === true ? {} : { request }), ...(opts.hops === undefined ? {} : { hops: opts.hops }) })
     return { qid, ahead: before }
   } catch (error) {
     if (error instanceof QueueFull) throw new Error(`${error.message} (${error.code})`)

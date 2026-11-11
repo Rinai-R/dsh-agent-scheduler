@@ -297,7 +297,7 @@ export const en: Record<keyof typeof zh, string> = {
   'cmd.access.unknown': 'No such access mode: {mode} (available: {modes}).',
   'access.label': 'Access mode',
   'access.title': 'Access mode of {name}',
-  'access.fork': 'A fork only routes; its access follows read-only tools and the fork guard.',
+  'access.fork': 'A fork is the session itself: same tools and access mode; DSH runs it without approval prompts.',
   'access.pending': 'Switching…',
   'access.by.lead': 'set by the lead',
   'access.by.inherited': 'follows the lead\'s mode',

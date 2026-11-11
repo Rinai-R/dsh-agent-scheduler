@@ -31,6 +31,7 @@ const STATES = new Set(['queued', 'delivered', 'claimed', 'answered', 'failed', 
 const messageSchema = schema<QueueMessage>('queue message', m => {
   if (![m.qid, m.target, m.dedupeKey, m.text, m.createdAt].every(str)) return 'qid, target, dedupeKey, text and createdAt are strings'
   if (!num(m.seq) || !num(m.attempts)) return 'seq and attempts are numbers'
+  if (!opt(m.hops, num)) return 'hops is a number'
   if (m.mode !== 'turn' && m.mode !== 'step') return 'mode is turn or step'
   if (!STATES.has(String(m.state))) return `unknown state ${String(m.state)}`
   const p = m.producer as Record<string, unknown> | undefined

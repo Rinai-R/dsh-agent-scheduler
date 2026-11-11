@@ -49,6 +49,8 @@ export interface QueueMessage {
   readonly replied?: true | undefined
   /** A router's request id (`r-N`), carried back with the reply. */
   readonly request?: string | undefined
+  /** How many hand-offs led here: 0 for one a user message caused (the loop guard, src/session-workers.ts). */
+  readonly hops?: number | undefined
 }
 
 export interface QueueTarget {
@@ -126,6 +128,7 @@ export interface Enqueue {
   readonly text: string
   readonly mode?: 'turn' | 'step' | undefined
   readonly request?: string | undefined
+  readonly hops?: number | undefined
 }
 
 /** @returns the stable id of a producer's message. */
@@ -180,6 +183,7 @@ export class MessageQueue {
         qid, target: e.target, seq: t.nextSeq, producer: e.producer, dedupeKey: e.dedupeKey, text: e.text,
         mode: e.mode ?? 'turn', state: 'queued', attempts: 0, createdAt: this.now().toISOString(),
         ...(e.request === undefined ? {} : { request: e.request }),
+        ...(e.hops === undefined || e.hops === 0 ? {} : { hops: e.hops }),
       })
       result = { qid, state: 'queued', duplicate: false }
     })

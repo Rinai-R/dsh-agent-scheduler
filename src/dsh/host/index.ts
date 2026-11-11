@@ -6,7 +6,6 @@
 import './augment.js'
 
 export * from './access.js'
-export * from './sandbox.js'
 export * from './agent.js'
 export * from './agent-team.js'
 export * from './hints.js'

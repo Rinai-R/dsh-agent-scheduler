@@ -267,7 +267,7 @@ export const de: Record<keyof typeof zh, string> = {
   'cmd.access.unknown': "Kein Zugriffsmodus {mode} (verfügbar: {modes}).",
   'access.label': "Zugriffsmodus",
   'access.title': "Zugriffsmodus von {name}",
-  'access.fork': "Ein Fork leitet nur weiter; sein Zugriff folgt den Nur-Lese-Werkzeugen und dem Fork-Guard.",
+  'access.fork': "Ein Fork ist die Sitzung selbst: gleiche Werkzeuge und gleicher Zugriffsmodus; DSH führt ihn ohne Freigabe aus.",
   'access.pending': "Wird geändert…",
   'access.by.lead': "vom Lead gesetzt",
   'access.by.inherited': "folgt dem Modus des Leads",

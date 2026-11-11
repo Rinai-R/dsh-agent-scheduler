@@ -271,7 +271,7 @@ export const ru: Record<keyof typeof zh, string> = {
   'cmd.access.unknown': "Нет такого режима доступа: {mode} (доступно: {modes}).",
   'access.label': "Режим доступа",
   'access.title': "Режим доступа {name}",
-  'access.fork': "Форк только маршрутизирует; его доступ определяют инструменты только для чтения и защита форков.",
+  'access.fork': "Форк — это сама сессия: те же инструменты и режим доступа; DSH запускает его без запросов подтверждения.",
   'access.pending': "Переключение…",
   'access.by.lead': "задал lead",
   'access.by.inherited': "следует текущему режиму lead",

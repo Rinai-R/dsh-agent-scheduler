@@ -39,9 +39,9 @@
 | H8 | 事件 `agent/inbox/inserted`、`agent/pre-step`（waterfall + `PreStepDecision` enter/reject）、`agent/status`、`agent/created`（`source: 'resume'`）、`agent/disposed` | rule-plugin.ts:257-273；member-model.ts:179；scheduler.ts:1265-1293 | A / B | 首步只有上下文快照时会触发一次模型调用（这是 B 级行为假设，scheduler.ts:1255-1263）；`source` 取值变：重启恢复不触发 |
 | H9 | `ctx.tools.register` + `defineTool({ parameters, output: { schema, render } })` | tools.ts:51-157；rule-plugin.ts:274 | A | 编译失败 |
 | H10 | `ctx.tools.guard(exec => reason)`：守卫在全部 pre-execute 之后、工具体之前执行，`run_code` 的嵌套调用也过守卫 | rule-plugin.ts:276；fork-guard.ts:49-55 | A | **安全相关**：守卫失效时分身能做改文件等动作；shell 由分身的 read-only 沙箱兜底 |
-| H10b | `FORK_TOOLS` 白名单里写死了其他插件的工具名（read、glob、grep、web_search、session_*、run_code、bash、pwsh…）；拒绝文案假设运行时会加 `Error: ` 前缀 | fork-guard.ts:20-33, 37 | C | 宿主改工具名：分身连读文件都被拒（偏安全，但不能路由） |
-| H10c | 分身的 `read-only` 沙箱靠 `subagent/start`（`{id, provider}`）与 `agent/created` 两处钩子之一在首步前写入 `sandbox/mode`；DSH 的 `captureDelegatedPolicyOverrides` 只继承父会话显式 override 并把 approval 钉成 `never` | services.ts:onSubagentStart；scheduler.ts:pinForkSession；sandbox.ts:pinSandboxMode | A | 两个事件都没了：分身 shell 会跑在部署默认 `workspace-write` 下，能写工作区（`sandbox/mode` 事件仍可写，但时机可能晚于首步） |
-| H10d | `ctx.tools.guard` 的 `exec.arguments` 带工具参数，分身守卫据此拒绝 shell 里明显的远端写入（`git push`、`gh pr merge`、`gh api -X POST`、`curl -X POST`…） | fork-guard.ts:remoteWriteOf | B | 尽力而为：按文本匹配，间接写法可绕过；DSH 沙箱只管文件、不管网络（dsh-sandbox README："no network, process, syscall, device, or credential restrictions"）。参数字段改名时这一层失效，只读沙箱仍在 |
+| H10b | （phase 2 Q0 起不再使用：分身和会话完全一致，没有分身守卫和只读沙箱） | — |
+| H10c | （phase 2 Q0 起不再使用：分身和会话完全一致，没有分身守卫和只读沙箱） | — |
+| H10d | （phase 2 Q0 起不再使用：分身和会话完全一致，没有分身守卫和只读沙箱） | — |
 | H11 | `ctx.systemPrompt.section({ name, order, text })` | rule-plugin.ts:277 | A | 编译失败 |
 | H12 | `ctx.commands.register`；`input.hint` 不能是空串（否则整个预设加载失败） | rule-plugin.ts:289-318, 307；member-model.ts:180 | A / B | 预设加载失败，所有会话不可用 |
 | H12b | `/` 菜单里插件命令的样子：宿主描述只有 `definitionId / name / description / input`（没有标题和图标字段）；客户端只给 DSH 自己的命令按 definitionId 配标题和图标，其余行原样显示宿主 `description`，`commands/change` 时重新拉取。插件把「标题 · 一句话」写进 description，语言切换时注销再注册（`register` 返回注销函数，同名同层重复注册会抛错） | dsh/host/services.ts `registerCommand`、menu.ts、dsh/host/locale.ts；契约 tests/contract/command-menu.spec.ts | A / B | 菜单回到注册时的语言，或重复注册抛错导致插件加载失败 |

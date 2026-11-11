@@ -34,7 +34,7 @@ describe('scheduling switch', () => {
     expect(forksOf(lead)).toEqual([])
     expect(adapter.requests.every(r => r.sessionId === 'lead')).toBe(true)
     expect(body(adapter.requests[0]!)).toContain('hello there')
-    expect(system(adapter.requests[0]!)).not.toContain('# Agent Scheduler')
+    expect(system(adapter.requests[0]!)).toContain('# Agent Scheduler')
     // agent_list ran: the switch decides only who takes user messages, not whether workers exist.
     expect(body(adapter.requests[1]!)).not.toContain('Scheduling is off')
     expect(body(adapter.requests[1]!)).toContain('rosterVersion')

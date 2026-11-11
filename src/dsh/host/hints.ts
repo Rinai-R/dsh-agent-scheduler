@@ -59,6 +59,6 @@ export const isCapacity = (error: unknown): boolean =>
 
 /**
  * What the runtime's delegation-depth context tells a depth-1 child (dsh-tool-subagent). Forks
- * are told this does not apply to them; FORK_NOTICE and the fork guard's refusal answer it.
+ * are told this does not apply to them; FORK_NOTICE answers it.
  */
 export const DELEGATION_DEPTH_HINT = 'carry out the work directly'

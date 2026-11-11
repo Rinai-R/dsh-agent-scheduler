@@ -110,7 +110,7 @@ describe('/agents rename', () => {
     await until(lead, '[reply to r-2 from site]')
     expect(ledger.requests.get('r-1')).toMatchObject({ to: id, state: 'answered' })
     // Its own prompt says its current name.
-    expect(adapter.requests.filter(r => r.sessionId === id).some(r => systemOf(r).includes('Your name is \\"site\\"'))).toBe(true)
+    expect(adapter.requests.filter(r => r.sessionId === id).some(r => systemOf(r).includes('You are worker \\"site\\"'))).toBe(true)
     // The old name can still archive it.
     await scheduler.archive(lead, 'docs')
     expect(ledger.find('site')?.state).toBe('archived')

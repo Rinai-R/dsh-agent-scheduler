@@ -57,7 +57,8 @@ describe('session workers (v2)', () => {
     expect(worker.session.header.parentSession).toBeUndefined()
     expect(worker.session.header.cwd).toBe(workspace)
     expect(routerOf(worker)).toBe('router')
-    expect(isMainSession(worker)).toBe(false)
+    // A worker is a top-level session of its own: it may have workers too.
+    expect(isMainSession(worker)).toBe(true)
     expect(controller.titles.get(made.id)).toBe('hub · develops hub')
     const member = scheduler.ledgerOf(lead).members.get(made.id)!
     expect(member).toMatchObject({ kind: 'worker', session: true, worktrees: [wt], state: 'started' })
@@ -240,6 +241,67 @@ describe('session workers (v2)', () => {
     expect(ctx.tools.get('agent_split', lead)).toBeUndefined()
     expect(ctx.tools.get('agent_merge', lead)).toBeUndefined()
     expect(ctx.tools.get('agent_create', lead)).toBeDefined()
+  })
+})
+
+describe('every session is a session (phase 2, Q0)', () => {
+  const tools = (o: GenerateOptions) => (o.tools ?? []).map(t => t.name).filter(n => n.startsWith('agent_') || n === 'report').sort()
+  const systemOf = (o: GenerateOptions) => JSON.stringify(o.messages[0])
+
+  it('a worker has the same agent_* tools and the same scheduler section as its creator', async () => {
+    const { ctx, lead, scheduler, adapter } = await v2(() => 'OK')
+    lead.followup(user('hello'))
+    await lead.whenIdle()
+    const made = await scheduler.createWorker(lead, { name: 'hub', role: 'r', task: 'go' })
+    await until(lead, '[reply to r-1 from hub]')
+    const leadReq = adapter.requests.find(r => r.sessionId === 'router')!
+    const workerReq = adapter.requests.find(r => r.sessionId === made.id)!
+    expect(tools(workerReq)).toEqual(tools(leadReq))
+    expect(tools(workerReq)).toContain('agent_create')
+    const section = (o: GenerateOptions) => /# Agent Scheduler[^"]*/u.exec(systemOf(o))?.[0]
+    expect(section(workerReq)).toBeDefined()
+    expect(section(workerReq)).toBe(section(leadReq))
+  })
+
+  it('a worker creates its own worker and gets its answer; the hop limit and the send-back rule hold', async () => {
+    const hold = gate()
+    const { ctx, lead, scheduler, queue } = await v2(async o => {
+      if (o.sessionId === 'router') return 'LEAD'
+      if (body(o).includes('HOLD HERE')) await hold.promise
+      return 'DONE'
+    })
+    const a = await scheduler.createWorker(lead, { name: 'a', role: 'r' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(a.id))?.status).toBe('idle') })
+    const aAgent = ctx.agents.get(SessionId(a.id))!
+    // A worker is a top-level session with a roster of its own.
+    const b = await scheduler.createWorker(aAgent, { name: 'b', role: 'r', task: 'sub task' })
+    expect(scheduler.ledgerOf(aAgent).find('b')?.id).toBe(b.id)
+    expect(scheduler.ledgerOf(lead).find('b')).toBeUndefined()
+    await until(aAgent, '[reply to r-1 from b]')
+
+    // While a answers a request from the router (claimed by its turn), it may not send back to the router.
+    await scheduler.send(lead, 'a', 'HOLD HERE please')
+    await vi.waitFor(() => { expect(queue.messagesTo(a.id).some(m => m.state === 'claimed')).toBe(true) })
+    expect(() => scheduler.handoffHops(aAgent, aAgent, 'router')).toThrow(/answering r-\d+ from that session/u)
+    // A hand-off from inside that turn is one hop further on.
+    expect(scheduler.handoffHops(aAgent, aAgent, b.id)).toBe(1)
+    hold.open()
+    await until(lead, '[reply to r-1 from a]')
+  })
+
+  it('refuses a fourth hand-off after the user\'s message, and starts a fork\'s hand-off at 0', async () => {
+    const store = new MemoryQueueStore()
+    const { ctx, lead, scheduler } = await v2(() => 'OK', { store })
+    const a = await scheduler.createWorker(lead, { name: 'a', role: 'r' })
+    await vi.waitFor(() => { expect(ctx.agents.get(SessionId(a.id))?.status).toBe('idle') })
+    const aAgent = ctx.agents.get(SessionId(a.id))!
+    // a is in a turn that took a request which already passed 3 sessions.
+    await store.putMessage({ qid: 'q-deep', target: a.id, seq: 50, producer: { kind: 'router', id: 'x', session: 'session-elsewhere' }, dedupeKey: 'deep', text: 't', mode: 'turn', state: 'claimed', attempts: 1, createdAt: new Date().toISOString(), hops: 3, request: 'r-9' })
+    expect(() => scheduler.handoffHops(aAgent, aAgent, 'anyone')).toThrow(/at most 3 hand-offs/u)
+    await expect(scheduler.createWorker(aAgent, { name: 'b', role: 'r', task: 'more' })).rejects.toThrow(/at most 3 hand-offs/u)
+    expect(scheduler.ledgerOf(aAgent).find('b')).toBeUndefined()
+    // A child of the session (a fork) handles one user message: its hand-offs start a new chain.
+    expect(scheduler.handoffHops(aAgent, { id: 'fork-x' } as never, 'anyone')).toBe(0)
   })
 })
 

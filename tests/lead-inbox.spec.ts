@@ -94,7 +94,7 @@ describe('lead inbox', () => {
   })
 
   it('hold skips a message until released; pin and move order the rest; now hands one over into the running turn', async () => {
-    const { ctx, lead, scheduler, release, adapter } = await busyLead(o => `ANSWER ${/task (\w)/u.exec(body(o))?.[1] ?? '?'}`)
+    const { ctx, lead, scheduler, release, adapter } = await busyLead(o => `ANSWER ${/task ([abc])\b/u.exec(body(o))?.[1] ?? '?'}`)
     for (const n of ['a', 'b', 'c']) await scheduler.createWorker(lead, { name: `w${n}`, role: n, task: `task ${n}` })
     await vi.waitFor(() => { expect(scheduler.ledgerOf(lead).mail).toHaveLength(3) }, { timeout: 15_000 })
     const run = (line: string) => runAgentsCommand(scheduler, { agent: lead, rawInput: line.replace(/^\/agents /u, '') } as never)

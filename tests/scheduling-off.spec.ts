@@ -9,7 +9,6 @@ import { setup, teardown } from './support/harness.js'
 import { textResponse } from './support/mock-adapter.js'
 import { body, forksOf, install, leadSaw, listThen, until, user } from './support/scheduler.js'
 import { DispatchRefused, LEAD_NOTICE, LEAD_OFF_NOTICE } from '../src/scheduler.js'
-import { forkGuard } from '../src/fork-guard.js'
 
 afterEach(teardown)
 
@@ -37,10 +36,10 @@ describe('scheduling off', () => {
     expect(forksOf(lead)).toEqual([])
     const leadReqs = adapter.requests.filter(r => r.sessionId === 'lead')
     expect(body(leadReqs[0]!)).toContain('please get the README written')
-    // A plain chat has no section; once it has a worker, the off-mode one (never the fork notice).
-    expect(system(leadReqs[0]!)).not.toContain('# Agent Scheduler')
-    expect(system(leadReqs.at(-1)!)).toContain(JSON.stringify(LEAD_OFF_NOTICE).slice(1, 40))
-    expect(system(leadReqs.at(-1)!)).not.toContain('you are a fork of the lead')
+    // Every session has the same section from the start, whatever the switch says (phase 2, Q0):
+    // a first worker or the switch never changes the cached prefix.
+    expect(system(leadReqs[0]!)).toContain('# Agent Scheduler')
+    expect(system(leadReqs.at(-1)!)).toBe(system(leadReqs[0]!))
     expect(leadSaw(lead, 'WORKER DONE')).toBe(1)
     expect(scheduler.ledgerOf(lead).find('docs')).toMatchObject({ kind: 'worker', createdBy: lead.id })
     expect(scheduler.ledgerOf(lead).find('docs')?.createdFor).toBeUndefined()
@@ -88,17 +87,16 @@ describe('scheduling off', () => {
     await expect(create(ctx, lead, { name: 'docs', role: 'docs', rosterVersion: (await list(ctx, lead)).rosterVersion })).rejects.toThrow(/must say what this worker is for/)
   })
 
-  it('a fork made while on is still a router after the switch goes off', async () => {
+  it('a fork made while on stays a fork after the switch goes off, with the session\'s own tools', async () => {
     const { ctx, lead } = await setup(o => textResponse(o.sessionId === 'lead' ? 'LEAD' : 'FORK'))
     const scheduler = install(ctx)
     lead.followup(user('hello'))
     await until(lead, 'Its conclusion')
     scheduler.setMode(lead, false)
     const fork = { id: forksOf(lead)[0]!, session: { header: { parentSession: lead.id } } } as never
-    const guard = forkGuard(agent => scheduler.forkNameOf(agent))
-    expect(guard({ name: 'edit', agent: fork })).toContain('fork-1 is a fork')
-    expect(guard({ name: 'bash', agent: fork })).toBeUndefined()
-    expect(guard({ name: 'bash', agent: lead })).toBeUndefined()
+    expect(scheduler.forkNameOf(fork)).toBe('fork-1')
+    // A fork is the session itself: every tool the lead has (no fork guard).
+    expect(ctx.tools.get('edit', lead)).toBe(ctx.tools.get('edit', lead))
     // Its next wake still carries the fork notice (shared with the lead's on-mode section).
     lead.followup(user('plain words for the lead'))
     await vi.waitFor(async () => { await lead.whenIdle(); expect(leadSaw(lead, 'plain words for the lead')).toBe(1) })

@@ -62,17 +62,22 @@ export function routerOf(agent: Agent): string | undefined {
 /** Remember that a Session now works for `router` (its owner record was just appended). */
 export function markRouter(agent: Agent, router: string): void { routers.set(agent.session, router) }
 
-/** A main Session (a router): no parent, and not a worker Session of a router. */
-export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined && routerOf(agent) === undefined
+/**
+ * A top-level Session. Every one of them is a session of its own to the scheduler: it has its own
+ * roster, inbox and switch, and may create and message workers. The plugin does not tell routers
+ * and workers apart; a Session another one created ({@link isSessionWorker}) is still a top-level
+ * Session that can have workers of its own.
+ */
+export const isMainSession = (agent: Agent): boolean => agent.session.header.parentSession === undefined
 
-/** A worker that is a top-level Session of its own (scheduler v2). */
+/** A top-level Session that another Session created as its worker (it carries an owner record). */
 export const isSessionWorker = (agent: Agent): boolean => routerOf(agent) !== undefined
 
 /**
- * @param agent - the main agent, one of its children, or one of its top-level worker Sessions.
- * @returns the main Session's id.
+ * @param agent - a top-level Session, or one of its children (a fork, an old subagent worker).
+ * @returns the id of the top-level Session whose roster it belongs to.
  */
-export const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? routerOf(agent) ?? agent.id
+export const mainIdOf = (agent: Agent): string => agent.session.header.parentSession ?? agent.id
 
 /**
  * @param agent - any agent.

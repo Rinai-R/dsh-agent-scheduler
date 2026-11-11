@@ -224,9 +224,6 @@ describe('the lead never takes a worker past the user', () => {
     }
     expect(() => scheduler.setMemberAccess(worker, { name: 'w', preset: 'read-only', by: 'lead' })).toThrow(/only the lead/u)
     expect(() => scheduler.setMemberModel(worker, { name: 'w', selection: null, by: 'lead' })).toThrow(/only the lead/u)
-    // Forks keep exactly their routing tools.
-    const { FORK_TOOLS } = await import('../src/fork-guard.js')
-    for (const name of ['agent_access', 'agent_model']) expect(FORK_TOOLS.has(name)).toBe(false)
   })
 })
 
