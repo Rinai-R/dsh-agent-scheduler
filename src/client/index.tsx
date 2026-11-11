@@ -5,28 +5,22 @@
  * source of "waiting for you"); opening a fork or worker reuses the native subagent-chat
  * resource, so the embedded conversation, its composer and its stop action are the product's own.
  */
-import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useState, useSyncExternalStore } from 'react'
 import { registerRecoveryConfig } from './recovery-config.js'
-import { catalogModel, effortLabel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
+import { catalogModel, MODEL_MENU_STYLE, ModelMenu, type CatalogGroup } from './model-menu.js'
 import { catalogSource, isStale, type CatalogSource } from './catalog-source.js'
-import { activeChild, chatPlacementIn, dockPanes, findRoster, nextRosterStep, ROSTER_SHARE, visibleChildren } from './layout.js'
+import { chatPlacementIn, visibleChildren } from './layout.js'
 import { autoSeenTargets, browserSeen, type LocalSeen } from './active-seen.js'
 import { reviewOf } from '../review.js'
 import type { MailDelivery, MailItem } from '../projection.js'
-import { INBOX_STYLE, InboxSection } from './inbox.js'
+import { createInboxCard, createSessionDock, DOCK_STYLE, dockModel } from './dock.js'
 import { ACCESS_STYLE, AccessPicker } from './access-picker.js'
-import { registerDeck } from './deck.js'
-import { rowStateOf } from './row-state.js'
 import type { RowState } from './row-state.js'
-import { accessDefaultOf, hasMeta, rowMeta } from './row-meta.js'
-import { defaultSurvivor } from '../merge-pick.js'
 import type { TeamView } from '../projection.js'
-import { TEAM_STYLE, TeamBlock, teamSummary } from './team.js'
-import { createForkFromChat, FORK_STYLE, forkCommand, forkRequests, startFork, takeFork, withForkName, type ForkDraft } from './fork.js'
-import { list, t, tn, useLocale } from './i18n.js'
+import { t, tn, useLocale } from './i18n.js'
 import {
-  chatPlacement, clientHost, followDshLocale, gesturesOf, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, registerTabType, SEL,
-  steadyTabStrips, SUBAGENT_CHAT_KIND, warnOnce, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
+  chatPlacement, clientHost, followDshLocale, HOST_CSS, injectStyle, keepChatTabsMounted, layoutOf, NO_FACE, registerChatEvent, registerSlot, SEL,
+  steadyTabStrips, SUBAGENT_CHAT_KIND, type ClientHost, type Face, type SidebarFace, type Statuses, type UseSessionStatus,
 } from '../dsh/client/index.js'
 
 // Moved to the DSH adapter (src/dsh/client); re-exported for callers of this module.
@@ -39,15 +33,8 @@ const REQUEST_KIND = 'scheduler-request'
 
 /** Projection key registered by the host half. */
 const ROSTER = 'agentScheduler'
-/** DSH's permission projection: `{ currentValue }` for the Session it is read in. */
-const PERMISSIONS_KEY = 'permissions'
-/** Tab-system identity of the Agents page; also the keyed body's key. */
-const AGENTS_ID = 'dsh-agent-scheduler/agents'
 /** Page kind, opened by name because the type has no resource patterns. */
 const AGENTS_KIND = 'agent-scheduler-agents'
-/** Archived members listed before the roster folds the rest behind one button. */
-const ARCHIVED_ROWS = 8
-
 export const name = 'dsh-agent-scheduler'
 export const inject = ['slots', 'uiConversation', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'uiWorkspace', 'remote', 'remote.commands', 'remote.session']
 
@@ -187,8 +174,6 @@ const STYLE = `
 .sch-request-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-brand-primary-new-colorprimary-new-color,currentColor)}
 .sch-request-hint{margin-left:auto;color:var(--dsw-alias-label-tertiary)}
 .sch-request-body{padding:0 14px 10px 29px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;color:var(--dsw-alias-label-primary)}
-.sch-roster-reqs{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);white-space:nowrap}
-.sch-roster-badge{flex:none;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary-new-colorprimary-new-color) 14%,transparent);color:var(--dsw-alias-brand-primary-new-colorprimary-new-color);font:var(--dsw-font-xxs-12);line-height:18px;white-space:nowrap}
 .sch-input{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .sch-input-bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:min(calc(var(--dsh-chat-content-width,748px)*.702),82%);font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}
 .sch-input-fork{display:inline-flex;align-items:center;gap:6px;max-width:82%;border:.5px solid var(--dsw-alias-border-l1,transparent);background:var(--dsw-alias-bg-layer-1,transparent);padding:4px 6px 4px 10px;border-radius:999px;color:var(--sch-tone,var(--dsw-alias-label-secondary));font:var(--dsw-font-xxs-12);cursor:pointer;white-space:nowrap}
@@ -217,15 +202,14 @@ const STYLE = `
 .sch-dot[data-review=failed],.sch-review-n[data-review=failed]{--sch-dot:var(--dsw-alias-state-error-primary)}
 .sch-dot[data-review=approval],.sch-review-n[data-review=approval]{--sch-dot:var(--dsw-alias-state-warn-primary)}
 .sch-review-n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--sch-dot);color:#fff;font-size:11px;font-weight:600;line-height:16px}
-.sch-roster-section-title{display:inline-flex;align-items:center;gap:6px}
 @keyframes sch-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sch-dot) 55%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 
 /* Scheduling switch in the composer's mode row, beside access mode and Plan, in their metrics. */
 .sch-mode-group{display:inline-flex;align-items:center;gap:4px}
 .sch-mode{display:inline-flex;align-items:center;height:28px;border-radius:var(--dsw-radius-sm);font-size:13px;font-weight:500;line-height:20px}
-.sch-mode button,.sch-agents-btn{display:inline-flex;align-items:center;gap:4px;height:28px;border:0;background:none;margin:0;padding:0 8px;color:inherit;font:inherit;cursor:pointer;border-radius:var(--dsw-radius-sm)}
+.sch-mode button{display:inline-flex;align-items:center;gap:4px;height:28px;border:0;background:none;margin:0;padding:0 8px;color:inherit;font:inherit;cursor:pointer;border-radius:var(--dsw-radius-sm)}
 .sch-mode button:disabled{opacity:.6;cursor:default}
-.sch-mode button:focus-visible,.sch-agents-btn:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+.sch-mode button:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
 .sch-mode svg{flex:none}
 .sch-mode[data-on=no]{color:var(--dsw-alias-label-secondary)}
 .sch-mode[data-on=no] button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
@@ -236,105 +220,19 @@ const STYLE = `
 .sch-mode-exit .sch-mode-x,.sch-mode-exit:hover:not(:disabled) .sch-mode-glyph,.sch-mode-exit:focus-visible .sch-mode-glyph{display:none}
 .sch-mode-exit:hover:not(:disabled) .sch-mode-x,.sch-mode-exit:focus-visible .sch-mode-x{display:block}
 .sch-mode-group[data-unsupported] button{opacity:.45}
-.sch-agents-btn{gap:6px;color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:500;line-height:20px}
-.sch-agents-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-agents-btn .sch-dot{width:6px;height:6px}
-.sch-agents-n{font-weight:400;color:var(--dsw-alias-label-tertiary)}
-.sch-agents-n[data-row=waiting]{color:var(--dsw-alias-state-warn-primary)}
-.sch-agents-n[data-row=running]{color:var(--dsw-alias-brand-primary-new-colorprimary-new-color)}
-.sch-agents-n[data-row=failed]{color:var(--dsw-alias-state-error-primary)}
 .sch-mode-error{margin-left:6px;color:var(--dsw-alias-state-error-primary);font-size:12px}
 
 /* Agents page: its own narrow column at the left of the right sidebar, a list of agents. */
-.sch-roster{display:flex;flex-direction:column;height:100%;overflow:auto;padding:0;font-size:13px}
-.sch-roster::after{content:'';flex:none;height:12px}
-.sch-roster:has(> .sch-roster-below)::after{order:-1;display:none}
-.sch-roster-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:12px 12px 10px 18px;border-bottom:1px solid var(--dsw-alias-border-l1,transparent)}
-.sch-roster-title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:600;line-height:20px}
-.sch-roster-summary{margin-top:2px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-roster-collapse{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;background:none;padding:0;border-radius:8px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
-.sch-roster-collapse:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-roster-section{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:12px 18px 4px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);letter-spacing:.02em}
-.sch-roster-row{position:relative;display:grid;grid-template-columns:7px minmax(min(8em,100%),1fr) minmax(0,max-content);align-items:center;column-gap:10px;margin:0;border:0;background:none;padding:8px 10px;border-radius:10px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary)}
-.sch-roster-row[data-row=archived] .sch-roster-name{color:var(--dsw-alias-label-tertiary)}
-.sch-roster-row[data-compact=yes]{padding:3px 10px}
-.sch-roster-row[data-compact=yes] .sch-roster-name{font-weight:400}
-.sch-roster-row[data-compact=yes] .sch-roster-main{flex-direction:row;align-items:center}
-.sch-roster-main{min-width:0;display:flex;flex-direction:column;gap:2px}
-.sch-roster-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:18px}
-.sch-roster-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);line-height:16px}
-.sch-roster-end{min-width:0;max-width:100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;column-gap:6px;row-gap:2px}
-.sch-roster-state{min-width:3.2em;text-align:right;color:var(--sch-tone,var(--dsw-alias-label-tertiary));font:var(--dsw-font-xxs-12);white-space:nowrap}
-.sch-roster-tail{flex:none;display:inline-flex;align-items:center;gap:6px}
-.sch-roster-chev{color:var(--dsw-alias-label-caption);opacity:0;transition:opacity .12s}
-.sch-roster-item:hover .sch-roster-chev,.sch-roster-item[data-selected=yes] .sch-roster-chev{opacity:1}
 /* The card is the highlight box: one box per row, so a selected row's background covers the
    row, its meta line and anything folded open under it, with the same inset on every side. */
-.sch-roster-item{position:relative;margin:1px 8px;border-radius:10px;transition:background .12s}
-.sch-roster-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.sch-roster-item[data-selected=yes]{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}
-.sch-roster-item[data-pending=yes]{opacity:.5}
-.sch-roster-item > .sch-roster-row{box-sizing:border-box;width:100%}
-.sch-roster-archive,.sch-roster-rename{position:absolute;right:16px;top:26px;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
-.sch-roster-item:hover :is(.sch-roster-archive,.sch-roster-rename),:is(.sch-roster-archive,.sch-roster-rename):focus-visible{display:inline-flex}
-.sch-roster-item:has(.sch-roster-archive,.sch-roster-rename):hover .sch-roster-end{visibility:hidden}
-:is(.sch-roster-archive,.sch-roster-rename):hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
-.sch-roster-head-actions{flex:none;display:flex;align-items:center;gap:2px}
-.sch-roster-rename{right:46px}
-.sch-roster-merge{position:absolute;right:76px;top:26px;transform:translateY(-50%);display:none;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-tertiary);cursor:pointer}
-.sch-roster-merge[data-slot="1"]{right:46px}
-.sch-roster-merge[data-slot="0"]{right:16px}
-.sch-roster-item:hover .sch-roster-merge,.sch-roster-merge:focus-visible{display:inline-flex}
-.sch-roster-merge:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
-.sch-roster-item:has(.sch-roster-merge):hover .sch-roster-end{visibility:hidden}
-.sch-roster-item > .sch-roster-form{margin:2px 12px 8px}
 /* One quiet meta line under the row: team count and a non-default access mode only. */
-.sch-roster-meta{display:flex;align-items:center;gap:10px;margin:0 12px 6px 27px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:16px;min-width:0}
-.sch-roster-access-note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sch-merge-keep{display:flex;align-items:center;gap:10px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-merge-keep label{display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary)}
-select.sch-roster-input{padding:0 4px}
-.sch-roster-item:has(> .sch-roster-form) :is(.sch-roster-archive,.sch-roster-rename,.sch-roster-merge){display:none}
-.sch-roster-rename[data-alone]{right:16px}
-.sch-roster-edit{display:grid;grid-template-columns:7px minmax(0,1fr);align-items:center;column-gap:10px;margin:1px 8px;padding:6px 10px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
-.sch-roster-input{box-sizing:border-box;width:100%;min-width:0;height:26px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:8px;background:var(--dsw-alias-bg-layer-1,transparent);padding:0 8px;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;outline:none}
-.sch-roster-input:focus{border-color:var(--dsw-alias-state-business-primary)}
-.sch-roster-input::placeholder{color:var(--dsw-alias-label-caption)}
-textarea.sch-roster-input{height:auto;min-height:52px;padding:5px 8px;resize:vertical;line-height:18px}
-.sch-roster-form{display:flex;flex-direction:column;gap:6px;margin:4px 12px 6px;padding:10px;border:.5px solid var(--dsw-alias-border-l1,var(--dsw-alias-interactive-bg-hover));border-radius:10px;background:var(--dsw-alias-bg-layer-1,transparent)}
-.sch-roster-form label{display:flex;flex-direction:column;gap:3px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
-.sch-roster-form-actions{display:flex;justify-content:flex-end;gap:4px;margin-top:2px}
-.sch-roster-primary{border:0;padding:4px 10px;border-radius:8px;background:var(--dsw-alias-state-business-primary);color:#fff;font:var(--dsw-font-xxs-12);cursor:pointer}
-.sch-roster-primary:disabled{opacity:.5;cursor:default}
-.sch-roster-form-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12);overflow-wrap:anywhere}
-.sch-roster-below{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;justify-content:center;gap:4px;flex:none;margin:auto 0 0;border:0;border-top:1px solid var(--dsw-alias-border-l1,transparent);padding:7px 12px 8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;box-shadow:0 -8px 12px -6px color-mix(in srgb,var(--dsw-alias-bg-layer-1) 90%,transparent)}
-.sch-roster-below:hover{color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-interactive-bg-hover) 60%,var(--dsw-alias-bg-layer-1))}
-.sch-roster-below svg{transform:rotate(90deg)}
-.sch-roster-below[data-review=approval]{color:var(--dsw-alias-state-warn-primary)}
-.sch-roster-below[data-review=reported]{color:var(--dsw-alias-label-primary)}
-.sch-roster-below[data-review]::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary)}
-.sch-roster-below[data-review=approval]::before{background:var(--dsw-alias-state-warn-primary)}
-.sch-roster-item[data-flash]{animation:sch-flash 1.4s ease-out}
 @keyframes sch-flash{0%,35%{background:var(--dsw-alias-interactive-bg-active,var(--dsw-alias-interactive-bg-hover))}100%{background:transparent}}
-.sch-roster-more{display:block;margin:2px 8px 4px;border:0;background:none;padding:6px 10px 6px 28px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
-.sch-roster-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
-.sch-roster-foldrow{display:flex;align-items:center;justify-content:space-between;margin:6px 8px 0}
-.sch-roster-foldrow .sch-roster-fold{margin:0}
-.sch-roster-clear{border:0;background:none;padding:4px 8px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer}
-.sch-roster-clear:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.sch-roster-notice{margin:10px 12px 0;padding:8px 10px;border-radius:8px;background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));font:var(--dsw-font-xxs-12);line-height:18px}
-.sch-roster-failure{margin:8px 12px 0;padding:6px 10px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
-.sch-roster-fold{display:flex;align-items:center;gap:4px;margin:6px 8px 0;border:0;background:none;padding:6px 10px;border-radius:8px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);cursor:pointer;text-align:left}
-.sch-roster-fold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
-.sch-roster-fold svg{transition:transform .15s}
-.sch-roster-fold[aria-expanded=true] svg{transform:rotate(90deg)}
 .sch-forkmodel{display:flex;flex-direction:column;gap:2px;padding:0 12px 4px 18px}
 .sch-forkmodel-row{display:flex;align-items:center;gap:4px;min-width:0;margin-left:-6px}
 .sch-forkmodel-label{flex:0 1 auto;min-width:3em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12)}
 .sch-forkmodel-row>.sch-mt{flex:none;max-width:60%}
 .sch-forkmodel-error{color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxs-12)}
 .sch-mm-composer{display:inline-flex;align-items:center;min-width:0}
-.sch-roster-empty{margin:auto;padding:24px;max-width:220px;text-align:center;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);line-height:18px}
 `
 
 const inputLabel = (state: CardState): string => t(`input.label.${state}`)
@@ -354,8 +252,6 @@ export function statusLine(state: Pick<State, 'fork' | 'name' | 'detail'>): { le
   return { lead, name, tail, open: t('status.open') }
 }
 
-const stateLabel = (state: RowState): string => t(`state.${state}`)
-
 // One rule for the Agents page and the focus deck (src/client/row-state.ts).
 export { rowStateOf, type RowState } from './row-state.js'
 
@@ -369,8 +265,6 @@ export const seenLine = (member: string): string => `/agents seen ${member}`
 /** A member's review mark (see src/review.ts). */
 export type ReviewMark = 'approval' | 'failed' | 'reported'
 const REVIEW_RANK: Record<ReviewMark, number> = { approval: 3, failed: 2, reported: 1 }
-const reviewTitle = (mark: ReviewMark): string => t(`review.${mark}`)
-
 /**
  * One member's review mark: yellow while a prompt waits for the user, else red or green for a
  * report the user has not opened yet.
@@ -402,11 +296,6 @@ export function reviewSummary(members: readonly Member[], statuses: Statuses | u
   return { n, tone }
 }
 
-function ReviewBadge({ summary }: { summary: { n: number; tone: ReviewMark | undefined } }) {
-  if (summary.n === 0 || summary.tone === undefined) return null
-  return <span className="sch-review-n" data-review={summary.tone} title={tn('review.count', summary.n)}>{summary.n}</span>
-}
-
 /**
  * Read the roster projection, tolerating a missing hook.
  * @param props - framework standard props of the seat.
@@ -415,27 +304,6 @@ function ReviewBadge({ summary }: { summary: { n: number; tone: ReviewMark | und
 function rosterOf(props: { useProjection?: (key: string) => unknown }): Roster | undefined {
   if (props.useProjection === undefined) return undefined
   return props.useProjection(ROSTER) as Roster | undefined
-}
-
-/**
- * Count what the dock chip reports.
- * @param members - roster rows.
- * @param statuses - the root Session-status map.
- * @returns the four counts.
- */
-function countsOf(members: readonly Member[], statuses: Statuses | undefined) {
-  let running = 0
-  let waiting = 0
-  let queued = 0
-  let failed = 0
-  for (const member of members) {
-    const state = rowStateOf(member, statuses)
-    if (state === 'running') running += 1
-    else if (state === 'waiting') waiting += 1
-    else if (state === 'queued') queued += 1
-    else if (state === 'failed') failed += 1
-  }
-  return { running, waiting, queued, failed }
 }
 
 /**
@@ -459,66 +327,6 @@ export function createInputCard(open: (parent: string, child: string) => void) {
       </div>
     )
   })
-}
-
-/**
- * Give the Agents page a column of its own at the left of the right sidebar, moving any other
- * tab out of that column, and size it narrow when this call made the split. Each step is a
- * gesture the user could make by hand, so undo and saved layouts treat it the same way.
- * @param sidebar - `ctx.sidebarRight`.
- */
-export function arrangeRoster(sidebar: SidebarFace | undefined): void {
-  const gestures = gesturesOf(sidebar)
-  if (sidebar === undefined || gestures === undefined) return
-  const { sessionId, actions } = gestures
-  let split = false
-  for (let i = 0; i < 12; i += 1) {
-    const layout = layoutOf(sidebar)
-    const step = layout === undefined ? undefined : nextRosterStep(layout, AGENTS_KIND)
-    if (step === undefined) break
-    if (step.op === 'drop') {
-      if (actions.dropTab === undefined) break
-      actions.dropTab(sessionId, step.tabId, step.paneId, step.zone)
-      split = true
-    } else {
-      if (actions.placeTab === undefined) break
-      actions.placeTab(sessionId, step.tabId, step.paneId, step.index)
-    }
-  }
-  const layout = layoutOf(sidebar)
-  const root = layout?.nodes[layout.rootId]
-  if (split && root?.kind === 'split' && actions.resizeSplit !== undefined) {
-    actions.resizeSplit(sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
-  }
-  const roster = layout === undefined ? undefined : findRoster(layout, AGENTS_KIND)
-  if (roster !== undefined) sidebar.focus?.(roster.tabId)
-}
-
-/**
- * Open the Agents page, or bring back the one already open wherever it sits, then give it its
- * own left column. Pages deduplicate only within one pane, so an open roster is focused rather
- * than opened again into whichever pane is active.
- * @param sidebar - `ctx.sidebarRight`.
- */
-export function openAgentsPage(sidebar: SidebarFace | undefined): void {
-  if (sidebar?.openTab === undefined || sidebar.mounted?.getSnapshot() === undefined) return
-  try {
-    const layout = layoutOf(sidebar)
-    const roster = layout === undefined ? undefined : findRoster(layout, AGENTS_KIND)
-    if (roster !== undefined && roster.pane.host === 'dock') {
-      if (sidebar.isExpanded?.() === false) sidebar.toggleExpanded?.()
-      sidebar.focus?.(roster.tabId)
-    } else if (roster === undefined) {
-      const left = layout === undefined || layout.expanded === false ? undefined : dockPanes(layout)[0]
-      sidebar.openTab(AGENTS_KIND, { revealIfOpened: true, ...(left === undefined ? {} : { paneId: left.id }) })
-    } else {
-      sidebar.focus?.(roster.tabId)
-      return
-    }
-    arrangeRoster(sidebar)
-  } catch {
-    sidebar.openTab(AGENTS_KIND, { revealIfOpened: true })
-  }
 }
 
 /**
@@ -569,49 +377,6 @@ const ICON = {
 }
 
 /**
- * The one-line totals shared by the chip and the page header.
- * @param counts - live counts.
- * @param total - members that are not archived.
- * @returns the parts, in order of urgency.
- */
-function summaryParts(counts: ReturnType<typeof countsOf>, total: number): string[] {
-  const parts = [
-    counts.waiting === 0 ? undefined : tn('count.waiting', counts.waiting),
-    counts.running === 0 ? undefined : tn('count.running', counts.running),
-    counts.queued === 0 ? undefined : tn('count.queued', counts.queued),
-    counts.failed === 0 ? undefined : tn('count.failed', counts.failed),
-  ].filter((part): part is string => part !== undefined)
-  return parts.length > 0 || total === 0 ? parts : [t('count.allStopped')]
-}
-
-/**
- * Narrow a roster pane that a chat just split off: `preferNewPane` splits evenly, and the list
- * needs far less room than a conversation. Only called right after that split, so a divider the
- * user dragged stays where they left it.
- * @param sidebar - `ctx.sidebarRight`.
- */
-export function narrowRoster(sidebar: SidebarFace | undefined): void {
-  const gestures = gesturesOf(sidebar)
-  const layout = layoutOf(sidebar)
-  const root = layout?.nodes[layout.rootId]
-  if (gestures === undefined || layout === undefined || root?.kind !== 'split') return
-  const roster = findRoster(layout, AGENTS_KIND)
-  const [left] = dockPanes(layout)
-  if (roster === undefined || left === undefined || roster.pane.id !== left.id || left.tabs.length !== 1) return
-  gestures.actions.resizeSplit?.(gestures.sessionId, root.id, [ROSTER_SHARE, 1 - ROSTER_SHARE])
-}
-
-/** What the Agents button says: the most urgent count, or how many are still around. */
-function agentsLabel(members: readonly Member[], statuses: Statuses | undefined): { tone: RowState | 'idle'; text: string } {
-  const counts = countsOf(members, statuses)
-  if (counts.waiting > 0) return { tone: 'waiting', text: tn('count.waiting', counts.waiting) }
-  if (counts.running > 0) return { tone: 'running', text: tn('count.running', counts.running) }
-  if (counts.queued > 0) return { tone: 'queued', text: tn('count.queued', counts.queued) }
-  if (counts.failed > 0) return { tone: 'failed', text: tn('count.failed', counts.failed) }
-  return { tone: 'idle', text: '' }
-}
-
-/**
  * Create the scheduling switch for the composer's mode row: one chip that turns scheduling on or
  * off, like Plan beside it, and next to it an Agents button whenever this session has forks or
  * workers. Turning scheduling off keeps them; the Agents page archives them.
@@ -620,7 +385,6 @@ function agentsLabel(members: readonly Member[], statuses: Statuses | undefined)
  */
 export function createScheduleSwitch(deps: {
   setMode: (sessionId: string, on: boolean) => Promise<string | null>
-  openAgents: () => void
   isChild: (sessionId: string) => boolean
   supports: (sessionId: string) => Promise<boolean>
   /** The right sidebar, for the Sessions its panes show; absent: no dot is suppressed. */
@@ -661,6 +425,8 @@ export function createScheduleSwitch(deps: {
       store.mark(sessionId, (roster?.members ?? []).filter(m => ids.has(m.id)))
     }, [dueKey, sessionId])
     if (sessionId === undefined || deps.isChild(sessionId)) return null
+    // One switch at a time: while the session dock shows, its summary line carries 调度.
+    if (dockModel(roster as never, statuses, undefined, sessionId).visible) return null
     if (supported === false) {
       return (
         <span className="sch-mode-group" data-scheduler-switch="" data-on="no" data-unsupported="">
@@ -673,10 +439,6 @@ export function createScheduleSwitch(deps: {
       )
     }
     const on = roster?.enabled === true
-    const members = (roster?.members ?? []).filter(m => m.state !== 'archived')
-    const label = agentsLabel(members, statuses)
-    // A fork archives itself right after handing back, so unread reports count over every member.
-    const unreadReports = reviewSummary(roster?.members ?? [], statuses, true, visible)
     const switchTo = (next: boolean) => {
       setBusy(true)
       setError(null)
@@ -702,15 +464,6 @@ export function createScheduleSwitch(deps: {
               </button>
             )}
         </span>
-        {members.length === 0 && !on && unreadReports.n === 0 ? null : (
-          <button type="button" className="sch-agents-btn" aria-label={t('agents.open.aria')} title={t('agents.open.title')} onClick={deps.openAgents}>
-            {label.tone === 'idle' ? null : <span className="sch-dot" data-row={label.tone} />}
-            {t('agents.title')}
-            {label.text === '' ? (members.length === 0 ? null : <span className="sch-agents-n">{members.length}</span>) : <span className="sch-agents-n" data-row={label.tone}>{label.text}</span>}
-            <ReviewBadge summary={unreadReports} />
-            {(roster?.inbox?.length ?? 0) === 0 ? null : <span className="sch-agents-mail" data-scheduler-mail={roster!.inbox!.length} title={tn('inbox.member', roster!.inbox!.length)}>✉{roster!.inbox!.length}</span>}
-          </button>
-        )}
         {error === null ? null : <span className="sch-mode-error" role="status" title={error}>{t('error.switch')}</span>}
       </span>
     )
@@ -777,121 +530,6 @@ export function rowTitle(member: Member): string {
   // The name is cut with an ellipsis in a narrow column: the tooltip leads with it whole.
   const head = member.name === undefined || member.name === member.id ? member.id : `${member.name}\n${member.id}`
   return member.cwd === undefined ? head : t('row.titleCwd', { id: head, cwd: member.cwd })
-}
-
-/** What the roster has below its visible part: rows, and how many of them carry a mark. */
-export interface HiddenBelow {
-  /** Rows not wholly visible under the viewport's bottom edge. */
-  readonly n: number
-  /** Of those, rows with an unread report (green or red dot). */
-  readonly unread: number
-  /** Of those, rows waiting on the user (yellow dot). */
-  readonly waiting: number
-  /** Index of the first such row, or -1. */
-  readonly first: number
-}
-
-/**
- * Count the rows below the visible part of a scrolled list.
- * @param rows - each row's bottom edge in content coordinates, with its review mark, top to bottom.
- * @param viewBottom - the content coordinate of the viewport's bottom edge (scrollTop + height).
- * @returns the hidden rows and their marks.
- */
-export function hiddenBelow(rows: readonly { readonly bottom: number; readonly review?: ReviewMark | undefined }[], viewBottom: number): HiddenBelow {
-  let n = 0
-  let unread = 0
-  let waiting = 0
-  let first = -1
-  // A pixel of slack: sub-pixel layouts leave the last row a fraction past a list scrolled to its end.
-  rows.forEach((row, index) => {
-    if (row.bottom <= viewBottom + 1) return
-    if (first < 0) first = index
-    n += 1
-    if (row.review === 'approval') waiting += 1
-    else if (row.review !== undefined) unread += 1
-  })
-  return { n, unread, waiting, first }
-}
-
-/**
- * The bottom hint's words.
- * @param below - what is hidden.
- * @returns e.g. 「下面还有 3 个 · 1 个未读」, or '' when nothing is.
- */
-export function hiddenLabel(below: HiddenBelow): string {
-  if (below.n === 0) return ''
-  return [tn('below.rows', below.n), below.waiting === 0 ? undefined : tn('below.waiting', below.waiting), below.unread === 0 ? undefined : tn('below.unread', below.unread)]
-    .filter(part => part !== undefined).join(' · ')
-}
-
-const NOTHING_BELOW: HiddenBelow = { n: 0, unread: 0, waiting: 0, first: -1 }
-const sameBelow = (a: HiddenBelow, b: HiddenBelow) => a.n === b.n && a.unread === b.unread && a.waiting === b.waiting && a.first === b.first
-
-/** The roster's member rows in DOM order. */
-const rosterItems = (list: HTMLElement) => [...list.querySelectorAll<HTMLElement>(':scope > .sch-roster-item')]
-
-/**
- * Measure what a scrolled roster hides under its bottom edge.
- * @param list - the `.sch-roster` scroll container.
- * @returns the hidden rows; nothing while the page is not laid out (a hidden kept-mounted tab).
- */
-function measureBelow(list: HTMLElement): HiddenBelow {
-  if (list.clientHeight === 0) return NOTHING_BELOW
-  const top = list.getBoundingClientRect().top - list.scrollTop
-  const rows = rosterItems(list).map(item => ({ bottom: item.getBoundingClientRect().bottom - top, review: (item.dataset.review || undefined) as ReviewMark | undefined }))
-  // The hint itself, pinned to the bottom, covers what is under it.
-  const hint = list.querySelector<HTMLElement>(':scope > .sch-roster-below')?.offsetHeight ?? 0
-  return hiddenBelow(rows, list.scrollTop + list.clientHeight - hint)
-}
-
-/**
- * Bring the first row below the fold into view, smoothly, and flash it so the eye lands on it.
- * It goes near the top, so the click shows a whole new screen of rows.
- * @param list - the `.sch-roster` scroll container.
- * @param index - the row's index among the member rows.
- */
-function revealRow(list: HTMLElement, index: number): void {
-  const item = rosterItems(list)[index]
-  if (item === undefined) return
-  const offset = item.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop
-  // Leave the row above it in sight, for context.
-  list.scrollTo({ top: Math.max(0, offset - 56), behavior: 'smooth' })
-  item.dataset.flash = ''
-  window.setTimeout(() => { delete item.dataset.flash }, 1400)
-}
-
-/**
- * Track the rows a roster hides below its bottom edge. Recomputed on scroll (one read per frame),
- * on resize, and after every render (rows added, folds opened); never polled.
- * @returns a ref callback for the scroll container, the list element, and what it hides.
- */
-function useHiddenBelow(): [(node: HTMLDivElement | null) => void, HTMLDivElement | null, HiddenBelow] {
-  const [list, setList] = useState<HTMLDivElement | null>(null)
-  const [below, setBelow] = useState<HiddenBelow>(NOTHING_BELOW)
-  const update = useCallback(() => {
-    if (list === null) return
-    const next = measureBelow(list)
-    setBelow(prev => (sameBelow(prev, next) ? prev : next))
-  }, [list])
-  // After every render: cheap (one rect per row), and the only signal for rows that came or went.
-  useEffect(update)
-  useEffect(() => {
-    if (list === null) return undefined
-    let frame = 0
-    const onScroll = () => {
-      if (frame !== 0) return
-      frame = window.requestAnimationFrame(() => { frame = 0; update() })
-    }
-    list.addEventListener('scroll', onScroll, { passive: true })
-    const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(onScroll)
-    resize?.observe(list)
-    return () => {
-      list.removeEventListener('scroll', onScroll)
-      resize?.disconnect()
-      if (frame !== 0) window.cancelAnimationFrame(frame)
-    }
-  }, [list, update])
-  return [setList, list, below]
 }
 
 /**
@@ -1100,500 +738,6 @@ export function workerModelLabel(groups: readonly CatalogGroup[], current: ForkM
 }
 
 /**
- * The 「Worker 默认模型」 control of the Agents page: shows the Session's `/worker model` default and
- * changes it by running that command, so the log records it like a typed command.
- * @param deps - session, current value, command runner, and catalog loader.
- * @returns the control.
- */
-function WorkerModelPicker(deps: { sessionId: string; current: ForkModel | null; run: (sessionId: string, line: string) => Promise<string | null>; catalog: CatalogSource }) {
-  const { sessionId, current, run, catalog } = deps
-  // Live: follows every change the Host makes to the model list, like the composer's menu.
-  const snapshot = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot)
-  const groups = snapshot.groups
-  const loadError = groups === undefined ? snapshot.error : null
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => { catalog.load() }, [catalog])
-  const change = (next: ForkModel | null) => {
-    setBusy(true)
-    setError(null)
-    run(sessionId, workerModelCommand(next)).then(failure => { setBusy(false); setError(failure) }, (reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)) })
-  }
-  const shown = groups ?? []
-  const stale = isStale(snapshot, current)
-  const label = workerModelLabel(shown, current)
-  const level = stale ? undefined : effortLabel(shown, current)
-  const value = workerModelValue(current)
-  return (
-    <div className="sch-forkmodel" data-scheduler-worker-model={value === '' ? 'default' : value}>
-      <div className="sch-forkmodel-row">
-        <span className="sch-forkmodel-label" title={t('worker.model.label')}>{t('worker.model.label')}</span>
-        <ModelMenu
-          groups={groups}
-          current={current}
-          label={label}
-          stale={stale}
-          onOpen={catalog.load}
-          defaultLabel={t('worker.model.defaultRow')}
-          defaultValue={t('worker.model.default')}
-          busy={busy}
-          size="compact"
-          ariaLabel={stale ? t('worker.model.ariaStale', { label }) : t('worker.model.aria', { label: level === undefined ? label : `${label} · ${level}` })}
-          title={t('worker.model.title')}
-          onPick={change}
-          failure={loadError === null ? undefined : <div className="sch-mm-empty" role="status" title={loadError}>{t('model.loadFailed')}</div>}
-        />
-      </div>
-      {error === null ? null : <div className="sch-forkmodel-error" role="status" title={error}>{t('error.switchDetail', { error })}</div>}
-    </div>
-  )
-}
-
-/**
- * Create the Agents page body for the right sidebar.
- * @param ctx - client plugin context, for the controller's known child addresses.
- * @returns the slot component.
- */
-export function createAgentsPage(ctx: {
-  sidebarRight?: SidebarFace | undefined
-  /** The sidebar resource address of a member's native chat. */
-  chatAddress: (parent: string, child: string) => string
-  /** Open a top-level Session (a session worker) in the centre. */
-  openTopLevel?: ((sessionId: string) => void) | undefined
-}, run: (sessionId: string, line: string) => Promise<string | null> = async () => 'unavailable', has: (sessionId: string, name: string) => Promise<boolean> = async () => true, catalog?: CatalogSource) {
-  return memo(function AgentsPage(props: {
-    sessionId?: string
-    useProjection?: (key: string) => unknown
-    useSessionStatus?: UseSessionStatus
-    useTabInfo?: () => { panel?: { id?: string }; tab: { actions: { openResource: (address: string, options?: Record<string, unknown>) => void; close: () => void } } }
-  }) {
-    useLocale()
-    const roster = rosterOf(props)
-    // The lead's own access mode comes from THIS Session's permission projection, the same state
-    // the footer picker reads: the roster view is one shared fold and cannot know which main
-    // Session it is drawn for, and sampling the process's first conversation got another
-    // Session's mode. Reading the projection keeps the rows live when the lead switches.
-    const permissions = props.useProjection?.(PERMISSIONS_KEY) as { readonly currentValue?: unknown } | undefined
-    const accessDefault = accessDefaultOf(permissions)
-    const statuses = props.useSessionStatus?.((value: Statuses) => value)
-    const tab = props.useTabInfo?.()
-    // What this browser read on screen (see active-seen.ts) counts here too.
-    useSyncExternalStore(browserSeen.subscribe, browserSeen.revision, browserSeen.revision)
-    const rows = props.sessionId === undefined ? roster?.members ?? [] : browserSeen.apply(props.sessionId, roster?.members ?? [])
-    const [picked, setPicked] = useState<string | undefined>(undefined)
-    const [showArchived, setShowArchived] = useState(false)
-    const [showAllArchived, setShowAllArchived] = useState(false)
-    const [showDone, setShowDone] = useState(false)
-    const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
-    const [failure, setFailure] = useState<string | null>(null)
-    // The browser half updates as soon as the plugin is installed; the host half (and with it
-    // /agents) only after DeepSeek Harness restarts. Ask the Session instead of failing on click.
-    const [canArchiveHere, setCanArchiveHere] = useState(true)
-    // Hosts without /worker (not restarted since the update) hide the picker.
-    const [canPickWorkerModel, setCanPickWorkerModel] = useState(false)
-    const sessionId = props.sessionId
-    useEffect(() => {
-      if (sessionId === undefined) return undefined
-      let alive = true
-      has(sessionId, 'agents').then(ok => { if (alive) setCanArchiveHere(ok) }, () => undefined)
-      has(sessionId, 'worker').then(ok => { if (alive) setCanPickWorkerModel(ok) }, () => undefined)
-      return () => { alive = false }
-    }, [sessionId])
-    // A host not restarted since the update refuses `seen`; the mark then stays until it is.
-    const markSeen = (session: string, member: string) => { run(session, seenLine(member)).catch(() => undefined) }
-    const archive = (target: string) => {
-      if (props.sessionId === undefined) return
-      setPending(p => new Set([...p, target]))
-      setFailure(null)
-      const settle = (error: string | null) => {
-        setPending(p => { const next = new Set(p); next.delete(target); return next })
-        if (error !== null && /unknown command/u.test(error)) { setCanArchiveHere(false); setFailure(null); return }
-        setFailure(error)
-      }
-      run(props.sessionId, `/agents archive ${target}`).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
-    }
-    // 「新建 worker」 form and the row being renamed; both run /agents, which the host checks again.
-    const [creating, setCreating] = useState(false)
-    const [draft, setDraft] = useState({ name: '', role: '', cwd: '' })
-    const [formError, setFormError] = useState<string | null>(null)
-    const [submitting, setSubmitting] = useState(false)
-    // 「合并到…」 on a worker row: the other worker, which side stays, the survivor's new name.
-    const [merging, setMerging] = useState<{ id: string; from: string; other: string; keep: 'other' | 'this'; name: string; error: string | null; busy: boolean } | undefined>(undefined)
-    const [renaming, setRenaming] = useState<{ id: string; from: string; value: string; error: string | null; busy: boolean } | undefined>(undefined)
-    // 「Fork…」 on a worker row (or 「Fork this worker」 in its chat): a new worker of its own.
-    const [forking, setForking] = useState<ForkDraft | undefined>(undefined)
-    const forkWanted = useSyncExternalStore(forkRequests.subscribe, forkRequests.getSnapshot)
-    useEffect(() => {
-      if (sessionId === undefined || forkWanted === undefined) return
-      const worker = takeFork(sessionId)
-      const member = worker === undefined ? undefined : rows.find(m => m.id === worker)
-      if (member !== undefined) { setMerging(undefined); setForking(startFork(member)) }
-    }, [sessionId, forkWanted])
-    const commitFork = () => {
-      if (sessionId === undefined || forking === undefined || forking.busy) return
-      const built = forkCommand(forking)
-      if ('error' in built) { setForking({ ...forking, error: built.error }); return }
-      setForking({ ...forking, busy: true, error: null })
-      const id = forking.id
-      const settle = (error: string | null) => { setForking(f => f === undefined || f.id !== id ? f : error === null ? undefined : { ...f, busy: false, error: restartNote(error) }) }
-      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
-    }
-    const forkForm = (member: Member) => {
-      if (forking === undefined || forking.id !== member.id) return null
-      const set = (patch: Partial<ForkDraft>) => { setForking(f => f === undefined ? f : { ...f, ...patch, error: null }) }
-      const busy = forking.busy
-      return (
-        <form className="sch-roster-form" data-scheduler-fork={member.name} onSubmit={e => { e.preventDefault(); commitFork() }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setForking(undefined) } }}>
-          <div className="sch-roster-form-title">{t('fork.title', { name: member.name })}</div>
-          <label>{t('fork.name')}
-            <input className="sch-roster-input" data-fork-field="name" value={forking.name} autoFocus spellCheck={false} disabled={busy} onChange={e => { const name = e.currentTarget.value; setForking(f => f === undefined ? f : withForkName(f, name)) }} />
-          </label>
-          <label>{t('fork.role')}
-            <textarea className="sch-roster-input" data-fork-field="role" value={forking.role} placeholder={t('fork.rolePlaceholder', { name: member.name })} disabled={busy} onChange={e => { set({ role: e.currentTarget.value }) }} />
-          </label>
-          <label>{t('fork.task')}
-            <textarea className="sch-roster-input" data-fork-field="task" value={forking.task} placeholder={t('fork.taskPlaceholder')} disabled={busy} onChange={e => { set({ task: e.currentTarget.value }) }} />
-          </label>
-          {forking.repo === '' ? null : (
-            <label className="sch-fork-check"><input type="checkbox" data-fork-field="worktree" checked={forking.worktree} disabled={busy} onChange={e => { set({ worktree: e.currentTarget.checked }) }} />{t('fork.worktree')}</label>
-          )}
-          <label>{t('fork.cwd')}
-            <input className="sch-roster-input" data-fork-field="cwd" value={forking.cwd} spellCheck={false} disabled={busy} onChange={e => { set({ cwd: e.currentTarget.value, touched: true }) }} />
-          </label>
-          {!forking.worktree ? null : (
-            <label>{t('fork.branch')}
-              <input className="sch-roster-input" data-fork-field="branch" value={forking.branch} spellCheck={false} disabled={busy} onChange={e => { set({ branch: e.currentTarget.value, touched: true }) }} />
-            </label>
-          )}
-          <label>{t('fork.ownerName', { name: member.name })}
-            <input className="sch-roster-input" data-fork-field="ownerName" value={forking.ownerName} placeholder={t('fork.ownerNamePlaceholder', { name: member.name })} spellCheck={false} disabled={busy} onChange={e => { set({ ownerName: e.currentTarget.value }) }} />
-          </label>
-          {forking.ownerName.trim() === '' ? null : (
-            <label>{t('fork.ownerRole', { name: member.name })}
-              <input className="sch-roster-input" data-fork-field="ownerRole" value={forking.ownerRole} placeholder={member.role ?? ''} disabled={busy} onChange={e => { set({ ownerRole: e.currentTarget.value }) }} />
-            </label>
-          )}
-          <div className="sch-roster-sub">{t('fork.hint', { name: member.name })}</div>
-          {forking.error === null ? null : <div className="sch-roster-form-error" role="status">{forking.error}</div>}
-          <div className="sch-roster-form-actions">
-            <button type="button" className="sch-roster-clear" disabled={busy} onClick={() => { setForking(undefined) }}>{t('fork.cancel')}</button>
-            <button type="submit" className="sch-roster-primary" disabled={busy || forking.name.trim() === ''}>{busy ? t('fork.submitting') : t('fork.submit')}</button>
-          </div>
-        </form>
-      )
-    }
-    const restartNote = (error: string) => needsRestartFor(error) || /unknown command/u.test(error) ? t('restart.note') : error
-    const create = () => {
-      if (sessionId === undefined || submitting) return
-      const built = newWorkerCommand(draft)
-      if ('error' in built) { setFormError(built.error); return }
-      setSubmitting(true)
-      setFormError(null)
-      const settle = (error: string | null) => {
-        setSubmitting(false)
-        if (error !== null) { setFormError(restartNote(error)); return }
-        setCreating(false)
-        setDraft({ name: '', role: '', cwd: '' })
-      }
-      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
-    }
-    const commitRename = () => {
-      if (sessionId === undefined || renaming === undefined || renaming.busy) return
-      if (renaming.value.trim() === renaming.from) { setRenaming(undefined); return }
-      const built = renameCommand(renaming.from, renaming.value)
-      if ('error' in built) { setRenaming({ ...renaming, error: built.error }); return }
-      setRenaming({ ...renaming, busy: true, error: null })
-      const settle = (error: string | null) => {
-        setRenaming(r => r === undefined || r.id !== renaming.id ? r : error === null ? undefined : { ...r, busy: false, error: restartNote(error) })
-      }
-      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
-    }
-    const layout = layoutOf(ctx.sidebarRight)
-    // A member whose chat the user is looking at carries no dot: what arrived is already visible.
-    const visible = layout === undefined ? new Set<string>() : visibleChildren(layout, rows.map(m => m.id))
-    const selected = (layout === undefined ? undefined : activeChild(layout, AGENTS_KIND, rows.map(m => m.id))) ?? picked
-    const open = (member: Member) => {
-      if (props.sessionId === undefined || tab === undefined) return
-      setPicked(member.id)
-      // Opening the chat reads its latest report; a prompt waiting stays marked until answered.
-      if (reviewOf(member) !== undefined) markSeen(props.sessionId, member.id)
-      // A session worker is a top-level Session: it opens in the centre, like a left-sidebar click.
-      if (member.session === true) { ctx.openTopLevel?.(member.id); return }
-      const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
-      tab.tab.actions.openResource(ctx.chatAddress(props.sessionId, member.id), placement)
-      if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
-    }
-    // Fold the whole column, keeping its tabs: closing only this tab would leave open agent chats
-    // holding the column's width. The runtime's header button and the chip expand it again.
-    const collapse = () => {
-      const sidebar = ctx.sidebarRight
-      if (sidebar?.toggleExpanded !== undefined && sidebar.isExpanded?.() !== false) sidebar.toggleExpanded()
-      else tab?.tab.actions.close()
-    }
-    const live = rows.filter(m => m.state !== 'archived')
-    // A member with something to look at stays in its section until the user opens it, even a
-    // fork that archived itself right after handing back: the folds hide only what was read.
-    const marked = (m: Member) => reviewMarkOf(m, statuses, visible) !== undefined
-    // A fork that handed back its conclusion and is not working again is finished work: folded
-    // away under 「已交回」, where one click archives it or all of them.
-    const finished = (m: Member) => m.kind === 'fork' && m.state === 'done' && statuses?.get(m.id)?.running !== true && statuses?.get(m.id)?.pendingInteraction === undefined
-    const done = live.filter(m => finished(m) && !marked(m))
-    const forks = rows.filter(m => m.kind === 'fork' && (m.state === 'archived' || finished(m) ? marked(m) : true))
-    const workers = byArea(rows.filter(m => m.kind === 'worker' && (m.state !== 'archived' || marked(m))))
-    const archived = rows.filter(m => m.state === 'archived' && !marked(m))
-    const counts = countsOf(rows, statuses)
-    // The open chat's row is always visible: opening an archived or handed-back fork (say from
-    // its message's 「查看」) unfolds its group once, so the selection is not hidden in a fold.
-    const selectedIn = selected === undefined ? undefined : archived.some(m => m.id === selected) ? 'archived' : done.some(m => m.id === selected) ? 'done' : undefined
-    useEffect(() => {
-      if (selectedIn === 'archived') setShowArchived(true)
-      else if (selectedIn === 'done') setShowDone(true)
-    }, [selected, selectedIn])
-    const openTo = (id: string) => (roster?.openRequests ?? []).filter(r => r.to === id)
-    const [listRef, list, below] = useHiddenBelow()
-    // Workers whose team is folded open under their row.
-    const [teamsOpen, setTeamsOpen] = useState<ReadonlySet<string>>(new Set())
-    const openMember = (parent: string, child: string) => {
-      if (tab === undefined) return
-      const placement = placeChat(ctx.sidebarRight, tab.panel?.id)
-      tab.tab.actions.openResource(ctx.chatAddress(parent, child), placement)
-      if ('preferNewPane' in placement) narrowRoster(ctx.sidebarRight)
-    }
-    const row = (member: Member) => {
-      const state = rowStateOf(member, statuses)
-      const pendingRequests = openTo(member.id)
-      const waiting = (roster?.inbox ?? []).filter(m => m.from === member.id).length
-      const canArchive = canArchiveHere && member.state !== 'archived' && state !== 'running' && state !== 'waiting'
-      const review = reviewMarkOf(member, statuses, visible)
-      // An archived member is history: one line, no subtitle. A dozen of them must not push the
-      // live work off the page. One still unread keeps its full row until it is opened.
-      const compact = member.state === 'archived' && review === undefined
-      const team = member.kind === 'worker' ? roster?.teams?.[member.id] : undefined
-      const hasTeam = team !== undefined && (team.members.length > 0 || team.tasks.length > 0)
-      const merge = (roster?.merging ?? []).find(m => m.absorbed === member.id || m.survivor === member.id)
-      const nameOf = (id: string) => rows.find(m => m.id === id)?.name ?? id
-      // Team count and access mode live on one quiet meta line, each only when it differs from
-      // the default: a worker with neither shows the description alone, like any other row.
-      const meta = rowMeta({ member, teamMembers: team?.members.length, accessDefault })
-      const usual = subline(member, pendingRequests)
-      const second = compact ? '' : merge !== undefined ? mergeLine(member, merge, nameOf) : usual
-      // The subtitle is cut to one line: its tooltip has it whole, and during a merge also what it replaced
-      // (the absorbed side's handoff request, or the survivor's own work).
-      const secondTitle = merge !== undefined && usual !== '' ? `${second}\n${usual}` : second
-      // Only a worker has a name of its own to change; a fork is fork-N. An archived one keeps its name.
-      const canRename = canArchiveHere && member.kind === 'worker' && member.state !== 'archived' && merge === undefined
-      // Merge into another live worker: there must be one, and neither may be mid-merge.
-      const partners = mergePartners(rows, member, roster?.merging ?? [])
-      const canMerge = canRename && partners.length > 0
-      // Any live worker can be forked; the seed rule (a completed round, nothing pending) is the host's.
-      const canFork = canRename
-      if (renaming?.id === member.id) {
-        return (
-          <div key={member.id} className="sch-roster-item">
-            <form className="sch-roster-edit" onSubmit={e => { e.preventDefault(); commitRename() }}>
-              <span className="sch-dot" data-row={state} />
-              <span className="sch-roster-main">
-                <input
-                  className="sch-roster-input"
-                  aria-label={t('rename.input', { name: member.name })}
-                  value={renaming.value}
-                  disabled={renaming.busy}
-                  autoFocus
-                  spellCheck={false}
-                  onChange={e => { const value = e.currentTarget.value; setRenaming(r => r === undefined ? r : { ...r, value, error: null }) }}
-                  onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setRenaming(undefined) } }}
-                />
-                {renaming.error === null ? <span className="sch-roster-sub">{t('rename.hint')}</span> : <span className="sch-roster-form-error" role="status">{renaming.error}</span>}
-              </span>
-            </form>
-          </div>
-        )
-      }
-      return (
-        <div key={member.id} className="sch-roster-item" data-selected={member.id === selected ? 'yes' : 'no'} data-pending={pending.has(member.name) ? 'yes' : 'no'} {...(review === undefined ? {} : { 'data-review': review })}>
-        <button type="button" className="sch-roster-row" data-row={state} data-compact={compact ? 'yes' : 'no'} data-selected={member.id === selected ? 'yes' : 'no'} onClick={() => { open(member) }} title={rowTitle(member)}>
-          <span className="sch-dot" data-row={state} {...(review === undefined ? {} : { 'data-review': review, title: reviewTitle(review) })} />
-          <span className="sch-roster-main">
-            <span className="sch-roster-name">{member.name}</span>
-            {second === '' ? null : <span className="sch-roster-sub" title={secondTitle}>{second}</span>}
-          </span>
-          <span className="sch-roster-end">
-            {waiting === 0 ? null : <span className="sch-roster-mail" data-scheduler-mail={waiting} title={tn('inbox.member', waiting)}>✉</span>}
-            {merge === undefined ? null : <span className="sch-roster-badge" data-scheduler-merging={merge.id} title={t('merge.pending', { id: merge.id })}>{merge.id}</span>}
-            {pendingRequests.length === 0 ? null : <span className="sch-roster-reqs" data-scheduler-open={pendingRequests.length} title={pendingRequests.map(r => t('row.request', { id: r.id, text: r.text.replace(/\s+/gu, ' ').slice(0, 80) })).join('\n')}>{openLabel(pendingRequests.length, state)}</span>}
-            <span className="sch-roster-tail"><span className="sch-roster-state" data-row={state}>{stateLabel(state)}</span><span className="sch-roster-chev">{ICON.chevron}</span></span>
-          </span>
-        </button>
-        {canFork ? <button type="button" className="sch-roster-fork" data-slot={(canMerge ? 1 : 0) + (canRename ? 1 : 0) + (canArchive ? 1 : 0)} data-scheduler-fork-action={member.name} aria-label={t('fork.aria', { name: member.name })} title={t('fork.action')} disabled={pending.has(member.name)} onClick={() => { setMerging(undefined); setForking(startFork(member)) }}>{ICON.forkWorker}</button> : null}
-        {canMerge ? <button type="button" className="sch-roster-merge" data-slot={(canRename ? 1 : 0) + (canArchive ? 1 : 0)} aria-label={t('merge.aria', { name: member.name })} title={t('merge.action')} disabled={pending.has(member.name)} onClick={() => { setForking(undefined); setMerging(startMerge(member, partners, statuses, openTo)) }}>{ICON.merge}</button> : null}
-        {merging?.id === member.id ? mergeForm(member, partners) : null}
-        {forking?.id === member.id ? forkForm(member) : null}
-        {canRename ? <button type="button" className="sch-roster-rename" data-alone={canArchive ? undefined : ''} aria-label={t('rename.aria', { name: member.name })} title={t('rename.title')} disabled={pending.has(member.name)} onClick={() => { setRenaming({ id: member.id, from: member.name, value: member.name, error: null, busy: false }) }}>{ICON.rename}</button> : null}
-        {canArchive ? <button type="button" className="sch-roster-archive" aria-label={t('archive.aria', { name: member.name })} title={t('archive.title')} disabled={pending.has(member.name)} onClick={() => { archive(member.name) }}>{ICON.archive}</button> : null}
-        {!hasMeta(meta) ? null : (
-          <div className="sch-roster-meta">
-            {hasTeam ? <button type="button" className="sch-roster-team-toggle" data-scheduler-team-toggle={member.name} aria-expanded={teamsOpen.has(member.id)} aria-label={t(teamsOpen.has(member.id) ? 'team.collapse' : 'team.expand', { name: member.name })} onClick={() => { setTeamsOpen(s => { const n = new Set(s); if (n.has(member.id)) n.delete(member.id); else n.add(member.id); return n }) }}>
-              {teamsOpen.has(member.id) ? '▾' : '▸'} {meta.team ?? teamSummary(team!)}
-            </button> : null}
-            {meta.access === undefined ? null : <span className="sch-roster-access-note" data-scheduler-row-access={member.name}>{meta.access}</span>}
-          </div>
-        )}
-        {hasTeam && teamsOpen.has(member.id) ? <TeamBlock team={team} owner={member.id} open={openMember} /> : null}
-        </div>
-      )
-    }
-    const commitMerge = (member: Member) => {
-      if (sessionId === undefined || merging === undefined || merging.busy) return
-      const other = rows.find(m => m.name === merging.other)
-      if (other === undefined) return
-      const [absorbed, survivor] = merging.keep === 'other' ? [member.name, other.name] : [other.name, member.name]
-      const built = mergeCommand(absorbed, survivor, merging.name)
-      if ('error' in built) { setMerging({ ...merging, error: built.error }); return }
-      setMerging({ ...merging, busy: true, error: null })
-      const settle = (error: string | null) => { setMerging(m => m === undefined || m.id !== member.id ? m : error === null ? undefined : { ...m, busy: false, error: restartNote(error) }) }
-      run(sessionId, built.line).then(settle, (reason: unknown) => { settle(reason instanceof Error ? reason.message : String(reason)) })
-    }
-    const mergeForm = (member: Member, partners: readonly Member[]) => {
-      if (merging === undefined) return null
-      const other = merging.other
-      const keep = (which: 'other' | 'this') => { setMerging(m => m === undefined ? m : { ...m, keep: which, error: null }) }
-      return (
-        <form className="sch-roster-form" data-scheduler-merge={member.name} onSubmit={e => { e.preventDefault(); commitMerge(member) }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setMerging(undefined) } }}>
-          <label>{t('merge.with')}
-            <select className="sch-roster-input" value={other} disabled={merging.busy} onChange={e => { const value = e.currentTarget.value; setMerging(m => m === undefined ? m : { ...startMerge(member, partners.filter(p => p.name === value), statuses, openTo), name: m.name }) }}>
-              {partners.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-            </select>
-          </label>
-          <div className="sch-merge-keep" role="radiogroup" aria-label={t('merge.keep')}>
-            <span>{t('merge.keep')}</span>
-            <label><input type="radio" name={`keep-${member.id}`} checked={merging.keep === 'other'} disabled={merging.busy} onChange={() => { keep('other') }} />{other}</label>
-            <label><input type="radio" name={`keep-${member.id}`} checked={merging.keep === 'this'} disabled={merging.busy} onChange={() => { keep('this') }} />{member.name}</label>
-          </div>
-          <label>{t('merge.name')}
-            <input className="sch-roster-input" value={merging.name} placeholder={t('merge.namePlaceholder')} spellCheck={false} disabled={merging.busy} onChange={e => { const name = e.currentTarget.value; setMerging(m => m === undefined ? m : { ...m, name, error: null }) }} />
-          </label>
-          <div className="sch-roster-sub">{t('merge.hint')}</div>
-          {merging.error === null ? null : <div className="sch-roster-form-error" role="status">{merging.error}</div>}
-          <div className="sch-roster-form-actions">
-            <button type="button" className="sch-roster-clear" disabled={merging.busy} onClick={() => { setMerging(undefined) }}>{t('merge.cancel')}</button>
-            <button type="submit" className="sch-roster-primary" disabled={merging.busy}>{merging.busy ? t('merge.submitting') : t('merge.submit')}</button>
-          </div>
-        </form>
-      )
-    }
-    const section = (title: string, members: readonly Member[]) => {
-      if (members.length === 0) return null
-      const busy = members.filter(m => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' }).length
-      return (
-        <>
-          <div className="sch-roster-section"><span className="sch-roster-section-title">{title}<ReviewBadge summary={reviewSummary(members, statuses, false, visible)} /></span><span>{busy === 0 ? members.length : t('section.busy', { busy, total: members.length })}</span></div>
-          {members.map(member => row(member))}
-        </>
-      )
-    }
-    return (
-      <div className="sch-roster" data-scheduler-roster="" ref={listRef}>
-        {failure === null ? null : <div className="sch-roster-failure" role="status">{failure}</div>}
-        {canArchiveHere ? null : <div className="sch-roster-notice" role="status" data-scheduler-restart="">{t('restart.archive')}</div>}
-        <div className="sch-roster-head">
-          <div>
-            <div className="sch-roster-title">{t('agents.title')}</div>
-            <div className="sch-roster-summary">{live.length === 0 ? t('roster.none') : [tn('roster.total', live.length), ...summaryParts(counts, live.length)].join(' · ')}</div>
-          </div>
-          <div className="sch-roster-head-actions">
-            {props.sessionId === undefined || reviewSummary(rows, statuses, true, visible).n === 0 ? null : <button type="button" className="sch-roster-clear" data-scheduler-seen-all="" title={t('seenAll.title')} onClick={() => { markSeen(props.sessionId!, 'all') }}>{t('seenAll.label')}</button>}
-            {sessionId === undefined || !canArchiveHere ? null : <button type="button" className="sch-roster-collapse" aria-label={t('new.aria')} aria-expanded={creating} title={t('new.title')} onClick={() => { setCreating(v => !v); setFormError(null) }}>{ICON.plus}</button>}
-            <button type="button" className="sch-roster-collapse" aria-label={t('collapse.aria')} title={t('collapse.title')} onClick={collapse}>{ICON.collapse}</button>
-          </div>
-        </div>
-        {!creating ? null : (
-          <form className="sch-roster-form" data-scheduler-new-worker="" onSubmit={e => { e.preventDefault(); create() }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setCreating(false) } }}>
-            <label>{t('form.name')}
-              <input className="sch-roster-input" value={draft.name} placeholder={t('form.namePlaceholder')} autoFocus spellCheck={false} disabled={submitting} onChange={e => { const name = e.currentTarget.value; setDraft(d => ({ ...d, name })); setFormError(null) }} />
-            </label>
-            <label>{t('form.role')}
-              <textarea className="sch-roster-input" value={draft.role} placeholder={t('form.rolePlaceholder')} disabled={submitting} onChange={e => { const role = e.currentTarget.value; setDraft(d => ({ ...d, role })); setFormError(null) }} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); create() } }} />
-            </label>
-            <label>{t('form.cwd')}
-              <input className="sch-roster-input" value={draft.cwd} placeholder={t('form.cwdPlaceholder')} spellCheck={false} disabled={submitting} onChange={e => { const cwd = e.currentTarget.value; setDraft(d => ({ ...d, cwd })); setFormError(null) }} />
-            </label>
-            {formError === null ? null : <div className="sch-roster-form-error" role="status">{formError}</div>}
-            <div className="sch-roster-form-actions">
-              <button type="button" className="sch-roster-clear" disabled={submitting} onClick={() => { setCreating(false); setFormError(null) }}>{t('form.cancel')}</button>
-              <button type="submit" className="sch-roster-primary" disabled={submitting || draft.name.trim() === '' || draft.role.trim() === ''}>{submitting ? t('form.creating') : t('form.create')}</button>
-            </div>
-          </form>
-        )}
-        {sessionId === undefined || catalog === undefined || !canPickWorkerModel ? null : <WorkerModelPicker sessionId={sessionId} current={roster?.workerModel ?? null} run={run} catalog={catalog} />}
-        {sessionId === undefined || rows.length === 0 || roster?.inbox === undefined ? null : (
-          <InboxSection
-            items={roster.inbox}
-            delivered={roster.delivered}
-            leadRunning={statuses?.get(sessionId)?.running === true}
-            owed={(roster.openRequests ?? []).map(r => `${r.id} ${rows.find(m => m.id === r.to)?.name ?? r.to}`)}
-            nameOf={id => rows.find(m => m.id === id)?.name ?? id}
-            run={line => run(sessionId, line)}
-            open={id => { const member = rows.find(m => m.id === id); if (member !== undefined) open(member) }}
-          />
-        )}
-        {sessionId === undefined || (roster?.teams?.[sessionId]?.members.length ?? 0) === 0 ? null : (
-          <>
-            <div className="sch-roster-section" data-scheduler-lead-team=""><span className="sch-roster-section-title">{t('team.lead')}</span><span>{roster?.enabled === true ? t('team.leadOn') : teamSummary(roster!.teams![sessionId]!)}</span></div>
-            <TeamBlock team={roster!.teams![sessionId]!} owner={sessionId} open={openMember} />
-          </>
-        )}
-        {rows.length === 0
-          ? <div className="sch-roster-empty">{t('empty.none')}<br />{t(roster?.enabled === true ? 'empty.on' : 'empty.off')}</div>
-          : (
-            <>
-              {section(t('section.forks'), forks)}
-              {section(t('section.workers'), workers)}
-              {done.length === 0 ? null : (
-                <>
-                  <div className="sch-roster-foldrow">
-                    <button type="button" className="sch-roster-fold" aria-expanded={showDone} onClick={() => { setShowDone(v => !v) }}>
-                      {ICON.chevron}{t('fold.done', { count: done.length })}
-                    </button>
-                    {canArchiveHere
-                      ? <button type="button" className="sch-roster-clear" disabled={pending.has('done')} title={t('archiveDone.title')} onClick={() => { archive('done') }}>{t('archiveDone.label')}</button>
-                      : null}
-                  </div>
-                  {showDone ? done.map(member => row(member)) : null}
-                </>
-              )}
-              {archived.length === 0 ? null : (
-                <>
-                  <button type="button" className="sch-roster-fold" aria-expanded={showArchived} onClick={() => { setShowArchived(v => !v) }}>
-                    {ICON.chevron}{t('fold.archived', { count: archived.length })}
-                  </button>
-                  {showArchived ? (showAllArchived ? archived : archived.slice(0, ARCHIVED_ROWS)).map(member => row(member)) : null}
-                  {showArchived && archived.length > ARCHIVED_ROWS ? (
-                    <button type="button" className="sch-roster-more" aria-expanded={showAllArchived} onClick={() => { setShowAllArchived(v => !v) }}>
-                      {showAllArchived ? t('more.collapse') : t('more.show', { count: archived.length - ARCHIVED_ROWS })}
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </>
-          )}
-        {below.n === 0 ? null : (
-          <button
-            type="button"
-            className="sch-roster-below"
-            data-scheduler-below={below.n}
-            {...(below.waiting > 0 ? { 'data-review': 'approval' } : below.unread > 0 ? { 'data-review': 'reported' } : {})}
-            title={t('below.title')}
-            onClick={() => { if (list !== null) revealRow(list, below.first) }}
-          >
-            {ICON.chevron}{hiddenLabel(below)}
-          </button>
-        )}
-      </div>
-    )
-  })
-}
-
-/**
  * Workers a worker can be merged with: live, started, not itself, not mid-merge; same area first.
  * @returns the candidates.
  */
@@ -1601,14 +745,6 @@ export function mergePartners<M extends Pick<Member, 'id' | 'kind' | 'state' | '
   const busy = new Set(merging.flatMap(m => [m.absorbed, m.survivor]))
   const ok = rows.filter(m => m.kind === 'worker' && m.state === 'started' && m.id !== member.id && !busy.has(m.id))
   return [...ok.filter(m => m.area !== undefined && m.area === member.area), ...ok.filter(m => m.area === undefined || m.area !== member.area)]
-}
-
-/** The form's first state: the first partner, and which side stays by the scheduler's rule. */
-function startMerge(member: Member, partners: readonly Member[], statuses: Statuses | undefined, openTo: (id: string) => readonly unknown[]) {
-  const other = partners[0]!
-  const busy = (m: Member) => { const s = rowStateOf(m, statuses); return s === 'running' || s === 'waiting' || openTo(m.id).length > 0 }
-  const [, survivor] = defaultSurvivor(member, other, busy)
-  return { id: member.id, from: member.name, other: other.name, keep: survivor.id === other.id ? 'other' as const : 'this' as const, name: '', error: null, busy: false }
 }
 
 /**
@@ -1632,7 +768,7 @@ export function apply(ctx: any): void {
   registerChatEvent(ctx, inputDefinition)
   registerChatEvent(ctx, requestDefinition)
   const doc = typeof document === 'undefined' ? undefined : document
-  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + INBOX_STYLE + ACCESS_STYLE + TEAM_STYLE + FORK_STYLE), 'agent-scheduler: styles')
+  ctx.effect(() => injectStyle(doc, 'dsh-agent-scheduler', STYLE + HOST_CSS + MODEL_MENU_STYLE + ACCESS_STYLE + DOCK_STYLE), 'agent-scheduler: styles')
   const sidebar = () => ctx.sidebarRight as SidebarFace | undefined
   const run = (sessionId: string, line: string) => host.run(sessionId, line)
   const has = (sessionId: string, name: string) => host.has(sessionId, name)
@@ -1652,27 +788,22 @@ export function apply(ctx: any): void {
     if (face?.openResource === undefined) { host.openSession(parent, child); return }
     const placement = placeChat(face)
     face.openResource(host.chatAddress(parent, child), { kind: SUBAGENT_CHAT_KIND, ...placement })
-    if ('preferNewPane' in placement) narrowRoster(face)
   }
-  const openAgents = () => { openAgentsPage(sidebar()) }
   registerSlot(ctx, 'chatNode', { key: NODE_KIND }, createInputCard(open))
   registerSlot(ctx, 'chatNode', { key: REQUEST_KIND }, RequestCardView)
-  registerTabType(ctx, { id: AGENTS_ID, kind: AGENTS_KIND, title: () => t('agents.title'), keepMounted: true })
   ctx.effect(() => keepChatTabsMounted(ctx), 'agent-scheduler: keep agent chats mounted')
   ctx.effect(() => steadyTabStrips(doc), 'agent-scheduler: keep the sidebar tab strip still')
-  registerSlot(ctx, 'paneTab', { key: AGENTS_ID }, createAgentsPage({ get sidebarRight() { return sidebar() }, chatAddress: host.chatAddress, openTopLevel: host.openTopLevel }, run, has, catalog))
   const setMode = (sessionId: string, on: boolean) => run(sessionId, on ? '/schedule on' : '/schedule off')
   const supports = (sessionId: string) => has(sessionId, 'schedule')
   registerSlot(ctx, 'inputRight', { id: 'agent-scheduler-model', order: 100, inject: (sessionId: string) => ({ sessionId }) }, createMemberModelPicker({ parentOf: host.parentOf, rosterFace, run, has, catalog }))
-  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, openAgents, isChild: host.isChild, supports, sidebar }))
+  registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler', order: 10, inject: (sessionId: string) => ({ sessionId }) }, createScheduleSwitch({ setMode, isChild: host.isChild, supports, sidebar }))
+  // The session dock and the inbox card, where DSH's Todo dock sits (conversation.input.dock).
+  const dockDeps = { run, projection: rosterFace, openSession: (id: string) => { host.openTopLevel(id) }, openChild: open, isChild: host.isChild }
+  registerSlot(ctx, 'inputDock', { id: 'agent-scheduler-inbox', order: 40, inject: (sessionId: string) => ({ sessionId }) }, createInboxCard(dockDeps))
+  registerSlot(ctx, 'inputDock', { id: 'agent-scheduler-dock', order: 50, inject: (sessionId: string) => ({ sessionId }) }, createSessionDock(dockDeps))
   // A worker's own chat: the working access control (DSH's own picker cannot write an addressed child).
   registerSlot(ctx, 'inputLeft', { id: 'agent-scheduler-access', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createMemberAccessPicker({ parentOf: host.parentOf, rosterFace, run }))
-  // Under each answer of a worker's own chat: fork it as a worker (DSH's own 「branch」 there makes a
-  // new top-level conversation, not a worker).
-  registerSlot(ctx, 'assistantActions', { id: 'agent-scheduler-fork', order: 20, inject: (sessionId: string) => ({ sessionId }) }, createForkFromChat({ parentOf: host.parentOf, rosterFace, openAgents }))
   registerRecoveryConfig(ctx)
-  // The focus deck: a left-sidebar panel of pinned Sessions, gated by `deck.enabled`.
-  try { registerDeck(ctx, openAgents) } catch (error) { warnOnce('deck', 'the focus deck was not registered', error) }
 }
 
 /**

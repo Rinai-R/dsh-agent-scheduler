@@ -69,22 +69,16 @@ describe.runIf(probesAvailable())('DSH client bundles', () => {
       inputRight: 'dsh-client-ui-conversation',
       assistantActions: 'dsh-client-ui-chat',
       bundleConfig: 'dsh-client-ui-plugin-manager',
-      panelList: 'dsh-client-ui-sidebar',
-      mainPanel: 'dsh-client-ui-layout',
+      inputDock: 'dsh-client-ui-conversation',
     }
     for (const [slot, pkg] of Object.entries(where)) expect(fetched(pkg), slot).toContain(SLOT[slot as keyof typeof SLOT])
     // The answer strip is a per-Session list the turn tail renders with the answer's messageId.
     const chat = fetched('dsh-client-ui-chat')
     expect(chat).toMatch(/"conversation\.chat\.assistant-actions": \{\s*kind: "list",\s*scope: "session"/u)
     expect(chat).toContain('renderSlot("conversation.chat.assistant-actions", { messageId })')
-    // The left rail lists panels from a root list; the centre area is a root keyed slot.
-    const sidebar = fetched('dsh-client-ui-sidebar')
-    expect(sidebar).toMatch(/"sidebar\.panellist": \{\s*kind: "list",\s*scope: "root"/u)
-    expect(sidebar).toContain('renderSlot("sidebar.panellist"')
-    const layout = fetched('dsh-client-ui-layout')
-    expect(layout).toMatch(/"main": \{\s*kind: "keyed",\s*scope: "root"/u)
-    // Both DSH versions key the centre area by the selected panel; only the expression differs.
-    expect(layout).toMatch(/renderSlot\("main", \{\}, \{ entryKey: [^\n]*"conversation" \}\)/u)
+    // The session dock sits where the Todo dock does: a per-Session list above the composer card.
+    const conversation = fetched('dsh-client-ui-conversation')
+    expect(conversation).toMatch(/"conversation\.input\.dock": \{\s*kind: "list",\s*scope: "session"/u)
   })
 
   it('C13: the config-forms surface still serves a namespace form to a bundle page', () => {

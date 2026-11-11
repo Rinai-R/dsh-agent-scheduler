@@ -4,7 +4,7 @@
  * the chip's whole open path runs against the gestures the real store exposes.
  */
 import { describe, expect, it } from 'vitest'
-import { openAgentsPage, type SidebarFace } from '../src/client/index.js'
+import type { SidebarFace } from '../src/client/index.js'
 import { chatPlacementIn, nextRosterStep, ROSTER_SHARE, type DockLayout, type DockNode } from '../src/client/layout.js'
 
 const AGENTS = 'agent-scheduler-agents'
@@ -68,43 +68,6 @@ function dock(initial: Pane[], expanded = true) {
   return { face, layout: () => layoutOf(panes, open, sizes), log }
 }
 
-describe('Agents page placement', () => {
-  it('reopened after closing, while chats fill the column: gets its own left column, not a tab beside them', () => {
-    // The reported case: the roster was closed, its pane merged away, two chats remain in one pane.
-    const d = dock([{ id: 'pane1', tabs: ['fork-5', 'fork-4'] }])
-    openAgentsPage(d.face)
-    expect(panesOf(d.layout())).toEqual([['agents'], ['fork-5', 'fork-4']])
-    expect((d.layout().nodes.split1 as unknown as { sizes: number[] }).sizes).toEqual([ROSTER_SHARE, 1 - ROSTER_SHARE])
-  })
-  it('reopened with chats in two panes: takes the left one and moves its chats right', () => {
-    const d = dock([{ id: 'pane1', tabs: ['fork-1'] }, { id: 'pane2', tabs: ['fork-2', 'fork-3'] }])
-    openAgentsPage(d.face)
-    expect(panesOf(d.layout())).toEqual([['agents'], ['fork-2', 'fork-3', 'fork-1']])
-  })
-  it('already open in the right pane (moved there by hand earlier): moves left, chats stay together', () => {
-    const d = dock([{ id: 'pane1', tabs: ['fork-1'] }, { id: 'pane2', tabs: ['agents'] }])
-    openAgentsPage(d.face)
-    expect(panesOf(d.layout())).toEqual([['agents'], ['fork-1']])
-  })
-  it('already in place: focuses it and never opens a second Agents page', () => {
-    const d = dock([{ id: 'pane1', tabs: ['agents'] }, { id: 'pane2', tabs: ['fork-1'], active: 'fork-1' }])
-    openAgentsPage(d.face)
-    expect(panesOf(d.layout())).toEqual([['agents'], ['fork-1']])
-    expect(d.log).toEqual(['focus:agents', 'focus:agents'])
-  })
-  it('collapsed with the roster still open: expands the column instead of opening another', () => {
-    const d = dock([{ id: 'pane1', tabs: ['agents'] }, { id: 'pane2', tabs: ['fork-1'] }], false)
-    openAgentsPage(d.face)
-    expect(d.log[0]).toBe('expand:true')
-    expect(panesOf(d.layout())).toEqual([['agents'], ['fork-1']])
-  })
-  it('an empty column: one pane holding only the roster', () => {
-    const d = dock([], false)
-    openAgentsPage(d.face)
-    expect(panesOf(d.layout())).toEqual([['agents']])
-  })
-})
-
 describe('agent chat placement over the layout', () => {
   it('opens beside the roster, never in its pane', () => {
     expect(chatPlacementIn(layoutOf([{ id: 'a', tabs: ['agents'] }]), AGENTS)).toEqual({ preferNewPane: true })
@@ -116,19 +79,3 @@ describe('agent chat placement over the layout', () => {
   })
 })
 
-describe('first agent opened from the roster', () => {
-  it('narrows the even split preferNewPane made, and leaves a dragged divider alone', async () => {
-    const { narrowRoster } = await import('../src/client/index.js')
-    const sizes: number[][] = []
-    const face = (s: number[]): SidebarFace => ({
-      mounted: { getSnapshot: () => 'main' },
-      mountedSurface: () => ({ layout: layoutOf([{ id: 'a', tabs: ['agents'] }, { id: 'b', tabs: ['x'] }], true, s) }),
-      actionsFor: () => ({ resizeSplit: (_s, _id, next) => { sizes.push(next) } }),
-    })
-    narrowRoster(face([0.5, 0.5]))
-    expect(sizes).toEqual([[ROSTER_SHARE, 1 - ROSTER_SHARE]])
-    // A roster that shares its pane is not the roster column; nothing to narrow.
-    narrowRoster({ ...face([0.5, 0.5]), mountedSurface: () => ({ layout: layoutOf([{ id: 'a', tabs: ['agents', 'y'] }, { id: 'b', tabs: ['x'] }]) }) })
-    expect(sizes).toHaveLength(1)
-  })
-})

@@ -11,7 +11,7 @@ import { DICTIONARIES, en, LANGS, langOf, NAMESPACE, pluralForm, setLanguage, t,
 import { features, resetWarnings, setWarnSink } from '../src/dsh/compat.js'
 import { followDshLocale } from '../src/dsh/client/locale.js'
 import { followHostLocale } from '../src/dsh/host/locale.js'
-import { hiddenLabel, newWorkerCommand, openLabel, renameCommand, rowTitle, statusLine, subline, workerModelLabel } from '../src/client/index.js'
+import { newWorkerCommand, openLabel, renameCommand, rowTitle, statusLine, subline, workerModelLabel } from '../src/client/index.js'
 import { incompatible, runScheduleCommand, runWorkerModelCommand } from '../src/rule-plugin.js'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -113,8 +113,6 @@ describe('client labels in English', () => {
     undo = setLanguage('en')
     expect(openLabel(1, 'idle')).toBe('1 open request')
     expect(openLabel(2, 'running')).toBe('2 requests in progress')
-    expect(hiddenLabel({ n: 3, unread: 1, waiting: 1, first: 0 })).toBe('3 more below · 1 needs you · 1 unread')
-    expect(hiddenLabel({ n: 2, unread: 2, waiting: 2, first: 0 })).toBe('2 more below · 2 need you · 2 unread')
     expect(tn('roster.total', 1)).toBe('1 agent')
     expect(tn('roster.total', 4)).toBe('4 agents')
     expect(newWorkerCommand({ name: 'Bad', role: 'x' })).toEqual({ error: t('form.nameRule') })

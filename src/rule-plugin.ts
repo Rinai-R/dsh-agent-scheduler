@@ -246,7 +246,7 @@ export function parseFork(raw: string): { owner: string; name: string; role?: st
   }
 }
 
-export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor' | 'forkWorker' | 'convert'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
+export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'archiveConcluded' | 'createWorker' | 'rename' | 'markSeen' | 'arrangeMail' | 'merge' | 'pickSurvivor' | 'forkWorker' | 'convert' | 'send'>, invocation: CommandInvocation, validate?: Validate): Promise<CommandResult> {
   if (!isMainSession(invocation.agent)) return mainOnly('agents')
   const raw = invocation.rawInput.trim()
   const verb = raw.split(/\s+/u)[0] ?? ''
@@ -271,6 +271,14 @@ export async function runAgentsCommand(scheduler: Pick<Scheduler, 'archive' | 'a
       if (typeof parsed === 'string') return { kind: 'error', text: parsed }
       const done = await scheduler.forkWorker(invocation.agent, parsed)
       return { kind: 'success', text: t(done.renamed ? 'cmd.agents.forkedSplit' : 'cmd.agents.forked', { name: done.name, owner: done.owner }) }
+    }
+    if (verb === 'send') {
+      // The dock's quick message: plain text from the user to one of this session's workers.
+      const [target] = words(rest)
+      const message = target === undefined ? '' : rest.slice(rest.indexOf(target) + target.length).trim()
+      if (target === undefined || message === '') return { kind: 'error', text: t('cmd.agents.sendUsage') }
+      const sent = await scheduler.send(invocation.agent, target, message)
+      return { kind: 'success', text: t('cmd.agents.sent', { name: sent.to, id: sent.request }) }
     }
     if (verb === 'convert') {
       const [target, ...extra] = words(rest)

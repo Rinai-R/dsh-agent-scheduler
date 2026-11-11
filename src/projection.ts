@@ -173,6 +173,19 @@ export interface Roster {
   readonly merges?: readonly MergeState[]
   /** Agent Teams led by the lead or a worker, by the Team Lead's Session id. */
   readonly teams?: Readonly<Record<string, TeamView>>
+  /** The session that created this one as its worker (its owner record), for the dock's `← parent`. */
+  readonly owner?: SessionOwner
+}
+
+/** Who created a session as its worker, and as what. */
+export interface SessionOwner { readonly router: string; readonly name: string; readonly role?: string | undefined }
+
+const OWNER_TYPE = 'plugin:dsh-agent-scheduler/owner'
+/** @returns the owner record an event carries, if it is one. */
+function ownerOf(event: SessionEvent): SessionOwner | undefined {
+  if (String(event.type) !== OWNER_TYPE) return undefined
+  const d = event.data as Record<string, unknown> | undefined
+  return typeof d?.router === 'string' && typeof d.name === 'string' ? { router: d.router, name: d.name, ...(typeof d.role === 'string' ? { role: d.role } : {}) } : undefined
 }
 
 /** What the client receives: members and the requests still open. */
@@ -193,6 +206,8 @@ export interface RosterView {
   readonly merging?: readonly Pick<MergeState, 'id' | 'absorbed' | 'survivor' | 'state'>[]
   /** Agent Teams by the Team Lead's Session id; absent from hosts before it existed. */
   readonly teams?: Readonly<Record<string, TeamView>>
+  /** The session that created this one, when it is a worker. */
+  readonly owner?: SessionOwner
 }
 
 /** Characters of a message the client view carries (its tooltip). */
@@ -250,6 +265,8 @@ function upsert<T extends { readonly id: string }>(rows: readonly T[], id: strin
  * @returns the next state.
  */
 export function applyRoster(state: Roster, event: SessionEvent): Roster {
+  const owner = ownerOf(event)
+  if (owner !== undefined) return { ...state, owner }
   const input = inputOf(event)
   if (input !== undefined) {
     const forks = state.members.filter(m => m.kind === 'fork').length
@@ -483,6 +500,7 @@ export function rosterView(state: Roster): RosterView {
       ...(state.delivered === undefined ? {} : { delivered: state.delivered }),
       merging: (state.merges ?? []).filter(mergePending).map(({ id, absorbed, survivor, state: s }) => ({ id, absorbed, survivor, state: s })),
       ...(state.teams === undefined ? {} : { teams: state.teams }),
+      ...(state.owner === undefined ? {} : { owner: state.owner }),
     }
     views.set(state, view)
   }
@@ -565,6 +583,7 @@ export const rosterSchema = {
     if (value.mailCount !== undefined && typeof value.mailCount !== 'number') fail('mailCount')
     checkDelivered(value.delivered)
     checkTeams(value.teams)
+    if (value.owner !== undefined && !(isRecord(value.owner) && isString(value.owner.router) && isString(value.owner.name) && optionalString(value.owner.role))) fail('owner')
     return value as unknown as Roster
   },
 } satisfies Parser<Roster>

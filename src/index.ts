@@ -7,7 +7,7 @@
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { DEFAULT_RECOVERY, setRecoveryPolicy, type RecoveryPolicy } from './recovery.js'
-import { accessPort, HOST_SERVICES, installForkFrom, registerProjection } from './dsh/host/index.js'
+import { accessPort, HOST_SERVICES, installForkFrom, registerProjection, warnOnce } from './dsh/host/index.js'
 import { applyRoster, initRoster, rosterSchema, rosterView, rosterViewSchema, SCHEDULER_PROJECTION } from './projection.js'
 
 export const name = 'agent-scheduler'
@@ -19,8 +19,8 @@ export const inject = HOST_SERVICES
  */
 export interface Config {
   recovery: Volatile<RecoveryPolicy>
-  /** The focus deck panel in the left sidebar (see src/client/deck.tsx). */
-  deck: Volatile<{ enabled: boolean }>
+  /** Removed with the deck (phase 2); still accepted so old configs load, with one warning. */
+  deck?: unknown
 }
 
 export const Config: z<Config> = z.object({
@@ -30,10 +30,8 @@ export const Config: z<Config> = z.object({
     maxResumes: z.natural().max(10).default(DEFAULT_RECOVERY.maxResumes)
       .description('With resume: how many times one request is resumed before it fails.'),
   }).default({}).volatile(),
-  deck: z.object({
-    enabled: z.boolean().default(true)
-      .description('Show the Deck panel in the left sidebar: pinned Sessions as live cards, plus the ones with running workers or a waiting inbox.'),
-  }).default({ enabled: true }).volatile(),
+  // The deck is gone; an old `deck.enabled` still loads (and is ignored, with one warning).
+  deck: z.any().hidden(),
 }) as unknown as z<Config>
 
 /**
@@ -43,6 +41,7 @@ export const Config: z<Config> = z.object({
  * @param config - host row configuration.
  */
 export function apply(ctx: Context, config: Config): void {
+  if (config.deck !== undefined) warnDeckConfig(config.deck)
   installForkFrom(ctx)
   const access = accessPort(ctx)
   ctx.effect(() => setRecoveryPolicy(() => config.recovery.get() as RecoveryPolicy), 'agent-scheduler: recovery policy')
@@ -55,8 +54,9 @@ export function apply(ctx: Context, config: Config): void {
     // 9: Agent Teams led by the lead or a worker, and deferred requests. 10: merges. 11: where merged workers' history is.
     // 12: each worker's access mode, and workers the user forked.
     // 13: workers as top-level Sessions behind the queue (v2): `session`, `worktrees`, `convertedTo`, request `qid`.
+    // 14: the session's owner (the session that created it), for the dock.
     // Older cached state is dropped and refolded.
-    stateVersion: 13,
+    stateVersion: 14,
     state: rosterSchema,
     view: rosterViewSchema,
     init: initRoster,
@@ -78,3 +78,14 @@ export * from './tools.js'
 export * from './member-model.js'
 export * from './recovery.js'
 export { parseForkCommand, type Config as RuleConfig } from './rule-plugin.js'
+
+let deckWarned = false
+/**
+ * An old config with `deck` (the left-sidebar deck, removed in phase 2) loads; say once that it does nothing.
+ * @param deck - the old setting.
+ */
+export function warnDeckConfig(deck: unknown): void {
+  if (deckWarned) return
+  deckWarned = true
+  warnOnce('config.deck', `the "deck" setting (${JSON.stringify(deck)}) is ignored: the deck was replaced by the session dock above the composer`)
+}

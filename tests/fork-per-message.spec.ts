@@ -64,6 +64,24 @@ describe('one fork per message (Q2)', () => {
     expect(adapter.requests.filter(r => r.sessionId === 'router')).toHaveLength(1)
   })
 
+  it('the session relays the fork\'s reply verbatim: every line, untouched, in the text it is given and in its own reply', async () => {
+    const reply = 'Line one: `code` stays.\n\n- a bullet with **bold**\n- 中文也一字不差\n\n> quoted line\n   indented line   '
+    const { lead, adapter } = await session(o => {
+      if (isFork(o)) return textResponse(reply)
+      // A model that follows the prompt passes the reply on as it is.
+      const relay = body(o)
+      const at = relay.indexOf('Its reply to the user:')
+      return textResponse(at < 0 ? 'LEAD' : JSON.parse(`"${relay.slice(at + 'Its reply to the user:'.length).replace(/^\\n/u, '').split('\\n\\nDelegated')[0]!.replace(/"\}.*$/su, '')}"`))
+    })
+    lead.followup(user('format this'))
+    await until(lead, 'Its reply to the user')
+    // What the session is given holds the fork's text byte for byte.
+    const given = lead.session.snapshotEvents().filter(e => e.type === 'user/message').map(e => JSON.stringify(e.data)).find(t => t.includes('Its reply to the user'))!
+    expect(JSON.parse(given).content[0].text.endsWith(`Its reply to the user:\n${reply}`)).toBe(true)
+    // And the prompt tells the session to pass it on as it is.
+    expect(leadModelTexts(adapter).join('')).toMatch(/pass that reply on to the user as your own answer, as it is/u)
+  })
+
   it('hands off with a brief, then replies with a short confirmation; the worker\'s answer comes later', async () => {
     const { lead } = await session(o => {
       if (o.sessionId === 'router') return textResponse('LEAD')

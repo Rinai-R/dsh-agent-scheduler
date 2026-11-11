@@ -16,7 +16,6 @@ import { textResponse } from './support/mock-adapter.js'
 import { body, install, until } from './support/scheduler.js'
 import { applyRoster, EMPTY_ROSTER, rosterSchema } from '../src/projection.js'
 import { parseFork, runAgentsCommand } from '../src/rule-plugin.js'
-import { forkCommand, slugOf, startFork, takeFork, requestFork, withForkName, worktreePathOf } from '../src/client/fork.js'
 
 afterEach(teardown)
 
@@ -180,38 +179,6 @@ describe('/agents fork', () => {
     expect(typeof parseFork('hub')).toBe('string')
     expect(typeof parseFork('hub x --what y')).toBe('string')
     expect(typeof parseFork('hub x --role')).toBe('string')
-  })
-})
-
-describe('fork form (client)', () => {
-  it('pre-fills the worktree next to the owner\'s and the branch from the name', () => {
-    expect(slugOf(' Hub Image! ')).toBe('hub-image')
-    expect(worktreePathOf('/Users/a/project/worktrees/dsh-agent-scheduler__merge', 'img')).toBe('/Users/a/project/worktrees/dsh-agent-scheduler__img')
-    expect(worktreePathOf('/Users/a/project/hub', 'img')).toBe('/Users/a/project/worktrees/hub__img')
-    expect(worktreePathOf(undefined, 'img')).toBeUndefined()
-    const draft = withForkName(startFork({ id: 'w1', name: 'hub', cwd: '/Users/a/project/hub' }), 'hub-image')
-    expect(draft).toMatchObject({ worktree: true, cwd: '/Users/a/project/worktrees/hub__hub-image', branch: 'feat/hub-image', repo: '/Users/a/project/hub' })
-    // Edited paths no longer follow the name.
-    expect(withForkName({ ...draft, cwd: '/elsewhere', touched: true }, 'other').cwd).toBe('/elsewhere')
-    // Without a directory there is no worktree to make.
-    expect(startFork({ id: 'w2', name: 'docs' })).toMatchObject({ worktree: false, repo: '' })
-  })
-
-  it('submits /agents fork, which the command parses back', () => {
-    const draft = { ...withForkName(startFork({ id: 'w1', name: 'hub', cwd: '/p/hub' }), 'hub-image'), role: 'fixes  image', task: 'go', ownerName: 'hub-asr', ownerRole: 'ASR' }
-    const built = forkCommand(draft)
-    expect(built).toEqual({ line: '/agents fork hub hub-image --role fixes image --task go --cwd /p/worktrees/hub__hub-image --repo /p/hub --branch feat/hub-image --base HEAD --owner-name hub-asr --owner-role ASR' })
-    expect(parseFork(('line' in built ? built.line : '').replace(/^\/agents fork /u, ''))).toMatchObject({ owner: 'hub', name: 'hub-image', ownerName: 'hub-asr', worktree: { repo: '/p/hub', branch: 'feat/hub-image', base: 'HEAD' } })
-    expect(forkCommand({ ...draft, name: '' })).toHaveProperty('error')
-    expect(forkCommand({ ...draft, task: 'use --force' })).toHaveProperty('error')
-    expect(forkCommand({ ...draft, worktree: false, cwd: '' })).toEqual({ line: '/agents fork hub hub-image --role fixes image --task go --owner-name hub-asr --owner-role ASR' })
-  })
-
-  it('「Fork this worker」 in a chat hands the request to that session\'s Agents page once', () => {
-    requestFork('main-1', 'w1')
-    expect(takeFork('main-2')).toBeUndefined()
-    expect(takeFork('main-1')).toBe('w1')
-    expect(takeFork('main-1')).toBeUndefined()
   })
 })
 

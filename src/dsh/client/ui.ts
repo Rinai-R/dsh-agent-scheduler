@@ -22,10 +22,8 @@ export const SLOT = {
   assistantActions: 'conversation.chat.assistant-actions',
   /** A bundle's configuration page on the Plugins page, keyed by package name. */
   bundleConfig: 'plugins.bundle.config',
-  /** One entry of the shell's left sidebar panel strip. */
-  panelList: 'sidebar.panellist',
-  /** The shell's centre area, keyed by the selected panel id. */
-  mainPanel: 'main',
+  /** Full-width entries above the composer card, per Session (where DSH's Todo dock sits). */
+  inputDock: 'conversation.input.dock',
 } as const
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- host services are untyped at this bundle boundary */

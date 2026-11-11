@@ -15,7 +15,7 @@ import { MAIL_RECORD } from '../src/records.js'
 import { applyRoster, EMPTY_ROSTER, mailPreview, rosterView, rosterSchema, rosterViewSchema, type Roster } from '../src/projection.js'
 import { mailKindOf } from '../src/scheduler.js'
 import { runAgentsCommand } from '../src/rule-plugin.js'
-import { dropTarget, inboxLine, moveTarget } from '../src/client/inbox.js'
+import { inboxLine } from '../src/client/dock.js'
 
 afterEach(teardown)
 
@@ -241,22 +241,5 @@ describe('lead inbox fold and helpers', () => {
     expect(mailKindOf('[report from a, not a request]\nx')).toEqual({ kind: 'report' })
   })
 
-  it('moves one place within its group, and drags only within it', () => {
-    const items = [
-      { id: 'p1', pinned: true as const }, { id: 'p2', pinned: true as const }, { id: 'u1' }, { id: 'u2' }, { id: 'u3' },
-    ].map(m => ({ from: 's', kind: 'reply' as const, text: '', at: 0, ...m }))
-    expect(moveTarget(items, 'p1', -1)).toBeUndefined()
-    expect(moveTarget(items, 'p1', 1)).toBe('end')
-    expect(moveTarget(items, 'p2', 1)).toBeUndefined()
-    expect(moveTarget(items, 'u2', -1)).toBe('u1')
-    expect(moveTarget(items, 'u1', 1)).toBe('u3')
-    expect(moveTarget(items, 'u2', 1)).toBe('end')
-    expect(dropTarget(items, 'u3', 'u1')).toBe('u1')
-    expect(dropTarget(items, 'u1', 'u2')).toBe('u3')
-    expect(dropTarget(items, 'u1', 'u3')).toBe('end')
-    expect(dropTarget(items, 'u1', 'p1')).toBeUndefined()
-    expect(inboxLine('move', 'm-1')).toBe('/agents inbox move m-1 end')
-    expect(inboxLine('now', 'all')).toBe('/agents inbox now all')
-  })
 })
 

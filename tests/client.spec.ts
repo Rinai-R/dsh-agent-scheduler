@@ -1,6 +1,6 @@
 /** Input card state machine. The rendered card is covered by the GUI run in docs/p1-report.md. */
 import { describe, expect, it, vi } from 'vitest'
-import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle, hiddenBelow, hiddenLabel } from '../src/client/index.js'
+import { chatPlacement, createInputCard, openLabel, statusLine, requestDefinition, requestOf, workerModelCommand, workerModelLabel, workerModelValue, inputDefinition as def, retainChatTabs, rowStateOf, steadyTabStrips, subline, rowTitle } from '../src/client/index.js'
 import { isStale } from '../src/client/catalog-source.js'
 import { parseForkCommand } from '../src/rule-plugin.js'
 
@@ -79,7 +79,8 @@ describe('client activation', () => {
       sessions: {}, sidebarRight: {}, uiWorkspace: {},
     }
     expect(() => { apply(ctx) }).not.toThrow()
-    expect(registered).toEqual(expect.arrayContaining(['conversation.chat.node', 'sidebar.right.pane.tab', 'conversation.input.left']))
+    expect(registered).toEqual(expect.arrayContaining(['conversation.chat.node', 'conversation.input.dock', 'conversation.input.left']))
+    expect(registered).not.toContain('sidebar.right.pane.tab')
   })
 })
 
@@ -225,23 +226,3 @@ describe('roster subline', () => {
   })
 })
 
-describe('roster rows below the fold', () => {
-  const rows = [
-    { bottom: 50 }, { bottom: 100, review: 'reported' as const }, { bottom: 150 },
-    { bottom: 200, review: 'failed' as const }, { bottom: 250, review: 'approval' as const }, { bottom: 300 },
-  ]
-  it('counts the rows not wholly visible, and their marks', () => {
-    expect(hiddenBelow(rows, 120)).toEqual({ n: 4, unread: 1, waiting: 1, first: 2 })
-    expect(hiddenLabel(hiddenBelow(rows, 120))).toBe('下面还有 4 个 · 1 个等你 · 1 个未读')
-  })
-  it('a row cut in half is still below; a sub-pixel overhang is not', () => {
-    expect(hiddenBelow(rows, 140).first).toBe(2)
-    expect(hiddenBelow(rows, 299.5).n).toBe(0)
-  })
-  it('says nothing once the end is in sight', () => {
-    expect(hiddenBelow(rows, 300)).toEqual({ n: 0, unread: 0, waiting: 0, first: -1 })
-    expect(hiddenLabel(hiddenBelow(rows, 300))).toBe('')
-    expect(hiddenLabel(hiddenBelow(rows.slice(0, 3), 60))).toBe('下面还有 2 个 · 1 个未读')
-    expect(hiddenLabel(hiddenBelow([{ bottom: 10 }, { bottom: 20 }], 5))).toBe('下面还有 2 个')
-  })
-})

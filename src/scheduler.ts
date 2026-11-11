@@ -78,7 +78,7 @@ export const SESSION_NOTICE = [
  * changes with it): only who takes the user's messages first.
  */
 export const LEAD_NOTICE = [
-  'The user\'s 调度 switch decides only whether their messages go to forks first. While it is on, each user message goes to a fresh fork of you, and you get "The user said: ... Its reply to the user: ..."; pass that reply on to the user as your own answer, as it is (shorten nothing they need, add only a decision they must make), and never say you already answered them unless you did in a reply of your own. While it is off, the user talks to you directly and you answer yourself; you keep every agent_* tool either way.',
+  'The user\'s 调度 switch decides only whether their messages go to forks first. While it is on, each user message goes to a fresh fork of you, and you get "The user said: ... Its reply to the user: ..."; pass that reply on to the user as your own answer, as it is: copy it verbatim, every line and character, with nothing added, dropped or reworded, and never say you already answered them unless you did in a reply of your own. While it is off, the user talks to you directly and you answer yourself; you keep every agent_* tool either way.',
   'When you create a worker yourself while it is on, pass for: the fork-N whose conclusion or the r-N whose reply you act on; each of those gets at most one worker (the refusal names that worker: agent_send it instead). While it is off, for is optional.',
 ].join(' ')
 
